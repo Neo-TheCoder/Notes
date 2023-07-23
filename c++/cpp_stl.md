@@ -156,13 +156,95 @@ vector是线性连续空间，以两个迭代器start和finish分别指向配置
 
 ### 4.2.5 vector的构造与内存管理
 
+关于capacity的变化
+如果是一个个地push_back元素，那么capacity的变化就是1，2，4，8...
+并且不会变小，即便是clear()了，也不会变小
+
+
 内部实现：
 vector缺省使用alloc作为空间配置器，并据此另外定义了一个data_allocator，用于更方便地以元素大小为配置单位。
 
+push_back插入元素会先检查是否有备用空间，没有则扩充（重新配置2倍的内存、移动数据、释放原空间）
+注意：***对vector的任何操作，一旦涉及到空间的重新配置，指向原vector的所有迭代器就失效了**
+
+### 4.2.6 vector的元素操作：pop_back、erase、clear、insert
+```cpp
+void pop_back(){
+    --finish;   // 尾端标记前移，表示放弃尾端元素
+    destroy(finish);
+}
+
+// 清楚[first, last)的元素
+iterator erase(iterator first, iterator last){
+    iterator i = copy(last, finish, first);
+    destroy(i, finish);
+    finish = finish - (last - first);
+    return first;
+}
+
+// 清除某个位置上的元素
+iterator erase(iterator position){
+    if(position +1 != end())
+        copy(position + 1, finish, position);
+        --finish;
+        destroy(finish);
+        return position;
+}
+
+void clear(){
+    erase(begin(), end());
+}
+
+// insert
+template <class t, class Alloc>
+void vector<T, Alloc>::insert(iterator position, size_type n, const T& x){
+if(n!= 0){
+    if(size_type(end_of_storage - finish) >= n){
+    // 备用空间大于等于“新增元素个数”
+    T x_copy = x;   // 拷贝
+    // 计算插入点后的现有元素个数
+    const size_type elems_after = finish - position;
+    iterator old_finish = finish;
+    if(elems_after > n){
+    // 当前position与finish之间的数量 > 新增元素个数（采取的是：因为这种情况n比较小，所以先让position后面腾出相应位置）
+    uninitialized_copy(finish - n, finish, finish); // 拷贝finish-n到finish的元素到finish位置
+    finish += n;    // 后移n位
+    copy_backward(position, old_finish - n, old_finish);    // 拷贝position到old_finish-n的位置的元素到old_finish
+    fill(position, position + n, x_copy);   // 从插入点开始填入新值
+    }
+    else{
+    // 当前position与finish之间的数量 < 新增元素个数（这种情况特别在于：先把新旧finish之间赋值（利用备用空间））
+    uninitialized_fill_n(finish, n - elems_after, x_copy);
+    finish += n - elems_after;
+    uninitialized_copy(position, old_finish, finish);
+    finish += elems_after;
+    fill(position, old_finish, x_copy);
+    }
+    }
+    else{
+    // 备用空间不足，显然需要配置额外的内存
+    // 新长度是旧长度的两倍
+
+    }
+#ifdef 异常
+    catch
+
+#endif
+
+
+
+}
 
 
 
 
+}
+
+
+
+
+
+```
 
 
 

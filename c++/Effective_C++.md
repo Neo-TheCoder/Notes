@@ -44,7 +44,7 @@ const_cast<char&>(static_cast<const TextBlock&>(*this)[position]);
 
 # 04 确定对象被使用前就已经被初始化
 对于内置类型要进行手动初始化构造函数最好使用初始化列表（注意顺序），而不要在构造函数中赋值操作来初始化
---> 因为成员初值列表可以在对象创建时直接初始化成员变量，而不需要先调用默认构造函数再进行赋值操作，以提高性能
+--> 因为**成员初值列表可以在对象创建时直接初始化成员变量**，而不需要先调用默认构造函数再进行赋值操作，以提高性能
 如果使用赋值操作初始化，首先调用默认构造函数创建对象，再调用赋值操作符进行赋值，多进行了对象的创建和销毁，增加了不必要的开销
 并且成员初值列表还可以确保成员变量在对象创建时就被正确初始化，避免忘记初始化而可能导致的未定义行为
 成员初值列表还可以用于初始化const成员变量和引用类型成员变量，而赋值无法做到这点
@@ -208,17 +208,107 @@ class Font{
     operator FontHandle() const
     {return f;}
     使得调用看起来比较自然：
+    上述的隐式函数转换是一种函数语法格式，成员函数的一种，用于将本类型的函数转换成为其他类型，其中的operator相当于一个标志符，说明该是一个隐式函数转换。
+
+    Font f(getFont());
+    changeFontSize(f, newFontSize);
+    // 但是显然有问题：
+    Font f1(getFont());
+    FontHandle f2 = f1; // 本意是拷贝Font对象，却反而将f1隐式转换为FontHandle才复制
+    由于由Font对象f1管理的FontHandle对象也被f2取得，这是危险的，比如f1销毁了，f2就成了虚吊的。尽管此处是拷贝了一份。
+```
+提供get()方法获得裸指针并非是设计灾难，因为用户往往需要访问原始资源。
+
+# 16 成对使用new和delete时要采取相同形式
+new运算符：
+1. 分配了内存
+2. 针对此内存调用构造函数
+delete恰恰相反
+
+delete指针（指向的对象）的时候，一定要注意指向的是单一对象还是对象数组。因为二者内存布局不一样。显然数组所占用的内存还需要记录数组大小（以便delete时知道腰调用多少次析构函数）
+--> 因此程序员需要显示地让delete知道内存中是否存在数组大小记录。
+```cpp
+std::string* stringPtr2 = new std::string[100];
+delete [] stringPtr2;
+
+typedef std::string AddressLines[4];
+std::string* pal = new AddressLines;
+// 等号右侧返回的是一个string*，就像new string[4]
+
+// 对应：
+delete [] pal;
+最好不要对数组做typedef，容易忽略这个问题
+```
+
+# 17 以独立语句将newed对象置于智能指针
+```cpp
+// 考虑以下情形：
+void processWidget(std::shared_ptr<Widget>pw, int priority);
+
+processWidget(new Widget, priority());
+// 由于Widget对象的构造函数声明为explicit，无法隐式转换，因此通过不了编译
+// 必须这样写：
+processWidget(std::shared_ptr<Widget>(new Widget), priority());
+// 但是这种调用可能泄露资源
+```
+编译器在生成processWidget调用码之前，必须核算即将被传递的各个实参，其中第一个实参：
+1. 执行new Widget
+2. 调用shared_ptr构造函数
+（3. 还有调用priority）
+编译器生成的代码完成这三件事的顺序是有多种可能的，当然new Widget必然在shared_ptr之前，但是priority的调用的位置是不确定的
+如果是1, 3，2的顺序执行，其中priority的调用异常，就会导致构造失败，new Widget返回的指针丢失，也就是说，在**资源创建**和**资源被转为资源管理类对象**之间可能发生异常干扰
+解决办法是，把语句分开：
+1. std::shared_ptr<Widget>pw(new Widgnet);
+    用智能指针创建对象的语句单独一句
+2. processWidget(pw, priority());
+    这样调用，不会造成泄漏
+因为编译器生成代码时指令乱序是针对语句内的，对于跨语句它不会这么做
 
 
+# 18 让接口容易被正确使用，而不是误用
+本条开始是针对软件设计与声明，以保证正确性、高效性、封装性、维护性、延展性以及协议的一致性。
+function接口、class接口、template接口，每一种接口都是客户与你的代码互动的手段。
+必须考虑客户可能做出什么样的错误，以日期类为例：
+```cpp
+Data(int month, int day, int year);
+// 可能会以错误的次序传递参数
+Data d(2, 30, 1995);
+
+// 可以通过导入新类型来避免
+Data d(Day(30), Month(3), Year(1995));  // 在其中做合法性检验
+```
+预防客户错误的另一个办法：限制类型内的操作：
+比如：加上const
+一个一般性准则：尽量让你的types的行为与内置types保持一致
+避免无端与内置类型不兼容 --> 为了提供行为一致的接口
+比如STL容器的接口就十分一致，比如每个容器都有名为size()的成员
+比如之前提到的createInvestment函数，返回智能指针而不是裸指针可以避免两个用户错误的机会：忘记在最终把指针delete，或者重复释放一块资源。
+
+shared_ptr有一个好的性质是：会自动调用它的“每个指针专属的删除器” --> 避免跨DLL错误（对象在动态链接库中被new创建，却在另一个DLL内被delte的运行时错误）shared_ptr中缺省的删除器是来自创建时的哪个DLL的delete
+```cpp
+如果Stock派生自Investment
+std::shared_ptr<Investment>creatInvestment(){
+    return std::shared_ptr<Investment>(new Stock);
+    // 返回的shared_ptr可能被传递给任何其他DLL，这个指向Stock的shared_ptr会追踪记录“当Stock的引用计数为0时该调用的DLL的delete”
+}
 
 ```
 
+# 19 设计class犹如设计type
 
 
 
 
 
-# 16 成对使用new和delete时要采取相同形式
+
+
+
+
+
+
+
+
+
 
 
 
