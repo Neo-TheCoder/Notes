@@ -4,7 +4,7 @@
 construct()和destroy()
 
 ## 2.3 内存基本处理工具
-STL定义了**五个全局函数，用于未初始化空间上**
+STL定义了**五个全局函数，用于未初始化空间上**，有利于容器的实现
 
 ### 2.3.1 uninitialzied_copy
 ```cpp
@@ -12,21 +12,32 @@ STL定义了**五个全局函数，用于未初始化空间上**
     ForwardIterator
     uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result);
 ```
-
 使我们能够将**内存的配置与对象的构造行为分离**
 它会调用拷贝构造函数为入参指示范围的每一个对象产生一份copy对象，放入范围中
 C++标准要求：***uninitialized_copy()要么构造出所有必要元素，要么（当有任何一个copy constructor失败时）不构造任何东西***
 
-### uninitialized_fill
+### 2.3.2 uninitialized_fill
 ```cpp
     template<class ForwardIterator, class T>
     uninitialized_fill(ForwardIterator first, ForwardIterator last, const T& x);
-    // 注意第三个入参是要填充的值
+    // 第三个入参是要填充的值
 ```
-uninitialized_copy()是将源范围的元素拷贝到目标范围
-uninitialized_fill()是将相同的值填充到范围内的每个元素中
-uninitialized_fill_n(first, n, value)是用于指定填充元素个数的函数，适用于某个范围的连续一段元素需要填充相同的值的情况
 
+### 2.3.3 uninitialized_fill_n
+```cpp
+    template<class ForwardIterator, class Size, class T>
+    ForwardIterator
+    uninitialized_fill_n(ForwardIterator first, Size n, const T& x);
+    // 第三个入参是要填充的值
+```
+uninitialized_copy(first, last, result)：
+是将指定范围内的元素拷贝到未初始化的内存区域，并在目标内存中构造对象
+
+uninitialized_fill(first, last, value)：
+是将相同的值填充到范围内的每个元素中
+
+uninitialized_fill_n(first, n, value)：
+是用于指定填充元素个数的函数，适用于某个范围的连续一段元素需要填充相同的值的情况
 
 
 # 第四章 序列式容器
@@ -129,7 +140,6 @@ protected:
         uninitialized_fill_n(result, n, x); // ？？？函数体在哪里 利用分配的内存，初始化对象
         return result;
     }
-
 };
 
 ```
@@ -214,7 +224,7 @@ if(n!= 0){
     }
     else{
     // 当前position与finish之间的数量 < 新增元素个数（这种情况特别在于：先把新旧finish之间赋值（利用备用空间））
-    uninitialized_fill_n(finish, n - elems_after, x_copy);
+    uninitialized_fill_n(finish, n - elems_after, x_copy);  // 对指定范围赋值
     finish += n - elems_after;
     uninitialized_copy(position, old_finish, finish);
     finish += elems_after;
@@ -224,12 +234,17 @@ if(n!= 0){
     else{
     // 备用空间不足，显然需要配置额外的内存
     // 新长度是旧长度的两倍
+    // 复制和赋值
+    
+
 
     }
 #ifdef 异常
     catch
 
 #endif
+
+
 
 
 

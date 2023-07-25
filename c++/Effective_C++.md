@@ -295,9 +295,81 @@ std::shared_ptr<Investment>creatInvestment(){
 ```
 
 # 19 设计class犹如设计type
+class类似于type的概念，设计者需要考虑：函数与操作符的重载、控制内存的分配和归还、定义对象的初始化和终结
+如何设计高效的class？需要搞清楚以下问题：
+1. 如何创建和销毁（构造函数和析构函数、内存分配和释放函数）
+2. 对象的初始化和赋值有什么样的差别（考虑构造和赋值操作符的行为）
+3. 新type的对象如果以值传递，意味着什么？（拷贝构造函数的行为）
+4. 什么是新type的合法值？由于类的成员变量必然只在一定条件下才是有效的（因此显然要在构造、赋值、set函数里检查错误）
+5. 新type如果继承自某个类，那么显然它必须受到父类的束缚。还有某类被继承，那么其析构需要为virtual
+6. 新type需要什么样的转换？比如如果希望T1隐式转换为T2，需要在T1类内写一个类型转换函数（operator T2），或者T2内部写一个**可被单一实参调用**的构造函数
+如果构造函数为explicit，就得显示地写出负责转换的函数
+7. 什么样的操作符和函数对此type是合理的？
+8. 什么样的标准函数应该驳回？（不想使用编译器生成的函数就必须禁掉）
+9. 谁该取用新type的成员？--> 确定成员是public/protected/private，以及friend
+10. 什么是新type的未声明接口（它对效率、异常、安全性以及资源运用（eg.多任务锁定、动态内存）提供何种保证
+11. 新type有多么一般化（有时你实际上应该定义一个template）
+12. 真的需要一个新的type吗？有时继承更能达到目的
 
 
+# 20 宁以pass by reference to const替换pass by value
+```cpp
+// 考虑这种情况
+class Person{
+    public:
+        Person();
+    private:
+        std::string name;
+        std::string address;
+};
 
+class Student:public Person{
+    public:
+        Student();
+    private:
+        std::string schoolName;
+        std::string schoolAddress;
+};
+```
+如果传递Student对象时是传值，就要经历很多次的拷贝，而且创建的临时变量在函数返回时就销毁了，没意义。而且其中的成员变量std::string也会被拷贝。成本太大。
+但是如果是**pass by reference to const**，就不需要任何的构造和析构，因为没有创建任何新对象。const意味着传入的对象不会被修改。
+传递引用还可以避免**对象切割问题**：当一个派生类对象以传值方式传递并被视为基类对象，基类的构造函数会被调用，创建一个临时的基类对象，而派生类对象独有的部分被抛弃了。
+```cpp
+class Window{
+public:
+    virtual void display() const;
+};
+
+class WindowWithScrollBars: public Window{
+public:
+    virtual void display() const;
+};
+
+// 函数调用是这样的：
+WindowWithScrollBars wwsb;
+printNameAndDisplay(wwsb);
+void printNameAndDisplay(Window w){
+    std::cout << w.name();
+    w.display();
+}
+// 不管接收的参数是什么类型，必然都只调用Window对象的display
+
+void printNameAndDisplay(const Window& w){
+    std::cout << w.name();
+    w.display();
+}
+// 因为传递引用的实质是传递对象的指针，那个对象既可以是派生类又可以是基类。
+```
+如果对象是如同int在内的内置类型，传值效率更高。
+但是即便是小型的type，也未必拷贝构造函数代价就小，因为类本身可能只含有一个指针，但拷贝构造的时候要把指向的对象一并拷贝。
+而且某些编译器对于“内置类型”和“用户自定义类型”的操作是不一样的（即便两者底层的数据成员是一样的），比如某些编译器拒绝把只由一个double组成的对象放进cache，而对普通的double却会这么做。这种情况下，传递指针显然更好，因为指针必然会被放入cache。
+***PS：Effective C++中提到的情况是指，某些编译器可能不会将仅由一个double类型的对象放入高速缓存中。这是因为高速缓存存储数据的方式是以缓存行（Cache Line）的形式进行的，每个缓存行有固定的大小，通常是64字节或者更大。如果一个double对象的大小正好等于一个缓存行的大小，那么存储该对象可能会占用两个缓存行，造成存储冗余或浪费。为了最大化利用高速缓存，一些编译器可能会尝试将多个对象放入一个缓存行中，以提高访问效率。而将只由一个double组成的对象放入缓存行可能会导致浪费，因为它占用了整个缓存行的空间而没有被充分利用。***
+需要注意的是，不同编译器、不同平台以及不同编译器的版本可能会有不同的行为。这个具体问题的解决方法和影响因素可能会因系统和编译器的不同而有所差异。因此，在编程中，需要根据具体情况来决定如何优化代码以提高性能。
+而且用户自定义类型的大小容易变化，因为内部实现可能改变，不同标准库实现版本的string大小可能有数倍差异。
+可以合理假设传值不昂贵的只有：**内置类型和STL的迭代器和函数对象**
+
+# 21 必须返回对象时，别想返回其引用
+因为要注意：引用所指的对象可能并不存在
 
 
 
