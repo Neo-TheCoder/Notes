@@ -370,6 +370,47 @@ void printNameAndDisplay(const Window& w){
 
 # 21 必须返回对象时，别想返回其引用
 因为要注意：引用所指的对象可能并不存在
+考虑一个Rational有理数类，有一个函数operator*计算两个有理数的乘积（返回该类的const对象），如果返回一个Rational对象，势必有构造和析构的开销，这能否避免？
+如果是返回reference，那么必然是某个对象的别名，
+```cpp
+Rational a(1, 2);
+Rational b(3, 5);
+Rational c = a * b;
+```
+如果非得要返回引用，会有什么问题？
+**注意不要返回局部变量（定义在栈上）的引用，局部变量出函数的作用域就被销毁**
+如果非得要返回指针，会有什么问题？
+**得在函数体内通过new把对象定义在堆上，但是这函数付出了构造的代价。因为分配得到的内存将以构造函数来完成初始化，但是谁来对构造出来的对象调用delete**
+```cpp
+Rational w, x, y, z;
+w  = x * y * z;
+// 等价于：
+w = operator*(operator*(x, y), z);
+// 其中调用了两次new，但是没法调用两次delete --> 导致内存资源占用却无法释放，即资源泄漏
+```
+还是有避免构造函数的办法...
+```cpp
+const Rational& operator* (const Rational& lhs, const Rational& rhs)
+{
+    static Rational result;
+    result = ...;
+    return result;
+}
+// 这段代码显然在多线程安全性方面有问题，但是还有更为严重的问题
+bool operator== ...
+{
+    ...
+    if((a*b) == (c*d)){ // 都是Rational对象，这个if条件必然被判断为true
+    // 等价于：
+    if(operator==(operator*(a,b), operator*(c,d)))  // 两次调用返回的都是static对象，即便两次调用都会分别改变静态对象的值，但是
+    }
+
+
+}
+
+
+```
+
 
 
 
