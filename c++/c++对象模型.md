@@ -76,6 +76,58 @@ C++2.0中的设计是：在class object中为每一个有关联的virtual base class添加一个指针
 1. 现有的程序代码必须修改
 2. 必须加入新的程序代码
 因为要考虑C++代码转变为机器码（这个转换是和模型相关的）
+举例：
+```cpp
+X foobar(){
+    X xx;
+    X *px = new X;
+
+    // foo()是一个虚函数
+    xx.foo();
+    px->foo();
+
+    delete px;
+    return xx;
+}
+
+/* ！以下形成引用入参的内部逻辑是：RVO：Return Value Optimization
+    编译优化技术，减少不必要的复制和构造过程
+*/
+
+// 会被转换为：
+void foobar(X &_result){
+    // 构造_result，用于取代原来的局部变量 xx
+    _result.X::X(); // 构造函数
+
+    // X *px = new X;的展开
+    px = _new(sizeof(X));
+    if( px!= 0)
+        px->X::X();
+
+    // xx.foo()的展开 调用对象的方法，做不到调用虚函数
+    // 以_result取代xx
+    foo(&_result);
+
+    // 使用虚函数机制，扩展px->foo()
+    (*px->vtbl[2])(px)  // 调用虚函数表对应的虚函数
+
+    // 扩展delete px;
+    if( px!= 0 ){
+        (*px->vtbl[1])(px); // destructor   析构也需要调用虚函数表
+        _delete(px);
+    }
+
+    // 不需使用named return statement
+    // 不需要摧毁局部变量
+    return;
+}
+
+
+```
+
+
+
+
 
 
 ## 1.2 关键词所带来的差异
