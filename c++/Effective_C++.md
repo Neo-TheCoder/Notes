@@ -443,7 +443,8 @@ class clearBroswer(WebBroswer& wb){
 non-member non-friend函数好在并不增加“能够访问class内private成分”。
 回到上述例子，c++中常见的做法是：clearBroswer函数与类的定义处于同一个namespace（可以跨越多个源码文件而class不行）。
 考虑更为普遍的情况：比如一个书签类，我们可以将与其相关的便利函数都声明于一个头文件。
-c++标准程序库也是如此组织的，便利函数分布于多个头文件但是隶属于同一个namespace,
+c++标准程序库也是如此组织的，便利函数分布于多个头文件但是隶属于同一个namespace --> 用户可以轻松扩展这一组便利函数，即添加更多的non-member或non-friend函数
+（class相比non-member缺点是对于用户而言不能扩展，即便是派生类，也无法访问基类中的private成员，更何况并非所有的类都被设计为基类）
 
 
 

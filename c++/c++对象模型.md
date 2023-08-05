@@ -122,19 +122,85 @@ void foobar(X &_result){
     return;
 }
 
-
 ```
-
-
-
-
-
 
 ## 1.2 关键词所带来的差异
 ```cpp
 // 无法确定是生命还是函数调用（直到看到1024这个整数）
 int (*pf)(1024);
+
+int(*pq)(); // 声明而非调用
 ```
+当语言无法区分语句是一个声明还是一个表达式，那么就需要一个超越语言范围的规则。
+
+### 策略性正确的struct
+```cpp
+// struct
+struct mumble{
+    char pc[1]; // 放在尾端，实现数据大小可变
+};
+
+struct mumble *pmumb1 = (struct mumble*)malloc(sizeof(struct mumble) + strlen(string) + 1);
+strcpy(&memble.pc, string);
+
+// 如果采用class 可能指定不同的访问权限区域，可能由其他类派生而来，有虚函数
+class stumble{
+public:
+    // ...
+protected:
+    // ...
+private:
+    // ...
+    char pc[1];
+}
+// 
+```
+C++中，处于同一个访问区域的数据，必定要保证以其声明次序出现在内存布局中，然而放置在多个访问区域中的各笔数据，排序次序是不定的。
+```cpp
+class stumble{
+public:
+    // ...
+protected:
+    // ...
+private:
+    char pc[1]; // 需要位于最后
+};
+```
+如果想让一个复杂的C++ class的某部分数据，使它拥有C声明的那种样子，这部分最好抽取出来成为一个独立的struct声明，操作如下：
+```cpp
+struct C_point{...};
+class Point: public C_point{...};
+// 利用派生
+
+// 于是C和C++两种用法都可获得支持：
+extern void draw_line(Point, Point);
+extern "C" void draw_rect(C_point, C_point);
+draw_line(Point(0, 0), Point(0, 0));
+draw_rect(Point(0, 0), Point(0, 0));
+```
+在C++中，extern "C"是一个关键字组合，它用于告诉编译器使用C语言的命名和调用约定来编译某段代码块或函数，并避免C++的名称修饰（name mangling）。
+C++编译器为了支持函数重载和命名空间等特性，会对函数和全局变量等进行名称修饰，即在函数或变量名前添加一些符号或编码，以体现它们的类型和特征。这种名称修饰导致C++编译生成的符号与C语言不兼容，无法直接调用。
+因此，当需要在C++代码中调用C语言编写的代码时（比如使用C语言编写的库），就需要使用extern "C"来告诉编译器不对特定的代码块进行名称修饰，以便在C++代码中正确调用C语言代码。
+由于某些C++编译器在支持虚函数的机制中对于class的继承布局做了一些改变，因而，**组合，而非继承，才是把C、C++组合在一起的唯一可行方法**。
+```cpp
+// 组合而非继承
+struct C_point(...);
+class Point{
+public:
+    operator C_point(){return _c_point;}
+    // ...
+private:
+    C_point _c_point;
+};
+```
+C struct中的合理用途，是当你要传递“一个复杂的class object的全部或部分”到某个C函数中去，struct声明可以将数据封装起来，并保证拥有与C兼容的空间布局（条件是组合而非继承，如果是继承而非组合，编译器会决定是否应该有额外的data members被安插到base struct subobject中）。
+
+
+## 1.3 对象的差异
+
+
+
+
 
 
 
