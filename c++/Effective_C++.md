@@ -446,6 +446,165 @@ non-member non-friend函数好在并不增加“能够访问class内private成�
 c++标准程序库也是如此组织的，便利函数分布于多个头文件但是隶属于同一个namespace --> 用户可以轻松扩展这一组便利函数，即添加更多的non-member或non-friend函数
 （class相比non-member缺点是对于用户而言不能扩展，即便是派生类，也无法访问基类中的private成员，更何况并非所有的类都被设计为基类）
 
+# 24 若所有参数都需要类型转换，采用non-member比较好
+一般只有对于数值类型，才让这种class支持隐式转换
+比如有理数类，那么有理数相乘的函数是否设计在内类比较好呢？
+如果这样实现的话：
+```cpp
+class Rational{
+    public:
+    ...
+    const Rational operator*(const Rational& rhs) const;
+}
+
+// 用起来就是这样：
+Rational oneEigth(1, 8);
+Rational oneHald(1, 2);
+Rational result = oneHalf * oneEight;
+
+// 如果和int混合运算，就有问题：
+result = oneHalf * 2;
+result = 2 * oneHalf;   // 错误！毕竟2不是Rational类型的对象，无法调用operator*方法
+前一个调用之所以可行是因为发生了隐式类型转换：
+const Rational temp(2);
+result = oneHalf * temp;
+当然前提是构造函数是non-explicit的，编译器才会做隐式类型转换
+而且之所以可以隐式类型转换是由于参数位于参数列表内，才能进行隐式类型转换。
+```
+这样就可以看出non-member函数的好处：
+```cpp
+const Rational operator*(const Rational& lhs, const Rational& rhs);
+// 而且 该函数不需要是Rational的友元函数
+```
+可以避免friend函数就要避免
+
+# 25 考虑写出一个不抛出异常的swap函数
+swap函数，可用于异常安全性编程，以及处理自我赋值
+```cpp
+// 典型实现
+namespace std{
+    tempplate<typename T>
+    void swap(T& a, T& b){
+        T temp(a);
+        a = b;
+        b = temp;
+    }
+}
+```
+只要T类型支持copying（通过拷贝构造函数和copy assignment操作符完成）
+这样的实现效率太差，不够刺激（因为产生了不必要的拷贝，对于某些类型而言）
+```cpp
+// 比如这个类型
+class WidgetImpl{
+public:
+    ...
+private:
+    int a, b, c;
+    std::vector<double>v;   // 数据复制的时间很长
+
+};
+
+class Widget{
+public:
+    Widget(const Widget& rhs);
+    Widget& operator=(const Widget& rhs){
+        ...
+        *pImpl = *(rhs.pImpl);
+        ...
+    }
+    ...
+private:
+    WidgetImpl* pImpl;
+};
+// 对于Widget类型的swap，显然只要置换pImpl指针，但是原先的swap算法会无脑产生3个Widget的实例
+```
+想要让它不无脑，可以针对Widget类型特化
+```cpp
+namespace std{
+    template<>  // 全特化
+    void swap<Widget>(Widget& a, Widget& b){    // 说明针对什么全特化
+        swap(a.pImpl, b.pImpl);
+    }
+}
+// 我们可以为std模板增加特化版本，使得针对我们自定义的类型
+// 但无法通过编译，因为pImpl是友元类型，虽然可以声明为friend，但是不太好
+
+// 我们可以在Widget内部声明一个public成员函数：swap
+class Widget{
+public:
+    ...
+    void swap(Widget& other){
+        using std::swap;
+        swap(pImpl, other.pImpl);
+    }
+};
+// 再加上：
+namespace std{
+    template<>  // 全特化
+    void swap<Widget>(Widget& a, Widget& b){    // 说明针对什么全特化
+    a.swap(b);
+    }
+}
+// 这种方法不仅能通过编译，而且和STL有一致性，所有STL容器也提供有public swap成员函数和std::swap特化版本
+
+// 如果Widget和WidgetImpl都是类模板呢？
+// 情况不同了
+namespace std{
+    template<typename T>
+    void swap<Widget<T>>(Widget<T>& a, Widget<T>& b)
+    {a.swap(b);}
+}
+因为C++只允许对类模板偏特化，而不是对函数模板偏特化
+
+可以这样做：
+namespace std{
+    template<typename T>
+    void swap(Widget<T>& a, Widget<T>& b)
+    {a.swap(b);}
+}   // 重载
+// 但是这种方式被std禁止,std是特殊的命名空间，客户客户全特化std的模板，但是不可以添加新的模板/函数/类
+
+// 还有办法：声明non-member函数，让它调用member swap，但是不将non-member swap特化或者重载
+namespace WidgetStuff{
+    ...
+    template<typename T>
+    class Widget{...};  // 内含swap成员函数
+    ...
+    template<typename T>
+    void swap(Widget<T>& a, Widget<T>& b){
+        a.swap(b);
+    }
+}   // 这个swap是这个类专属的
+// C++的查找规则会找到WidgetStuff内的专属版本
+// 但是还是要为class特化std::swap
+
+// swap有多个版本：一般化版本、特化版本、某个命名空间的T专属版本
+// 我们需要调用最佳swap版本（调用T专属版本，如果没有就调用一般的swap）
+template<typename T>
+void doSth(T& obj1, T& obj2)
+{
+    using std::swap;
+    ...
+    swap(obj1, obj2);
+}
+
+
+C++的名称查找法则确保找到global作用域或者T所在命名空间内的T的专属swap，如果没有专属的就用std::swap
+
+
+```
+
+现在我们对上述内容做一个总结：
+如果缺省的swap可以对你的class或者class template提供可接受的效率，那不需要做任何事情。
+如果swap缺省实现版本效率不足（那几乎总是意味着你的class或template使用了某种pimpl手法），试着做以下事情：
+**提供一个public swap成员函数，让它高效地置换你的类型的两个对象值；在你的class或者template所在的命名空间内提供一个non-member swap，并令它调用上述swap成员函数。**
+如果你正在编写一个class（而非class template），为你的class特化std::swap，并令它调用你的swap成员函数。
+如果你调用swap，请确定包含一个using声明式，以便让std::swap在你的函数内曝光可见，然后不加任何namespace修饰符，赤裸裸地调用swap。
+
+请记住当std::swap对你的类型效率不高时，提供一个swap成员函数，并确定这个函数不抛出异常。
+如果你提供一个member swap，也该提供一个non-member swap用来调用前者。对于classes（而非templates），也请特化std::swap。
+调用swap时应针对std::swap使用using声明式，然后调用swap并且不带任何“命名空间资格修饰”（比如std）。
+为"用户定义类型"进行std templates全特化是好的，但千万不要尝试在std内增加某些对std而言全新的东西。
 
 
 
