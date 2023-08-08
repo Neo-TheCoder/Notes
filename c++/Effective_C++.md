@@ -681,7 +681,7 @@ Base* pb = &derived;
 ```cpp
 class Derived: public Base{
 public:
-    virutal void onResize(){
+    virtual void onResize(){
         static_cast<Base>(*this).onResize();    // 试图将派生类转为基类，调用该方法，是错误的
     }
 }
@@ -689,14 +689,22 @@ public:
 错在何处？
 这种做法调用的对象并非是纯粹的基类对象，而是转型动作建立的一个“*this对象的base class部分”的临时副本的onResize
 （类的成员函数都有隐藏的this指针，会影响成员函数操作的数据）
+这种做法是在当前对象的base class成分的副本上调用基类的方法，这样会导致当前派生类对象实际没被改动，改动的是副本（**会创建临时基类对象**）。
+解决办法：
+```cpp
+class Derived: public Base{
+public:
+    virtual void onResize(){
+        Base::onResize();   // 显示地调用
+    }
+}
+```
 
-
-
-
-
-
-
-
+dynamic_cast
+dynamic_cast的实现速度相当慢，这是因为：比如四层深度的单继承体系，对某个对象执行dynamic_cast，可能会调用多次strcmp，用于比较class名称，因此要在注重效率的代码中对其保持怀疑态度。
+用于：想要对派生类对象执行派生类的函数，但是手头只有基类指针或者引用指向它。
+1. 
+2. 
 
 
 
