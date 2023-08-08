@@ -651,6 +651,52 @@ static_cast<T>(expression)
 将void*指针转为typed指针,基类指针转派生类指针
 无法将const转为非const
 
+新式转型比较容易阅读、而且更具针对性
+唯一使用旧式转型的时机：调用一个explicit构造函数将一个对象传递给一个函数时：
+```cpp
+class Widget{
+public:
+    explicit Widget(int size);
+    ...
+};
+void doSomeWork(const Widget& w);
+
+doSomeWork(Widget(15)); // 显式地创建了对象
+
+doSomeWork(static_cast<Widget>(15));    // 转型的方式创建
+// 可以用新式转型，但是旧式更为显眼
+```
+注意：类型转换会使得编译器生成相关的机器码，而不只是让编译器把某种类型视为另一种类型
+当把一个基类指针指向派生类对象时：
+```cpp
+Base* pb = &derived;
+// 隐式地将派生类指针转为基类指针（转换的实现是对派生类指针所指的地址增加一个offset）
+```
+也就是说，在C++中，一个对象可能拥有多个地址（用基类指针指向时的地址、用派生类指针指向时的地址），因而无法简单地假设对象在C++中的布局
+对象布局和编译器有关，是会变化的
+
+关于转型，我们容易写出看似正确的代码：
+在派生类中定义一个虚函数onResize（基类也有它的虚函数定义）
+想法是：在派生类中调用一下基类的函数，让其生效
+```cpp
+class Derived: public Base{
+public:
+    virutal void onResize(){
+        static_cast<Base>(*this).onResize();    // 试图将派生类转为基类，调用该方法，是错误的
+    }
+}
+```
+错在何处？
+这种做法调用的对象并非是纯粹的基类对象，而是转型动作建立的一个“*this对象的base class部分”的临时副本的onResize
+（类的成员函数都有隐藏的this指针，会影响成员函数操作的数据）
+
+
+
+
+
+
+
+
 
 
 
