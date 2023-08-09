@@ -216,7 +216,12 @@ c++程序设计模型直接支持三种**程序设计典范**
 Base b;
 class Derived1: public Base{...};
 Derived1 d1;
+d1 = b;
+b.check_in();   // 调用的还是基类的方法
 
+// 多态应该通过基类的指针或者引用来实现
+Base& b2 = d1;
+b2.check_in();  // 调用的是派生类的方法
 
 ```
 
