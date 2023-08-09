@@ -703,12 +703,77 @@ public:
 dynamic_cast
 dynamic_cast的实现速度相当慢，这是因为：比如四层深度的单继承体系，对某个对象执行dynamic_cast，可能会调用多次strcmp，用于比较class名称，因此要在注重效率的代码中对其保持怀疑态度。
 用于：想要对派生类对象执行派生类的函数，但是手头只有基类指针或者引用指向它。
-1. 
-2. 
+1. 使用容器，并在其中存储直接指向派生类对象的（智能）指针
+```cpp
+typedef std::vector<std::shared_ptr<Derived>> DRV;
+DRV derivedPtrs;
+...
+for(DRV::iterator iter = derivedPtrs.begin(); iter != derivedPtrs.end(); ++iter){
+    (*iter)->fun(); // 不要用dynamic_cast把基类指针转为派生类指针，而是直接使用派生类指针
+}
+// 当然，如果基类有多种继承形式，那么就需要多种容器，并且要具备类型安全性
+```
 
+2. 基类提供虚函数，利用多态
 
+绝对要避免连串的dynamic_cast
+```cpp
+if(Derived1* p1 = dynamic_cast<Derived1*>(iter->get()))
+    ...
+else if(Derived2* p2 = dynamic_cast<Derived2*>(iter->get()))
+    ... 
+else if(Derived3* p3 = dynamic_cast<Derived3*>(iter->get()))
+    ...
+```
+因为需要考虑到：这些类的继承体系一旦变化，这边的代码都可能需要一并修改
+这完全可以用虚函数的方式避免
 
+如果非得要转型，要把它封装起来隐藏在某个函数的背后，不要让客户直接操作那些转型的代码
 
+# 28 避免返回handles指向对象内部成分
+考虑以下场景：
+矩形类中有一个点类（辅助类）
+```cpp
+struct RectData{
+    Point ulhc;
+    Point lrhc;
+};
+
+class Rectangle{
+    ...
+private:
+    std::shared_ptr<RectData> pData;
+}
+```
+由于用户需要计算矩形的范围，也就是需要得到点对象，如果我们对外提供传引用的接口：
+```cpp
+class Rectangle{
+    ...
+    Point& upperLeft() const { return pData->ulhc; };
+};
+```
+这样的设计是有问题的：因为：传引用会导致用户可能更改点数据，用户只要得知就行了。
+更何况这样的函数实际是把Rectangle类的private数据传出去了。
+教训：
+1. 成员变量的封装程度取决于返回其引用的函数（即便声明为private，还是可能被public函数传出去）
+2. 如果const成员函数传出一个引用，该引用所指的数据与对象自身有关，而它又存储于对象本身的位置之外，那么会导致该函数的调用者可能修改那笔数据。
+
+引用、指针、迭代器都是所谓的handles（号码牌，用于取得某个对象）
+返回这么一个handle的风险就是降低了对象的封装性 --> 即便调用的是const成员函数，对象的状态仍然会改变
+要留心protected或者private的函数不要返回成员变量的handles，也就是说，绝对不要让成员函数返回一个指针，它指向访问级别较低的成员函数，这变相地提高了这个访问级别较低的成员函数的访问级别
+
+因此，上述的返回点对象的接口可以在返回值增加const标识符，从而实现了**有限度的封装**
+但是也有隐患：可能导致悬空的handles（因为引用所指的对象可能并不存在）
+```cpp
+const Rectangle getRectangle(const GUIObject& obj);
+
+// 如果这样调用：
+GUIObject* g;   // 指向某一GUIObject对象
+...
+const Point* pUpperLeft = &(getRectangle(*g).upperLeft());
+// getRectangle返回了一个新的临时对象，是匿名的，这行语句结束就销毁了，所以导致了悬空
+```
+也并非成员函数就不能返回handle了，比如operator[]，允许用户得到vector的某个元素，那些数据随着容器的销毁而销毁。
 
 
 

@@ -197,6 +197,28 @@ C structÖÐµÄºÏÀíÓÃÍ¾£¬ÊÇµ±ÄãÒª´«µÝ¡°Ò»¸ö¸´ÔÓµÄclass objectµÄÈ«²¿»ò²¿·Ö¡±µ½Ä³¸öCº
 
 
 ## 1.3 ¶ÔÏóµÄ²îÒì
+c++³ÌÐòÉè¼ÆÄ£ÐÍÖ±½ÓÖ§³ÖÈýÖÖ**³ÌÐòÉè¼Æµä·¶**
+### ³ÌÐòÄ£ÐÍ
+ÊÇÖ¸ÃæÏò¹ý³Ì
+
+### ³éÏóÊý¾ÝÀàÐÍÄ£ÐÍ
+³éÏóÖ¸µÄÊÇ£ººÍÒ»×épublic½Ó¿ÚÒ»ÆðÌá¹©£¬¶øÔËËãµÄ¶¨ÒåµÄÊÇÒþ²ØµÄ
+±ÈÈçstringµÄ==·½·¨»òÕß¸³Öµ£¬¾ÍÒþ²ØÁËÏ¸½Ú
+
+### ÃæÏò¶ÔÏóÄ£ÐÍ
+±ÈÈçÏÈÉè¼ÆÒ»¸ö³éÏó»ùÀà£¬È»ºóÏà¹ØµÄÅÉÉúÀàÓÉ´ËÅÉÉú¶øÀ´¡£
+
+»ìÓÃ²»Í¬µÄ³ÌÐòÉè¼ÆÄ£ÐÍ»áÓÐÎÊÌâ£º
+±ÈÈç£º
+```cpp
+// ÏëÒªÒÔ»ùÀàÊµÀýÊµÏÖ¶àÌ¬Ê±£º
+
+Base b;
+class Derived1: public Base{...};
+Derived1 d1;
+
+
+```
 
 
 
