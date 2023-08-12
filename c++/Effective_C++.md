@@ -606,7 +606,6 @@ C++的名称查找法则确保找到global作用域或者T所在命名空间内�
 调用swap时应针对std::swap使用using声明式，然后调用swap并且不带任何“命名空间资格修饰”（比如std）。
 为"用户定义类型"进行std templates全特化是好的，但千万不要尝试在std内增加某些对std而言全新的东西。
 
-# P5 实现
 # 26 尽可能延后变量定义式出现的时间
 需要注意,只要一个变量其类型带有构造&析构,就需要考虑其构造和析构的成本,即便这个变量最终未被使用,还是耗费了这些成本.
 定义了变量但并未使用,这种情况并不罕见,比如由于抛出异常就有可能更改原先的控制流,**这时可以把局部变量定义在抛出异常之后**.
@@ -774,6 +773,165 @@ const Point* pUpperLeft = &(getRectangle(*g).upperLeft());
 // getRectangle返回了一个新的临时对象，是匿名的，这行语句结束就销毁了，所以导致了悬空
 ```
 也并非成员函数就不能返回handle了，比如operator[]，允许用户得到vector的某个元素，那些数据随着容器的销毁而销毁。
+
+
+
+# 29 为“异常安全”而努力是值得的
+假设一个class用于表示GUI菜单，它用于多线程，因此有一个互斥量是它的成员变量，用于并发控制。
+如果代码是这样写的：
+```cpp
+class PrettyMenu{
+public:
+    ...
+    void changeBackground(std::istream& imgSrc);
+    ...
+private:
+    Mutex mutex;
+    Image* bgImage;
+    int imageChanges;   // 执行changeBackground的次数
+};
+
+// 如果这样实现：（要能看出缺陷在何处）
+void PrettyMenu::changeBackground(std::istream& imgSrc){
+    lock(&mutex);
+    delete bgImage;
+    ++imageChanges;
+    bgImage = new Image(imgSrc);
+    unlock(&mutex);
+}
+```
+
+**异常安全有两个条件：如果一个函数是异常安全的，在异常抛出时，它可以做到：1. 不泄露任何资源 2. 不允许数据破坏**
+上面代码错误在于：
+1. 互斥量资源泄漏了：new Image可能会抛出异常，那么unlock就永远不会执行，释放不了互斥量了
+2. 同样，new Image若抛出异常，bgImage仍然是一个指向被删除对象的指针，而imageChanges计数仍然累加，与它的意义不符合（这行代码的位置不能随便放）
+
+解决办法是：**以对象管理资源**
+让对象的生命周期去控制互斥量的上锁与解锁
+```cpp
+void PrettyMenu::changeBackground(std::istream& imgSrc){
+    Lock ml(&mutex);    // 这样写的好处还有比较简洁，出错概率小
+    delete bgImage;
+    ++imageChanges;
+    bgImage = new Image(imgSrc);
+}
+```
+
+## 异常安全函数的保证
+### 基本承诺
+如果异常抛出，程序的任何事物都要保持有效状态，不破坏任何对象或数据结构，比如：changeBackground函数中一旦抛出异常，PrettyMenu对象可以继续拥有原背景图像，或者是拥有缺省的背景图像
+
+### 强烈保证
+如果异常安全的函数调用失败，程序会回到调用该函数之前的状态
+这样的话，可以确保程序状态只有两种可能，要不然就无法预测了
+
+### nothrow保证
+承诺不抛出异常，对内置类型做的操作都是不抛出异常的
+如果异常明细为空（C++11之前用的），也不代表就必然不抛出异常，这取决于函数实现
+
+实际上很难完全没有调用任何一个可能抛出异常的函数。比如STL容器如果内存空间不足，就会抛出bad_alloc
+对于大部分函数，只能做到基本保证和强烈保证
+
+异常安全码必须提供上述三种保证之一。
+
+使得changeBackground具有强烈保证的代码：
+将裸指针改为智能指针，防止资源泄漏
+
+```cpp
+void PrettyMenu::changeBackground(std::istream& imgSrc){
+    Lock ml(&mutex);    // 这样写的好处还有比较简洁，出错概率小
+    bgImage.reset(new Image(imgSrc));   // reset函数保证：只有在参数正确生成才会被调用，内部有delete原来的指针的操作
+    ++imageChanges;
+}
+```
+美中不足之处是：如果Image构造函数抛出异常，istream对象的读取记号已经被移走，导致状态的改变。
+将其完善成真正的强烈保证的办法有很多，但是有个很一般化的设计策略：**copy and swap**。
+即：为打算修改的对象做一份副本，然后在副本上做修改，若有任何修改则抛出异常，在确保所有改变成功后，才将本体和副本置换。
+实际的实现通常是**pimpl idiom**：将所有“隶属对象的数据”从原对象放进另一个对象内，然后赋予原对象一个指针，指向副本。
+```cpp
+// 为了强烈保证而再度优化
+struct PMImpl{
+    std::shared_ptr<Image>bgImage;
+    int imageChanges;
+};  // 封装它的shared_ptr已经在class里设计为private
+
+class PrettyMenu{
+    ...
+private:
+    Mutex mutex;
+    std::shared_ptr<PMImpl> pImpl;
+};
+
+void PrettyMenu::changeBackground(std::istream& imgSrc){
+    using std::swap;    // 为了高效地swap
+    Lock m1(&mutex);
+    std::shared_ptr<PMImpl>pNew(new PMImpl(*pImpl));    // 通过本体产生副本对象
+    pNew->bgImage.reset(new Image(imgSrc)); // 修改的是副本
+    ++pNew->imageChanges;
+    swap(pImpl, pNew);
+}
+```
+copy and swap这招有利于保证对象的状态“全有或全无”，但是它一般不能保证整个函数具有强烈的异常安全性。
+```cpp
+void someFunc(){
+    ... // 拷贝本地数据
+    f1();
+    f2();
+    ... // 置换
+}
+```
+如果f1或f2的异常安全性比“强烈保证”低，那么就难以实现强烈异常安全。要不然就得记录下来调用f1前的整个程序的状态。
+即便f1、f2是“强烈异常安全”，f1结束后，程序状态仍有可能改变，f2如果抛出异常的话，就没能保证状态的一致性。
+关键在于**连带影响**，若函数只操作局部性状态，例如someFunc只影响其调用者的状态，就容易提供强烈保证，如果对“非局部性数据”有影响，那就困难了。
+
+而且copy and swap在时间和空间上消耗较大，强烈保证因此可能是不切实际的。那就提供基本保证好了，尽力而为就是通情达理的。
+
+一个软件系统要么是不具备异常安全性，要么就是具备的。
+
+
+# 30 透彻了解inling的里里外外
+内联函数：看似是函数，相比宏又可以在编译期做出一些检查，而且又因为函数体展开而不用付出函数调用的开销。
+编译优化机制通常用于浓缩那些不含函数调用的代码，声明inline后编译器就可以对它执行语境相关最优化，编译器一般不会对非inline函数做这种优化。
+## 代价是什么呢？
+编译器会把每一处函数调用都用函数本体替换，导致目标代码的增加，进而可能导致额外的换页行为，降低cache命中率，导致低效率。
+如果inline函数的本体很小，展开的那些代码比函数调用产生的代码更小，那么inline很好。
+inline只是一个申请，不是强制的。而且类内部的成员函数都是默认inline的，友元函数如果被定义于类内部，那么也会被声明为inline。
+inline未必就好，比如以下代码：
+```cpp
+template<typename T>
+inline const T& std::max(const T& a, const T& b)
+{ return a < b ? b : a; }
+```
+inline函数常常被放在头文件，因为大部分编译环境在编译时做inlining时，为了将“函数调用”替换为“被调用函数的本体”，编译器当然得知道函数的内部实现。
+某些编译环境可以在链接时完成inlining，有的甚至能在运行时完成，当然对于c++而言，inlining是编译期行为。
+而templates通常也放在头文件，其实例化与inline无关，如果你写的模板函数没有必要让所有实例化版本都是inline的，就要避免inline（因为需要成本）
+
+编译器会拒绝复杂的函数inline（带有循环或者递归），如果有虚函数（毕竟是运行时才确定调用哪个函数）的调用也无法inline。
+
+**总结：一个声明inline的函数，是否真的被内联化，取决于编译环境和编译器。（不做内联会提出警告）**
+有时编译器会inline某个函数，但还是会生成函数体，比如：
+```cpp
+inline void f(){...}
+void (*pf)() = f;   // 使得函数指针pf指向f
+...
+f();    // 会被内联
+pf();   // 由于是通过函数指针调用的函数体，不会被内联
+```
+编译器有时生成构造和析构的非内联副本，以便通过指针指向那些函数
+实际上构造函数和析构不宜inline：
+原因是：构造和析构内也有许多逻辑（比如包含了每一个成员的构造），可能会导致很大的开销。
+
+更何况，由于被inline的函数体被展开了，那么如果它是函数库里的函数，客户用到此函数之处就都得重新编译，不是inline的话，只要重新链接就行了，动态链接的话更是神不知鬼不觉。
+还有，调试器无法处理inline，没法打断点。
+
+因此，比较好的操作是：只有必须要inline的函数，以及十分简单的函数才要inline。
+经验之谈：一个程序80%的执行时间花费在20%的代码上。
+
+# 31 将文件间的编译依存关系降至最低
+
+
+
+
 
 
 
