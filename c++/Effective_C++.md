@@ -993,10 +993,30 @@ class Person{
 public:
     virtual ~Person();
     virtual std::string name() const = 0;
-
+    ...
+}
+```
+接口类的客户需要调用其中的函数得到真正的派生类的实例化，这样的函数通常被称为工厂函数，返回智能指针，指向动态分配的对象。而且通常被声明为static
+```cpp
+class Person{
+public:
+    ...
+static std::shared_ptr<Person>create(const std::string& name, const Data& birthday, const Address& addr);
 }
 
+// 客户这样使用：
+std::shared_ptr<Person> pp(Person::create(name, dataOfBirth, address));
+std::cout << pp->name();
 ```
+
+尽管handle classes和interface classes带来了额外的开销，但是这是为了更大的利益。
+
+
+
+
+
+
+
 
 
 
