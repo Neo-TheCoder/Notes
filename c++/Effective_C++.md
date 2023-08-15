@@ -1013,6 +1013,15 @@ std::cout << pp->name();
 
 
 
+# 32 确定你的public继承，是含有is-a的关系的
+public继承意味着“is a”的关系
+比如Derived公有继承Base，等于告诉编译器每一个类型为Derived的对象同时也是一个类型为Base的对象，反之不成立
+**利斯科夫替代原理：任何基类可以出现的地方，子类一定可以出现。**
+经典的情况：Student公有继承Person
+
+
+
+
 
 
 
