@@ -1028,7 +1028,16 @@ public继承意味着“is a”的关系
 再考虑一下正方形和矩形的关系：
 如果Rectangle公有继承Square，而Rectangle提供一个函数makeBigger()，用于将宽度增加10，其中断言高度是否未曾发生变化
 Square对象s，在调用makeBigger()前后，破坏了正方形的长宽相等的情况。
-但是调用makeBigger()返回后，s的高度与宽度再次相同。
+**问题根源在于Rectangle和Square的关系并不是简单的公有继承关系**，而public主张基类能调用的方法，也能作用于派生类上
+
+除了is-a的关系，类间关系还有has-a，以及is-implementaed-in-terms-of。
+
+
+
+
+
+
+
 
 
 
