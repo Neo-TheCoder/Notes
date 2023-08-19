@@ -1030,11 +1030,148 @@ public继承意味着“is a”的关系
 Square对象s，在调用makeBigger()前后，破坏了正方形的长宽相等的情况。
 **问题根源在于Rectangle和Square的关系并不是简单的公有继承关系**，而public主张基类能调用的方法，也能作用于派生类上
 
-除了is-a的关系，类间关系还有has-a，以及is-implementaed-in-terms-of。
+除了is-a的关系，类间关系还有has-a，以及is-implemented-in-terms-of。
+
+# 33 避免遮掩继承而来的名称
+```cpp
+int x;  // 全局变量
+void someFunc(){
+    double x;
+    std::cin >> x;  // 全局变量和局部变量重名的话，优先选择局部变量，也就是说全局变量被遮掩
+}
+```
+**内层作用域的名字会掩盖外层作用域的名字**
+此处就是double类型的x遮掩了int类型x。
+接下来考虑继承的情况，当在派生类成员函数内部使用基类中的某物（成员函数、typedef、成员变量）时，此时意味着派生类作用域被嵌套在基类作用域内。
+编译器会**优先找局部的作用域**
+考虑此例：
+```cpp
+class Base{
+private:
+    int x;
+public:
+    virtual void mf1() = 0;
+    virtual void mf1(int);
+    virtual void mf2();
+    void mf3();
+    void mf3(double);
+    ...
+};
+
+class Derived: public Base{
+public:
+    virtual void mf1();
+    void mf3();
+    void mf4();
+    ...
+};
+```
+这样写的后果是：派生类无法继承基类的函数：mf1和mf3
+```cpp
+Derived d;
+int x;
+...
+d.mf1();    // 调用派生类版本mf1
+d.mf1(x);   // 错误！被遮掩
+d.mf2();    // 没和基类重名
+d.mf3(x);    // 错误！被遮掩
+```
+**可见，在派生体系中，即便函数参数不一样，也不管是不是虚函数，名称遮掩的规则都存在（重点就是函数名字）**。
+这种设定的意义在于：
+防止在程序库内建立新的派生类时，一并把关系较为疏远的基类里的重载函数一并继承。如果你正在使用public继承而又不继承那些重载函数，就违反了is-a的关系。
+对此解决办法是：
+```cpp
+class Base{
+public:
+    virtual void mf1() = 0;
+};
+class Derived: public Base{
+public:
+    using Base::mf1;    // !使得基类的mf1在派生类的作用域也可见 放在public的位置也是有意义的：基类的public名称在公有继承的派生类内也是public
+}
+```
+如果派生类是private继承基类，并且唯一想继承基类的某个函数，没法用using声明了，因为它会导致继承而来的所有同名的函数在派生类中都可见（**无法具体到某一个函数**）
+可以使用转交函数来实现（forwarding function）
+```cpp
+class Base{
+public:
+    virtual void mf1() = 0;
+    virtual void mf1(int) = 0;
+};
+
+class Derived: public Base{
+public:
+    virtual void mf1(){
+        Base::mf1();    // 偷偷地成为inline函数
+    }
+}
+```
+转交函数的好处还有：为那些不支持using的老式编译器将继承而得的名称汇入派生类作用域。
 
 
+# 34 区分接口继承和实现继承
+在继承体系中，既有**函数接口（function interfaces）继承（或者说声明），又有函数实现（function implementations）继承**。
+```cpp
+class Shape{
+public:
+    virtual void draw() const = 0;  // 纯虚函数
+    virtual void error(const std::string& msg); // 虚函数
+    int objectID() const;   // 普通函数
+    ...
+};  // 是抽象类
 
+class Rectangle: public Shape{...};
+class Ellipse: public Shape{...};
+```
+注意：对于public继承，成员函数的接口总是会被继承，毕竟是is-a的关系
+以上的基类Shape设计了三种不同类型的函数：
+1. 纯虚函数（必须被派生类重新实现），目的就是**为了让派生类只继承函数接口**，此处的函数也很有意义：毕竟不知道是什么图形，怎么知道怎么draw
+但是C++编译器允许你为纯虚函数提供定义，但是调用它必须要明确其class名称：
+```cpp
+Shape* ps = new Rectangle;
+ps->Shpe::draw();
+```
+目的是为了给虚函数提供平常且安全的缺省实现。
 
+2. 而虚函数的话，派生类可以继承其函数接口，但本身它也会提供一份代码，派生类可以覆写它(override)。
+**声明非纯的虚函数，是为了让派生类继承该函数的接口和缺省实现**
+```cpp
+virtual void error(const std::string& msg); // 虚函数
+```
+其中蕴含的语义是：每个class都必须支持一个“当遇上错误时可调用”的函数，但是每个class也可以自由地处理错误，不想特殊处理的话就可以退回到缺省的错误处理行为
+
+但是，允许虚函数同时指定函数声明和函数缺省行为，有可能造成危险。
+```cpp
+class Airport{...};
+class Airplane{
+public:
+    virtual void fly(const Airport& destination){...// 缺省代码}
+    ...
+}
+}
+;
+class ModelA: public Airplane{...};
+class ModelB: public Airplane{...};
+// 经典的面向对象设计
+```
+ModelA和ModelB同时继承了一份相同性质的函数，因为可以使用缺省的实现，所以可以避免代码重复
+但是如果此时有个ModelC类，它的fly()函数是必须重新实现的，如果程序员忘记为其重新实现，那程序运行时就会找到缺省实现，而ModelC无法拒绝这个缺省实现。
+解决办法之一是：可以设置Airplane中fly为纯虚函数，另外再设计一个普通函数（不必是虚函数）defaultFly（设置为protected，只要在继承体系中可见即可），在派生类的fly中调用defaultFly就等于是有了默认实现，不调用则没有，直接通不过编译。
+
+以上的fly和defaultFly实际上是以不同的函数分别提供接口和缺省实现，这可能会导致过度雷同的函数名称而引起的class命名空间污染问题，但是接口和缺省实现分开是合理的。
+此时就可以利用纯虚函数也可以偷偷实现的特点，在派生类的fly中调用纯虚函数fly的实现，使得函数名字只有一份，并且将接口和缺省实现分离了（不特意设置的话就没有缺省实现了）。
+
+3. 普通函数objectID
+普通函数就意味着它并不打算在派生类中有不同的行为，**实际上，一个非虚成员函数所表现的不变性，凌驾于其特异性**：不论派生类多么特异化，它的行为都不可以改变
+因而可以总结：声明普通函数是为了让派生类继承函数的接口以及一份强制的实现****
+objectID的例子也很有意义：每个Shape对象都有一个用于产生对象识别码的函数，计算方法是死的，派生类不必也不应该改变其行为。
+
+以上三种类型的函数，使得程序员可以精确地指定想要让派生类继承的东西：
+1. 只继承接口
+2. 继承接口和一份缺省实现
+3. 继承接口和一份强制实现
+
+不必担心virtual带来的成本，还是经典的80-20法则，一个程序有80%的时间花费在20%的代码上，那么即便80%的代码用到虚函数，剩余的20%更是举足轻重
 
 
 
