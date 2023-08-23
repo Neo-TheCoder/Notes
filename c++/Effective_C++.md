@@ -1173,6 +1173,40 @@ objectID的例子也很有意义：每个Shape对象都有一个用于产生对�
 
 不必担心virtual带来的成本，还是经典的80-20法则，一个程序有80%的时间花费在20%的代码上，那么即便80%的代码用到虚函数，剩余的20%更是举足轻重
 
+# 35 考虑virtual函数以外的其他选择
+考虑这么一个场景：
+```cpp
+class GameCharacter{
+public:
+    virtual int healthValue() const;    // 返回每个人的健康指数，每个人都是有所不同的，因而是虚函数，而且不是纯虚的，说明有缺省实现
+    ...
+};
+```
+有什么问题呢？
+先考虑别的实现：
+```cpp
+// 有人认为：较好的设计是保留healthValue为public成员函数，但让它成为non-virtual，并调用一个private virtual来做实际工作
+class GameCharacter{
+public:
+    int healthValue() const{
+        ...
+        int retVal = doHealthValue();
+        ...
+        return retVal;
+    }
+    ...
+private:
+    virtual int doHealthValue() const{
+        ...
+    }
+};
+```
+这样的设计被称为：令客户通过public non-virtual成员函数间接调用private virtual函数
+NVI（non-virtual interface）收发，是所谓的***Template Method设计模式***
+实际上是包装了虚函数
+
+
+
 
 
 
