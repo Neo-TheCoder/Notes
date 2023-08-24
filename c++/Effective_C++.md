@@ -1201,9 +1201,87 @@ private:
     }
 };
 ```
-这样的设计被称为：令客户通过public non-virtual成员函数间接调用private virtual函数
-NVI（non-virtual interface）收发，是所谓的***Template Method设计模式***
-实际上是包装了虚函数
+## 这样的设计被称为：令客户通过public non-virtual成员函数间接调用private virtual函数
+**NVI（non-virtual interface）手法**，实际是所谓的***Template Method设计模式***
+实际上是把虚函数包装了起来，好处在于：可以在虚函数调用前后，做一些事前工作（锁定互斥量、调用日志记录、验证class约束条件、验证函数先决条件）和事后工作（解锁互斥量...）
+其实没有必要让virtual函数一定得是private，某些class继承体系要求派生类在virtual函数的实现内必须调用其基类的兄弟（想要调用一下基类版本的函数），那就得提升函数的可见程度，至少得是protected，有时虚函数甚至一定得是public（基类指针指向派生类对象，而delete的话，如果基类析构不是虚函数，就只会调用基类的析构，而不会调用派生类的析构），那就不能使用NVI手法了
+
+
+## 借由函数指针实现Strategy模式
+NVI手法public virtual函数还是得使用一堆虚函数，不够好。
+实际上，人物健康指数的计算与人物类型无关，这样的计算实际是不需要人物的
+**Strategy Design Pattern是一种行为型设计模式，它允许在运行时选择不同的算法或行为，从而使得一个类的行为可以根据需要动态地改变，而不需要修改其结构。该模式将不同的算法封装成一系列独立的类，使得它们可以互相替换，而客户端代码则无需关心具体的算法实现。**
+```cpp
+// 利用函数指针
+class GameCharacter;    // 前置声明
+// 计算健康指数的缺省算法
+int defaultHealthCalc(const GameCharacter& gc);
+class GameCharacter{
+public:
+    typedef int (*HealthCalcFunc)(const GameCharacter&);    // 定义函数指针
+    explicit GameCharacter(HealthCalcFunc hcf = defaultHealthCalc): healthFunc(hcf){}
+    int healthValue() const{
+        return healthFunc(*this);
+    }
+    ...
+private:
+    HealthCalcFunc healthFunc;  // 函数指针对象
+};
+```
+正因为使用了函数指针，才实现了可以调用不同的函数
+同一人物类型之间不同实体可以有不同的健康计算函数，例如：
+```cpp
+class EvilBadGuy: public GameCharacter{
+public:
+    explicit EvilBadGuy(HealthCalcFunc hcf = defaultHealthCalc): GameCharacter(hcf){
+      ...
+    }
+};
+int loseHealthQuickly(const GameCharacter&);    // 计算函数1
+int loseHealthSlowly(const GameCharacter&);     // 计算函数2
+
+EvilBadGuy ebg1(loseHealthQuickly); // 相同类型人物可以调用不同的健康计算函数
+EvilBadGuy ebg2(loseHealthSlowly);
+```
+而且调用哪个函数是可以在运行期变更的。
+这种设计之下，健康计算函数不再是GameCharacter继承体系内的成员函数，因为健康计算函数甚至根本不访问非共有成分。
+如果人物的健康需要由非公有成分计算得来，那么这个设计就有问题了。
+--> 解决办法是：弱化class的封装，比如class可以声明对应的非成员函数为友元函数，或者为其实现的某一部分提供public访问函数。
+
+## 借助std::function完成Strategy模式
+玩明白template以及它们对隐式接口的使用的话，函数指针就显得死板了。
+```cpp
+class GameCharacter;    // 前置声明
+int defaultHealthCalc(const GameCharacter& gc);
+class GameCharacter{
+public:
+    typedef std::function<int (const GameCharacter&)> HealthCalcFunc;    // 定义函数指针
+    explicit GameCharacter(HealthCalcFunc hcf = defaultHealthCalc): healthFunc(hcf){}
+    int healthValue() const{
+        return healthFunc(*this);
+    }
+    ...
+private:
+    HealthCalcFunc healthFunc;  // 函数指针对象
+};
+// 其中的std::function对象可以保存任何与函数签名兼容的可调用对象（兼容的意思是：入参和出参都可以隐式转换）
+```
+准确来说，相比函数指针，std::function包装的产物可称为是一个指向函数的泛化指针。重点就在于：**入参和出参都可以隐式转换**
+甚至可以接收这种可调用对象：std::bind(&GameLevel::health, currentLevel, _1);
+当调用这个函数对象时，它会调用currentLevel对象的health成员函数，并将一个参数传递给health函数，这个参数将会被放置在占位符_1的位置。
+
+# 36 绝不重新定义继承而来的non-virtual函数
+
+
+
+
+
+
+
+
+
+
+
 
 
 
