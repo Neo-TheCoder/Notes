@@ -1271,6 +1271,60 @@ private:
 当调用这个函数对象时，它会调用currentLevel对象的health成员函数，并将一个参数传递给health函数，这个参数将会被放置在占位符_1的位置。
 
 # 36 绝不重新定义继承而来的non-virtual函数
+这会导致基类指针指向派生类对象的情况下，调用这样的函数会发生静态绑定，永远调用基类版本。
+之前提到public继承是is-a的关系，那么适用于Base对象的每一件事，也适用于Derived对象，因为每个Derived对象都是一个Base对象
+（Base含有一个非虚函数mf）Base的派生类一定会继承mf的接口和实现
+逻辑上是有问题的：如果派生类实现了与基类不同的mf函数，那么每一个Derived都是一个Base就不对了
+如果D是public继承了B，并实现了与基类不同的mf函数，这个mf函数就无法反映出本身是非虚函数的性质
+总之不具备多态性的函数就不要在派生类重新实现
+
+# 37 绝不重新定义继承而来的缺省参数值
+本章讨论局限于继承一个带有缺省参数值的virtual函数
+**虚函数是动态绑定，缺省参数值是静态绑定**
+静态绑定又称前期绑定，动态绑定又称后期绑定
+对象的静态类型，就是它在程序中被声明时所采用的类型
+```cpp
+class Shape{
+public:
+    enum ShapeColor{Red, Green, Blue};
+    virtual void draw(ShapeColor color = Red) const = 0;
+    ...
+};
+
+class Rectangle: public Shape{
+public:
+    virtual void draw(ShapeColor color = Green) const;
+    ...
+};
+
+class Circle: public Shape{
+public:
+    virtual void draw(ShapeColor color) const;  // 静态绑定，也就是编译期绑定，这个函数无法从base函数继承缺省值
+    // 而动态绑定的话，用指针或引用调用此函数，可以不指定参数，因为动态绑定会从base继承缺省参数值
+    ...
+};
+
+// 考虑以下指针
+Shape* ps;  // 静态类型为Shape*
+Shape* pc = new Circle;
+Shape* pr = new Rectangle;
+// 都是基类指针，指向不同的对象
+```
+**对象的动态类型指的是“目前所指对象的类型”**
+动态类型可以表现出一个对象将会有什么行为，以上的pc的动态类型就是Circle*，ps没有动态类型，不过当然可以通过运行时赋值来改变
+花样来了：你可能会在调用一个定义于派生类内的虚函数时，却使用基类所指定的缺省参数值
+```cpp
+pr->draw(); // 动态绑定继承了基类的缺省参数（如果不显式指定），并不是预想的Green！
+```
+重点在于：draw是个虚函数，而它有个缺省参数值在派生类中被重新定义了
+根本原因是：C++追求运行期效率，缺省参数值是静态绑定，便于编译期处理并且效率较高
+但是如果你同时提供缺省参数值给基类和派生类，就更糟糕了，代码重新并且有依赖性，改了一处就得改另一处
+
+
+
+
+
+
 
 
 
