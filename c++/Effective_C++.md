@@ -1319,6 +1319,29 @@ pr->draw(); // 动态绑定继承了基类的缺省参数（如果不显式指�
 重点在于：draw是个虚函数，而它有个缺省参数值在派生类中被重新定义了
 根本原因是：C++追求运行期效率，缺省参数值是静态绑定，便于编译期处理并且效率较高
 但是如果你同时提供缺省参数值给基类和派生类，就更糟糕了，代码重新并且有依赖性，改了一处就得改另一处
+解决方法是替代设计：NVI（非虚接口）：让基类的public非虚函数调用纯虚函数，在派生类中重新定义private虚函数。
+我们可以在非虚函数中指定缺省参数。
+```cpp
+class Shape{
+public:
+    enum ShapeColor{Red, Green, Blue};
+    void draw(ShapeColor color = Red) const
+    {
+        doDraw(color);
+    }
+    ...
+private:
+    virtual void doDraw(ShapeColor color) const = 0;    // 真正的实现在此
+};
+class Rectangle: public Shape{
+public:
+    ...
+private:
+    virtual void doDraw(ShapeColor color) const;    // 不需要指定缺省参数值
+}
+```
+由于非虚函数绝对不被派生类重写，这个设计就能清晰地使得draw函数的color缺省参数值总是为red
+
 
 
 
