@@ -1353,7 +1353,158 @@ private:
 例如，想要自己实现set，底层调用list<T>，如果直接继承，那就错了：毕竟list可重复，而set不可重复
 此处的关系就是典型的：Set对象可由一个list对象实现出来（即：set的接口封装了对list的操作）
 
+
 # 39 明智而审慎地使用private继承
+private继承：编译器不会隐式地将派生类转为基类，并且派生类中继承的所有成员都是private
+意味着：“根据某物实现出”（**意义等同于类的组合关系，但是：尽可能使用组合，必要时才用private继承**。必要的意思是：当protected成员以及virtual函数牵扯进来，或者是内存空间有极端的要求的时候）
+
+private继承在软件设计层面没有意义，只在软件实现层面有意义：private意味着只有实现部分被继承，接口部分被略去，Derived对象根据Base对象实现得来
+
+```cpp
+// 考虑以下场景：
+// 我们有一个Widget类，需要按照一定频率调用成员函数，有一个现成的Timer类，我们完全可以继承它，但是不能是public，因为显然不能让用户调用到Timer的接口，我们不能让用户轻易地错误使用接口
+// 考虑private继承
+class Timer{
+public:
+    explicit Timer(int tickFrequency);
+    virtual void onTick() const;
+};
+
+class Widget: private Timer{
+private:
+    virtual void onTick() const;
+};
+// 但是完全可以使用组合的方式来替代，实现同样的效果
+class Widget{
+private:
+    class WidgetTimer: public Timer{    // PS: 嵌套类 完全可以公有继承，因为是私有对象
+    public:
+        virtual void onTick() const;
+        ...
+    };
+    WidgetTimer timer;
+};
+```
+## 这样的设计好处何在？
+1. 原先的private继承无法阻止派生类（如果有）重新定义onTick函数。
+而Widget的派生类无法调用WidgetTimer，也就是不会被继承体系给继承。
+```cpp
+// 或者也有简单的办法 但是成书时想必没有这个关键字
+virtual void fun() final;
+```
+
+2. 有利于将Widget的编译依存性降至最低
+如果是私有继承，当Widget编译时必须要有Timer的定义，也就是include进来，如果WidgetTimer只作为成员指针，Widget就只需要简单的WidgetTimer的声明（而不需要#include任何与Timer有关的代码），从而实现解耦
+
+特殊情况使用private继承：class不带任何数据（non-static变量、没有虚函数（每个对象会有额外的虚表指针）、没有虚基类）
+但是C++规定任何对立对象大小都必须非0，因为C++会默默地安插一个char到空对象内，而且再加上内存对齐，会加上一些padding，导致大小甚至大于char
+但是这个约束不适用于派生类的基类成分，因为它们不独立（即派生类的基类成分不做这种内存对齐）
+```cpp
+class Empty{};
+
+class A: private Empty{
+private:
+    int x;
+}
+
+sizeof(A) == sizeof(int);   // 必然的
+```
+这就是所谓的空白基类最优化（EBO），而且只有单继承才行
+而实际工程中，“empty”class往往含有：typedef、enum、static、non-virtual函数，EBO的广泛实践减少了派生类的大小
+但是毕竟大多数类都不是empty class，所以EBO很少成为private继承的正当理由
+
+# 40 明智而审慎地使用多重继承
+多重继承显然会因为从多个基类继承相同的函数或者typedef名字,容易造成歧义
+编译器不对同名函数做可用性检查:C++解析重载函数调用的规则:
+C++首先确认这个函数对此调用是最佳匹配,找到最佳匹配才检验可用性,如果Derived继承了Base1和Base2的同名函数,一个是public,一个是private,那么这两个函数的匹配程度是相同的,没有所谓的最佳匹配,都轮不到可用性的检查.
+```cpp
+// 必须显式指定调用的是哪个基类的函数
+mp.BorrowableItem::checkout();
+```
+经典的钻石继承:
+File被InputFile、OutputFile继承,然后双双被IOFile继承
+思考:如果File基类中有个成员变量fileName,那么IOFile中内该有多少这个名称的数据呢?直觉上应该只有一份,这就需要InputFile和OutputFile都是virtual继承自File.
+那么看起来,public继承应该总是virtual的比较好,但是为了实现virtual继承,编译器得在幕后操作:导致占据内存比非virtual更大,并且访问成员变量的速度更慢.
+virtual继承成本:virtual基类初始化责任由继承体系中的最低层开始，凡是派生自virtual基类的类都必须知道如何初始化虚拟基类.
+当你向继承体系中添加一个新的派生类时，这个新类必须负责初始化其继承的虚拟基类，无论这些虚拟基类是直接还是间接继承的。
+
+结论就是:
+1. 非必要不使用virtual基类
+2. 如果使用virtual基类,尽可能避免在其中放置数据
+
+例子:
+```cpp
+class IPerson{ 
+    ...
+    virtual std::string name() const = 0;
+    ...
+ };
+
+// IPerson的客户使用工厂函数获得指向一个Person对象的指针
+// 工厂函数:
+std::shared_ptr<IPerson> makePerson(DatabaseID personIdentifier);
+
+// 调用:
+std::shared_Ptr<IPerson> pp(makePerson(id));
+// 显然工厂函数中,创建了派生自抽象基类的具象class(称之为CPerson)
+// 假设PersonInfo类提供了CPerson所需要的实质东西
+class PersonInfo{
+public:
+    ...
+    virtual const char* theName() const;
+    virtual const char* theBirthDate() const;
+    ...
+private:
+    virtual const char* valueDelimOpen() const; // 虚函数,用于重写各种头限定符版本的函数
+};
+// theName()需要调用valueDelimOpen()、然后产生name值、valueDelimClose()
+// theName()的结果不仅取决于PersonInfo、还取决于PersonInfo的派生类、
+```
+CPerson和PersonInfo的关系是:PersonInfo提供若干函数帮助CPerson实现,即:根据某物实现出的关系
+此处因为要重新定义virtual函数,所以private继承是必要的,单纯的组合关系是无法应付的.
+CPerson必须继承IPerson接口以重写,因此就有了多重继承
+```cpp
+class IPerson{
+public:
+    virtual ~IPerson();
+    virtual std::string name() const = 0;
+    ...
+};
+
+class DatabaseID{...};
+
+class PersonInfo{
+public:
+    explicit PersonInfo(DatabaseID pid);
+    virtual const char* theBirthDate() const;
+    virtual const char* valueDelimOpen() const;
+    ...
+};
+
+class CPerson: public IPerson, private PersonInfo{
+public:
+    explicit CPerson(DatabaseID pid): PersonInfo(pid);
+    virtual std::string name() const
+    {return PersonInfo::theName();}
+private:
+    const char* valueDelimOpen() const {return "";}
+};
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
