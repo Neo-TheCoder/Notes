@@ -1485,10 +1485,19 @@ class CPerson: public IPerson, private PersonInfo{
 public:
     explicit CPerson(DatabaseID pid): PersonInfo(pid);
     virtual std::string name() const
-    {return PersonInfo::theName();}
+    {
+        return PersonInfo::theName();
+    }
 private:
     const char* valueDelimOpen() const {return "";}
 };
+/*
+CPerson继承IPerson是因为：
+public继承IPerson这一接口类
+
+CPerson继承PersonInfo是因为：
+要重写继承而来的虚函数（PersonInfo属于是协助实现的class）
+*/
 ```
 
 
