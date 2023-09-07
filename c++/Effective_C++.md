@@ -1496,9 +1496,89 @@ CPerson继承IPerson是因为：
 public继承IPerson这一接口类
 
 CPerson继承PersonInfo是因为：
-要重写继承而来的虚函数（PersonInfo属于是协助实现的class）
+要重写继承而来的虚函数（PersonInfo属于是协助实现的class，重写的接口都是私有的）
 */
 ```
+
+# 41 了解隐式接口和编译期多态
+PS：c++ template产生的动机：建立**类型安全**的容器（vector、list、map），除了容器，template还可以实现泛型编程（例如STL算法：for_each、find、merge）
+而由于template图灵完备，还可以实现模板元编程（即：在编译期在编译器执行，在编译完成时停止执行）
+
+显式接口和运行时多态是很常见的：
+```cpp
+class Widget{
+public:
+    Widget();
+    virtual ~Widget();  // 意味着运行时多态
+    virtual void normalize();
+    ...
+};
+
+void doProcessing(Widget& w){   // 入参类型明确指定为Widget&类型，那么w就必然支持Widget的接口，是显式接口，因为它的实现在源码中明确可见
+    ...
+    Widget temp(w);
+}
+
+// 泛型编程和面向对象有所不同
+template<typename T>
+void doProcessing(T& w){
+    ...
+    T temp(w);
+}
+// 现在w不是明确的类型了，现在w必须支持的接口缩小了，只要最终能够支持doProcessing内部的操作就行了（这些接口被称之为隐式接口）
+```
+注意，凡是涉及到w的任何函数调用吗，operator->等，都有可能造成template实例化，这种实例化发生在编译期
+**编译期多态**：用不同的template参数实例化函数模板，导致调用不同的函数
+显式接口由函数的签名式（函数名称、参数类型、返回类型）构成，一个类的public接口可以包括：构造、析构、基本函数的参数类型 / 返回类型、常量性，编译器产生的copy构造、typdefs
+**隐式接口**：由**有效表达式**组成
+```cpp
+template<typename T>
+void doProcessing(T& w){
+    if(w.size() > 10 && w != sth){  // T的隐式接口看似有这些约束：提供size()函数并返回一个整数值，支持operator!=函数
+        ...
+    }
+    ...
+}
+```
+但是由于**操作符重载**的存在，实际上隐式接口不必满足以上两约束：
+T必须支持size()成员函数，但是这个函数可能是由基类继承而来，T类型本身未必要有该函数，并且该函数不必返回一个整数类型，只要能返回一个类型为X的对象，能够支持operator>即可，而且，实际上，operator>只要能接收Y类型，只要能够隐式类型转换X为Y
+**隐式接口仅仅是由一组有效表达式构成，表达式再怎么复杂，但他们要求的约束条件很直接**
+```cpp
+if(w.size() > 10 && w != sth)
+    ...
+// 实际上if内部的表达式无论涉及什么实际类型，最终都必须与bool兼容，这是doProcessing模板函数对T的隐式接口的要求之一
+```
+
+# 42 了解typename的双重意义
+在声明template类型参数时，class和typename的意义完全相同
+而typename可以暗示参数并非必须是class类型，内建类型也行
+而二者也有不等价的时候，有时必须得用typename：
+```cpp
+template<typename C>
+void print2nd(const C& container){
+    if(container.size() >= 2){
+        C::const_iterator iter(container.begin());
+        ++iter; // 该局部变量的类型是C::const_iterator，实际的类型是取决于模板参数的，专业术语叫做嵌套从属类型名称
+        int value = *iter;  // 明确的int类型，所谓的非从属名称
+        std::cout << value;
+    }
+}
+```
+嵌套从属类型名称可能导致解析困难
+```cpp
+template<typename C>
+void print2nd(const C& container){
+    C::const_iterator* x;   // 此处x的类型可能有歧义：C如果有个static成员变量叫做const_iterator，或者x是全局变量，那就变成相乘操作了
+    // 在确定C的类型前，C::const_iterator都是意味不明的
+    ...
+}
+```
+
+
+
+
+
+
 
 
 
