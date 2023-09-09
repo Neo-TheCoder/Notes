@@ -1564,6 +1564,8 @@ void print2nd(const C& container){
     }
 }
 ```
+**嵌套：即又是一个类**
+**从属：template中出现的名称依赖于某个template参数**
 嵌套从属类型名称可能导致解析困难
 ```cpp
 template<typename C>
@@ -1573,88 +1575,134 @@ void print2nd(const C& container){
     ...
 }
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+C++有个规则可以解析这个歧义状态：如果解析器在template中遇到一个嵌套从属名称，会**假设这名称不是个类型，除非明确地告诉它是**
+即：缺省情况下嵌套从属名称不是类型
+```cpp
+template<typename C>
+void print2nd(const C& container){
+    ...
+    C::const_iterator iter(container.begin());  // 直接认为C::const_iterator不是类型，那么也就无法通过编译
+    ...
+}
+
+// 想要通过编译需要明确地指定它是一个类型
+    typename C::const_iterator iter(container.begin());
+
+typename<typename C>
+void f(const C& container, typename C::iterator iter);
+// 第一个入参前面是不能加typename的，因为C并非依附任何template参数
+// 第二个入参必须要加typename，它就是所谓的嵌套从属类型名称
+```
+typename不能出现在基类的list中，也不能在成员初值列表中修饰基类
+```cpp
+template<typename T>
+class Derived: public Base<T>::Nested{  // 基类list，不允许加typename
+public:
+    explicit Derived(int x): Base<T>::Nested(x){    // 初始化列表
+        typename Base<T>::Nested temp;
+        ... // 可以加上typename修饰
+    }
+    ...
+}
+```
+
+```cpp
+template<typename IterT>
+void workWithIterator(IterT iter){
+    typename std::iterator_traits<IterT>::value_type temp(*iter);   // 创建了一个局部变量
+    // 如果IterT是vector<int>::iterator，temp就是int类型
+    // std::iterator_traits<IterT>::value_type是个嵌套从属类型名称，因为value_type嵌套于std::iterator_traits<IterT>之内，并且依赖于IterT这个模板参数
+    ...
+    // 这样的写法太长，经常用typedef：
+    typedef typename std::iterator_traits<IterT>::value_type value_type;
+    value_type temp(*iter);
+    ...
+}
+```
+
+# 43 学习处理模板化基类内的名称
+***面对涉及到基类成员的无效代码，编译器的诊断时间可能在解析派生类模板的定义时，也可能在类模板实例化后，但是C++的策略是尽早诊断***
+程序：在编译期判断将信息传递到哪一家公司
+```cpp
+class MsgInfo{...};
+class CompanyA{
+public:
+    ...
+    void sendCleartext(const std::string& msg);
+    void sendEncrypted(const std::string& msg);
+    ...
+};
+
+template<typename Company>
+class MsgSender{
+public:
+    ...
+    void sendClear(const MsgInfo& info){
+        ...
+        Comapny c;
+        c.sendCleartext(msg);
+    }
+    sendEncrypted也类似;
+};
+
+// 如果想要在每次送出信息时记录某些log
+template<typename Company>
+class LoggingMsgSender: public MsgSender<Company>{
+public:
+    ...
+    void sendClearMsg(const MsgInfo& info){
+        传送前的信息写入log;
+        sendClear(info);    // 注意，这行代码会导致无法通过编译：编译器认为该函数不存在
+        传送后的信息写入log;
+    }
+    ...
+};
+```
+重点来了：LoggingMsgSender是模板类，它根本不知道继承的是什么类（实际上是未经实例化的MsgSender<Company>）
+```cpp
+// 假设CompanyZ只有sendEncrypted，因而不能作为MsgSender的类型参数传入
+class CompanyZ{
+public:
+    ...
+    void sendEncrypted(const std::string& msg);
+    ...
+};
+
+// 可以特化出一个MsgSender
+template<>  // 模板全特化
+class MsgSender<CompanyZ>{
+public:
+    ...
+    void sendSecret(const MsgInfo& info){
+        ...
+    }
+};
+
+// 此时，考虑LoggingMsgSender，类型参数不能是CompanyZ，因为没有提供sendClear函数
+```
+**C++规定：在template C++编程时，会拒绝模板化基类中寻找继承而来的名称（函数）**，因为：基类模板可能特化，特化出的版本很可能不提供和一般性模板相同的接口
+为了实现目的，我们必须让c++进入模板基类观察接口
+1. 在调用基类函数之前加上this->
+```cpp
+    this->sendClear(info);  // 可以通过编译
+```
+
+2. using声明式
+```cpp
+using MsgSender<Company>::sendClear;    // 向编译器强调：sendClear是位于基类内部的，编译器本来是不会进入模板基类查找东西的，但是强调一下就会去找了
+```
+
+3. 明确指出被调用的函数位于基类
+```cpp
+MsgSender<Company>::sendClear(info);
+// 该方法有缺陷：如果调用的是虚函数，这样的explicit qualification会关闭virtual绑定行为
+``` 
+**三种方法本质上都是对编译器承诺：模板基类的任何特化版本都支持其一般版本所提供的接口**
+```cpp
+// 
+LoggingMsgSender<CompanyZ> zMsgSender;  // 注意类型参数是CompanyZ
+MsgInfo msgData;
+...
+zMsgSender.sendClearMsg(msgData);   // 无法通过编译，因为编译器知道基类是特化版本CompanyZ，并且不提供sendClear函数
+```
 
