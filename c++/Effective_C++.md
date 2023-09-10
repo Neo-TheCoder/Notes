@@ -1706,3 +1706,107 @@ MsgInfo msgData;
 zMsgSender.sendClearMsg(msgData);   // 无法通过编译，因为编译器知道基类是特化版本CompanyZ，并且不提供sendClear函数
 ```
 
+# 44 将与参数无关的代码抽离templates
+templates显然节省了代码量
+类模板的成员函数只有被使用时才会实例化
+但有时使用模板可能导致代码膨胀，即便源码看似整齐，目标码可能还是臃肿的
+我们需要做的是：**共性与变性分析**
+在编写若干函数时，我们会自然而然地把函数之间共同的部分放在单独的函数里面，类也是类似的道理
+模板也是类似的，需要注意的是：模板的代码之间，重复是隐晦的
+```cpp
+template<typename T, std::size_t n>
+class SquareMatrix{ // 元素类型为T的n*n矩阵
+public:
+    ...
+    void invert();  // 求逆
+};  // PS：n其实是非类型参数
+
+// 如果是这样调用：
+SquareMatrix<double, 5>sm1;
+sm1.invert();
+
+SquareMatrix<double, 10>sm1;
+sm2.invert();
+// 除了常量5和10，两个函数的其他部分完全相同
+
+// 如果这样修改：
+template<typename T>
+class SquareMatrixBase{
+protected:
+    ...
+    void invert(std::size_t matrixSize);
+};
+
+template<typename T, std::size_t n>
+class SquareMatrix: private SquareMatrixBase<T>{
+private:
+    using SquareMatrixBase<T>::invert;
+public:
+    ...
+    void invert(){
+        this->invert(n); // 调用基类版本的invert
+    }
+};
+// 这样调用造成的额外成本是0，因为是inline函数
+// 使用this->是因为C++的设定：模板化基类内的函数名称会被派生类直接忽视
+// private继承是因为这里的基类只是为了帮助派生类的实现，并非is-a的关系
+```
+但是当前设计存在问题：基类的invert函数不知道操作的数据在哪里（即未能拿到矩阵的内存地址而是只知道一个矩阵大小）
+因而可能要传入一个指针给invert函数，也就是增加一个入参，但是这不好，会出现多次告诉基类相同的信息的情况，那如果让基类自己持有那么一个指向矩阵的指针呢？？
+```cpp
+template<typename T>
+class SquareMatrixBase{
+protected:
+    SquareMatrixBase(std::size_t n, T* pMem): size(n), pData(pMem){}
+    void setDataPtr(T* ptr){pData = ptr;}
+
+private:
+    std::size_t size;
+    T* pData;
+};
+
+// 派生类
+template<typename T, std::size_t n>
+class SquareMatrix: private SquareMatrixBase<T>{
+public:
+    SquareMatrix():SquareMatrixBase<T>(n, data){}   // 初始化列表以传值
+
+private:
+    T data(n*n);    // 内存会分配在栈上，但是可能很大，放在堆上会更好
+};
+
+// 动态分配版本，如下：
+template<typename T, std::size_t n>
+class SquareMatrix: private SquareMatrixBase<T>{
+public:
+    SquareMatrix():SquareMatrixBase<T>(n, 0), pData(new T[n*n])
+    {this->setDataPtr(pData.get())};    // 返回一个裸指针
+
+private:
+    boost::scope_array<T> pData;    // 等价于指向数组的智能指针
+};
+```
+但是代价是什么呢？
+对于入参为空的invert函数（尺寸在模板实例化时传入），**编译器可能会生成比把尺寸作为参数传入的invert更好的代码**，因为尺寸是个编译期常量（入参的方式则是运行时才传入），借助常量的广传达到最优化，最终可以折成指令成为直接操作数
+另外，不同大小的矩阵只有一个版本的invert，可以减少可执行文件大小，降低**工作集**（即一个进程所使用的一组内存页）大小，强化指令cache内的引用集中化。
+到底哪种更好，都尝试下并观察平台的行为以及面对代表性数据时的行为。
+另一个效率关心的是对象大小，前面的例子里：每一个SquareMatrix对象都有一个指针指向基类内的数据，导致每个派生类多了一个指针的体积。如果让基类持有一个指针指向矩阵，则会失去封装性，并且导致资源管理的混乱。
+此处重点辩论的是：非类型模板参数带来的膨胀，类型参数页会带来膨胀。
+例如很多平台上，int和long底层是一样的，那么vector<int>和vector<long>就是重复的，有的链接器会合并完全相同的函数实现代码。大多平台上，指针都具有相同的底层实现。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
