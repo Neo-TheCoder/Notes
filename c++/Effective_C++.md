@@ -1796,6 +1796,84 @@ private:
 
 
 
+# 45 运用成员函数模板接受所有兼容类型
+比如智能指针，就是“行为像指针”的对象，相比内置指针，提供++运算符，就很方便。
+内置指针支持隐式转换，这是极好的，派生类指针可以隐式地转换为基类指针、指向非const对象的指针可以转为指向const对象的指针
+```cpp
+class Top{...};
+class Middle: public Top{...};
+class Bottom: public Middle{...};
+Top* pt1 = new Middle;  // Middle*类型的指针转为Top*
+Top* pt2 = new Bottom;  // Bottom*转为Top*  转向基类指针肯定没问题
+const Top* pct2 = pt1;  // Top*转换为const Top*
+
+// 如果是智能指针
+SmartPtr<Top> pt1 = SmartPtr<Middle>(new Middle);   // 智能指针也是要以内置指针来初始化的
+SmartPtr<Top> pt2 = SmartPtr<Bottom>(new Bottom);
+SmartPtr<const Top> pt2 = pt1;
+
+// 此处SmartPtr<Top>和Smart<Middle>并没有继承关系，是两个完全不同的类
+```
+
+## Templates和泛型编程
+***如果想让以上两个SmartPtr之间能够像内置指针那样转型，就得在模板加逻辑***
+准确来说，需要添加成员函数模板
+```cpp
+template<typename T>
+class SmartPtr{
+public:
+    template<typename U>
+    SmartPtr(const SmartPtr<U>& other);
+// 对于任何的类型T和U，可以根据SmartPtr<U>生成SmartPtr<T>
+// 这样的构造函数可以称为：泛化copy构造函数
+// 它不需要声明为explicit，因为原始指针类型之间的转换是隐式的，无需写清楚转型动作
+};
+```
+由于基类指针转派生类指针是不对的，也没有类似于int*转为double*的隐式转换行为，因此要对这一成员函数进行拣选。
+```cpp
+// 如何约束这种转换行为
+template<typename T>
+class SmartPtr{
+public:
+    template<typename U>
+    SmartPtr(const SmartPtr<U>& other): heldPtr(other.get()) {...}
+    T* get() const {return heldPtr;}
+// 使用初始化列表。其中做了隐式转型，这就是我们想要的，可以隐式转型才能通过编译
+// 即：这个构造函数现在只有实参能够兼容才能通过编译
+
+    private:
+        T* heldPtr;
+};
+
+// share_ptr支持多种智能指针的构造
+template<class T>
+class share_ptr{
+public:
+    template<class Y>
+        explicit shared_ptr(Y* p);
+    template<class Y>
+        explicit shared_ptr(shared_ptr<Y> const& r);
+    template<class Y>
+        explicit shared_ptr(weak_ptr<Y> const& r);
+    template<class Y>
+        shared_ptr& operator=(shared_ptr<Y> const& r);
+// 只有这个不是explicit
+
+
+};
+
+
+
+```
+
+
+
+
+
+
+
+
+
 
 
 
