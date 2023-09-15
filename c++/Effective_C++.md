@@ -1857,14 +1857,115 @@ public:
         explicit shared_ptr(weak_ptr<Y> const& r);
     template<class Y>
         shared_ptr& operator=(shared_ptr<Y> const& r);
-// 只有这个不是explicit
-
-
+// 只有这个不是explicit，允许将某个shared_ptr类型隐式转换成另一个shared_ptr
+// 但不允许将内置指针或者其他类型的智能指针隐式转为shared_ptr，必须显式
 };
 
-
-
+成员函数模板不改变以前的设定：编译器生成四个成员函数（包括copy构造、copy赋值）（如果没有声明的话），而且如果T和Y类型相同，就等价于正常的copy构造函数了
 ```
+
+
+# 46 需要类型转换时请为模板定义非成员函数
+如24条所说，比如有理数相乘的函数就得定义为非成员，否则像2*ration1这种就无法实现
+```cpp
+template<typename T>
+class Rational{
+public:
+    Rational(const T& numerator = 0, const T& denominator = 1); // 传引用，因为传引用足以解决问题
+    const T numerator() const;  // 传值，是因为创建一个新的对象是必要的
+    const T denominator() const;    // 尽量声明const，可以减少错误
+    ...
+};
+
+// 非成员函数
+template<typename T>
+const Rational<T> operator*(const Rational<T>& lhs, const Rational<T>& rhs)
+{...}
+
+// 这部分代码为什么不能通过编译？
+Rational<int> oneHalf(1, 2);
+Rational<int> result = oneHalf * 2; // 右半部分是错误的
+// 实际上调用的是：
+Rational<int> result = operator*(oneHalf, 2);   // 编译到此处时，编译器会去找某个“名为operator*并接受两个Rational<T>参数”的函数
+/*  而为了推导T，编译器会去查看传入的实参类型：Rational<int>, int
+    根据第一实参，可以推导出T是int
+    但是根据第二实参，就难了，编译器不会使用Rational<int>的隐式构造函数把2转换为Rational<int>，隐式类型转换函数不是模板实参推导过程中该做的
+*/
+```
+现在问题的关键就是template实参推导
+有种办法：**template class内的friend声明式可以指涉某个特定函数**
+比如：class Rational<T>可以声明operator*是它的一个friend函数
+只有函数模板依赖模板实参推导，编译器总是能在class Rational<T>实例化时得知T
+```cpp
+template<typename T>
+class Rational{
+public:
+    friend const Rational<T> operator*(const Rational<T>& lhs, const Rational<T>& rhs);
+};
+// 实现:
+template<typename T>
+const Rational<T> operator*(const Rational<T>& lhs, const Rational<T>& rhs)
+{...}
+
+// 为什么声明为友元就能通过编译了呢?
+```
+**因为友元声明在类里面,当模板类得到参数实例化时,友元函数也一并实例化了,它就不是模板函数,而是一个函数了**
+但是这段代码虽然可以通过编译,但是无法通过链接
+
+类模板中,可以写Rational<T>,而不是Rational(二者都可以)
+之所以这样能通过编译,是因为编译器找到了函数声明,但是这个函数只声明在Rational内部,没定义出来,而我们想让类外部的template operator提供定义是做不到的
+上面的代码看似类外部也定义了模板函数,但是没能够在类得到类型参数的同时实例化
+那么声明的同时完成定义,可以解决问题
+此处对friend的使用并不是为了访问类的非public部分
+
+由于定义在类内部的函数都偷偷成为inline函数,包括上面的operator*
+如果想要把inline声明带来的冲击最小化,可以让operator*只调用类外部的辅助模板函数(照样可以把类型参数传进去)
+
+
+
+# 47 请使用traits classes表现类型信息
+STL主要由表现容器,迭代器和算法的template构成
+```cpp
+// 有这么一个工具函数
+template<typename IterT, typename DistT>
+void advance(IterT& iter, DistT d);     // 将迭代器向前移动d单位
+// 也就是做 iter += d; 的操作
+```
+
+**STL迭代器分类:**
+1. input迭代器 
+只能向前移动    只可以读取指向的对象,只能读一次
+类似于指向输入文件的阅读指针
+举例:istream_iterator
+
+2. output迭代器
+
+以上两种都只适合一次性操作算法
+
+3. forward迭代器
+可以做到以上两种迭代器能做的每一件事,并且不是一次性的
+是**单向的**
+
+4. Bidirectional迭代器
+**双向的**
+list,set,multiset,map的迭代器
+
+5. 最牛的是random access迭代器
+底层实现采用了内置指针
+可以执行迭代器算术
+vector, deque, string
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
