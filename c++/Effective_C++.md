@@ -1950,12 +1950,111 @@ void advance(IterT& iter, DistT d);     // 将迭代器向前移动d单位
 **双向的**
 list,set,multiset,map的迭代器
 
-5. 最牛的是random access迭代器
+5. 功能最多的是random access迭代器
 底层实现采用了内置指针
 可以执行迭代器算术
 vector, deque, string
 
+对于以上分类,C++提供专属的tag来确认:
+例如:
+```cpp
+    struct random_access_iterator_tag: public bidirectional_iterator_tag{};
+    // is-a的继承关系
 
+// advance函数实现如果采用random access就只耗费常量时间
+template<typename IterT, typename DistT>
+void advance(IterT& iter, DistT d){
+    if(iter is a random access iterator){   //! 需要判断类型,需要在编译期取得类型信息
+        iter += d;
+    }
+    else{
+        if(d >= 0){
+            while(d--)
+                ++iter;
+        }
+        else{
+            if(d >= 0){
+                while(d--)
+                    ++iter; // 非random access iterator只能反复调用++
+            }
+            else{
+                while(d++)
+                    --iter;
+            }
+        }
+    }
+}
+```
+Traits是一种技术,是一种C++程序员遵守的协议
+其要求是:**内置类型和用户自定义类型必须表现的一样好**
+比如:上述advance如果接收一个指针,如const char*,也可以运行
+那么类型信息就没法嵌套在类型内部了
+解决办法是:
+把traits放在一个template以及其特化版本中,标准库就有若干个这样的templates
+针对迭代器的被命名为iterator_traits,虽然定义成struct,但是往往被称为traits class
+在struct iterator_traits<IterT>一定声明着某个typedef名为iterator_category,用于确认IterT的迭代器分类
+
+每一个用户自定义的迭代器类型必须嵌套一个typedef,名为iterator_category,用于确认tag struct
+```cpp
+template<...>
+class deque{
+public:
+    class iterator{
+        public:
+            typedef random_access_iterator_tag iterator_category;
+            ...
+    };
+};
+
+// 响应定义在iterator内部的typedef
+template<typename IterT>
+struct iterator_traits{
+    typedef typename IterT::iterator_category iterator_category;
+    ...
+}
+
+// 为了支持内置指针,专门偏特化
+template<typename IterT>
+struct iterator_traits<IterT*>  // 针对内置指针
+{
+    typedef random_access_iterator_tag iterator_category;
+}
+```
+实现一个traits class的流程:
+1. 确认可取得的类型信息的集合
+2. 确定该类型信息的名字
+3. 提供一个template和一组特化,内含类型信息
+
+然后如何在编译期做类型判断呢?
+C++提供了重载的办法,因为重载时,编译器是根据实参类型,选择最合适的重载函数
+
+```cpp
+template<typename IterT, typename DistT>
+void doAdvance(IterT& iter, DistT d, std::random_access_iterator_tag){
+    ...
+}
+
+template<typename IterT, typename DistT>
+void doAdvance(IterT& iter, DistT d, std::bidirectional_iterator_tag){
+    ...
+}
+
+template<typename IterT, typename DistT>
+void doAdvance(IterT& iter, DistT d, std::input_iterator_tag){
+    ...
+    // d若小于0,则直接抛出异常
+}
+
+// 由于forward_iterator_tag继承自input_iterator_tag,因此第三个重载也能处理forward迭代器
+// 这是iterator_tag struct继承关系带来的好处
+
+// 在advance函数中调用上述的doAdvance函数
+template<typename IterT, typename DistT>
+void advance(IterT& iter, DistT d){
+    doAdvance(iter, d, typename std::iterator_traits<IterT>::iterator_category());
+}
+```
+其他迭代器相关信息也需要提供,比如value_type, char_traits(保存字符类型的相关信息), numeric_limits(保存数值类型的相关信息)
 
 
 
