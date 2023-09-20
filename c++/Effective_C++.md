@@ -2115,7 +2115,34 @@ TMP编程由于是新兴的，不易调试。
 C++允许手工管理内存，程序员以此可以获得系统最佳时空间效率。
 了解**内存的分配和归还**显然是很重要的。
 当operator new无法满足客户的内存需求时，调用new-handler
-在多线程环境下，进行内存管理是困难的。
+在多线程环境下，进行内存管理是困难的。堆区资源需要适当的同步控制
+operator new和operator delete只适合分配单一对象，对于数组采用operator new[]
+STL容器使用的heap内存是由容器所拥有的allocator对象管理，而不是被new和delete直接管理
+
+当operator new无法满足某一内存分配需求时，就会抛出异常，但在真正抛出异常之前，它会**先调用一个客户指定的错误处理函数**，即所谓的new-handler。用户如何指定new-handler呢？
+```cpp
+namespace std{
+    typedef void (*new_handler)();  // 声明函数指针
+    new_handler set_new_handler(new_handler p) throw(); // 表示不抛出异常
+}
+
+// 这样调用：
+std::set_new_handler(outOfMem);
+int* p = new int[1000000];
+```
+当operator new无法满足内存申请时，会不断调用new handler直至找到足够内存
+一个设计良好的new-handler必须做到：
+1. 让更多内存可被使用
+
+2. 安装另一个new-handler
+
+3. 置空new-handler
+
+
+
+
+
+
 
 
 
