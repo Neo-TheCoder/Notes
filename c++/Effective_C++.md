@@ -2133,10 +2133,102 @@ int* p = new int[1000000];
 当operator new无法满足内存申请时，会不断调用new handler直至找到足够内存
 一个设计良好的new-handler必须做到：
 1. 让更多内存可被使用
+一开始就分配一块大内存，执行new handler时归还
 
 2. 安装另一个new-handler
+调用set_new_handler换个别的handler
 
 3. 置空new-handler
+使得operator new在内存分配不成功时抛出异常
+
+4. 抛出bad_alloc及其派生的异常
+operator new函数不会捕捉到该异常
+
+5. 不返回
+abort或exit退出
+
+如何实现针对不同的类，new失败时调用不同的new-handler？
+```cpp
+class Widget{
+public:
+    static std::new_handler set_new_handler(std::new_handler p) throw();    // set新的，返回旧的
+    static void* operator new(std::size_t size) throw(std::bad_alloc);
+private:
+    static std::new_handler currentHandler;
+};
+// static成员必须在class外部定义，毕竟静态成员不属于对象，在给对象分配内存时，不必给静态成员分配内存
+std::new_handler Widget::currentHandler = 0;
+
+// operator new的实现：
+// 需要借助一个资源管理类
+NewHandlerHolder，构造时把std::new_handler传入，赋给private成员
+析构时，调用std::set_new_handler，把private成员当前的new_handler
+把拷贝构造声明为private变量
+
+void* Widget::operator new(std::size_t size) throw(std::bad_alloc){
+    NewHandlerHolder h(std::set_new_handler(currentHandler))；
+    return ::operator new(size);
+}
+
+// 这样调用：
+void outOfMem();
+Widget::set_new_handler(outOfMem);
+
+// 实际上可以把以上操作都放在模板类里面
+class Widget: public NewHandlerSupport<Widget>{
+...}
+
+// 这种模板类被称为CRTP：怪异的循环模板模式
+```
+使用noexecept的new来创建Widget，虽然new本身不会抛出异常，但是构造函数内部还有可能调用抛出异常的new。
+
+
+# 50 了解new和delete的合理替换时机
+什么情况才要替换？
+1. 用来检测运用上的错误
+常见错误：delete操作时失败导致内存泄漏、delete第二次会导致未定义行为
+如果让new中持有地址，delete将其地址置空，就能检测以上行为
+
+有时编程错误会导致数据分配在内存之外的区域、或者之前的区域
+如果自定义的new分配内存时就分配超额的内存，额外空间用于存放特定的信息，delete时检查它，若有改变则说明发生了内存越界。
+
+2. 为了强化性能
+new和delete是复杂的，毕竟有内存碎片，要考虑持续的分配和归还。因而默认版本的实现是比较通用的，对特定情况表现未必好。
+
+3. 为了收集使用上的统计数据
+new在分配动态内存时，分配的机制可能需要记录（分配区块的顺序、大小等）。
+
+```cpp
+// 自定义new示例
+static const int signature = 0xDEADBEEF;
+typedef unsigned char Byte;
+void* operator new(std::size_t size) throw(std::bad_alloc){
+    using namespace std;
+    size_t realSize = size + 2 * sizeof(int);
+    void* pMem = malloc(realSize);
+    if(!pMem)   throw bad_alloc();
+
+    // 将signature写入内存的最前和最后
+    
+
+
+}
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
 
 
 
