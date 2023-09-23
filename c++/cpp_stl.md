@@ -1,4 +1,9 @@
 
+
+
+
+
+
 # 第二章 空间配置器(allocator)
 ### 2.2.3 构造和析构基本工具
 construct()和destroy()

@@ -2192,7 +2192,7 @@ class Widget: public NewHandlerSupport<Widget>{
 有时编程错误会导致数据分配在内存之外的区域、或者之前的区域
 如果自定义的new分配内存时就分配超额的内存，额外空间用于存放特定的信息，delete时检查它，若有改变则说明发生了内存越界。
 
-2. 为了强化性能
+2. 为了强化性能（增加分配和归还的速度）
 new和delete是复杂的，毕竟有内存碎片，要考虑持续的分配和归还。因而默认版本的实现是比较通用的，对特定情况表现未必好。
 
 3. 为了收集使用上的统计数据
@@ -2204,65 +2204,38 @@ static const int signature = 0xDEADBEEF;
 typedef unsigned char Byte;
 void* operator new(std::size_t size) throw(std::bad_alloc){
     using namespace std;
-    size_t realSize = size + 2 * sizeof(int);
+    size_t realSize = size + 2 * sizeof(int);   // 额外放两个int
     void* pMem = malloc(realSize);
     if(!pMem)   throw bad_alloc();
 
     // 将signature写入内存的最前和最后
-    
+    (*static_cast<int*>(pMem)) = signature;
+    *(reinterpret_cast<int*>(static_cast<Byte*>(pMem) + realSize - sizeof(int)) ) = signature;  // 按照字节数取到位置
 
-
+    return static_cast<Byte*>(pMem) + sizeof(int);  // 返回第一个signature之后的位置
 }
 
-
-
-
-
 ```
+以上代码有缺陷：** “对齐” **
+许多计算机体系结构要求特定的类型必须放在特定的内存地址，比如：指针的地址必须是4的倍数（4-byte aligned）
+double的地址必须是8倍数，如果不满足的话，可能会导致运行时异常，或者是效率比较低
+**C++要求所有的operator new返回的指针都有适当的对齐（取决于数据类型）**
+而malloc就是这样工作的，所以让operator new返回一个来自malloc的指针是安全的
+“内存对齐”这种技术细节（可移植性、线程安全性...），正可以区分出优秀的内存管理器，不是能跑就完事了
 
+而实际情况下，很多编译器在内存管理函数中可以切换debug和log状态，因而一般不用手写内存管理
+boost中的内存管理对“分配大量小内存对象”实现得比较好
 
+4. 还可以降低缺省内存管理器带来的空间额外开销
+通用的内存管理器常常比定制的使用更多的内存
 
+5. 为了弥补缺省分配器中的非最佳齐位
 
+6. 为了将相关对象成簇集中
+尽可能地把数据都放在一个内存页，减少缺页错误的频率
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+7. 实现非传统的功能
+比如针对SHM实现一版
 
 
 
