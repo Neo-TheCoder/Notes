@@ -2238,6 +2238,80 @@ boost中的内存管理对“分配大量小内存对象”实现得比较好
 比如针对SHM实现一版
 
 
+# 51 编写new和delete时需固守常规
+## operator new
+实现一致性operator new必须返回正确的值
+内存不足时必须调用new handling函数
+还要考虑零内存需求
+避免掩盖正常的new（准确来说这条是接口要求）
+
+返回值无法是：
+可以申请内存，则返回指向那块内存的指针
+不行的话，则抛出一个bad_alloc异常
+
+但是实际上 operator new并不只是分配一次内存，每次分配失败后会调用new-handling函数（假设它能执行某些操作使得内存释放），只有当指向new-handling函数的指针是null，operator new才会抛出异常
+
+奇怪的是：**C++规定：即使客户要求0bytes，operator new必须返回一个合法指针**
+```cpp
+void* operator new(std::size_t size) throw(std::bad_alloc)
+{
+    using namespace std;
+    if(size == 0){
+        size = 1;   // 视作申请1byte
+    }
+    while(true){    // 要不分配成功、要不new-handling完成了自己的义务：让更多内存可用、安装另一个new-handler、卸载new-handler、抛出bad_alloc异常，或者直接承认失败return
+        尝试分配size bytes;
+        if(分配成功)
+            return 一个指向某块内存的指针;
+        // 分配失败 找出目前的new-handling函数
+        new_handler globalHandler = set_new_handler(0); // 返回旧的，只能set(0)这样取得旧的
+        set_new_handler(globalHandler);
+
+        if(globalHandler)
+            (*globalHandler)();
+        else
+            throw std::std::bad_alloc();
+
+    }
+}
+
+```
+还需要考虑：operator new成员函数可能被派生类继承，然而实际上定制内存管理器的目的是为某特定class的对象分配内存提供最优化，而不是其派生类。
+即：针对类X设计的operator new，其行为很典型地只为大小为sizeof(X)的对象设计
+如果operator new被继承到派生类中，它可能会被用于分配派生类对象
+```cpp
+Derived* p = new Derived;   // 调用Base::operator new（假设派生类没声明operator new）
+
+// 对于这种情况，可以在基类new函数里增加判断
+if(size != sizeof(Base))
+    return ::operator new(size);
+// 而size == 0的情况被转移到底层的operator new中判断了
+// C++设定，任何独立对象都必须有非零大小
+```
+
+### 对于array
+#### operator new[]的要点：
+要注意基类的operator new[]可能被继承，因此每个对象占据的空间是不确定的
+
+#### operator delete：
+保证：删除null指针永远安全
+检查是否是空指针，如果是，直接返回
+在基类版本的delete函数中，判断如果入参size和sizeof(Base)不等，则令标准delete处理操作
+如果派生类对象将被删除，而基类中未定义virtual析构函数（那么就不会调用正确的析构函数），那么传入operator delete的size_t则不正确。
+
+# 52 实现new也要实现delete
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
