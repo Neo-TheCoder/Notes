@@ -1,6 +1,89 @@
+# 前言
+STL（Standard Template Library）实现百花齐放，本书采用的是SGI（Silicon Graphics Computer Systems, Inc.）版本，它被纳入GNU C++标准库
+***具体版本为：cygnus C++ 2.91.57 for Windows版本***
+
+## 学习重点：
+1. 容器
+vector、list、deque、set、map的底层数据结构和实现原理，如何管理内存、数据存储方式、迭代器设计
+
+2. 迭代器
+STL的核心之一，提供了统一的方式来遍历容器中的元素，了解迭代器的种类以及如何使用
+
+3. 算法
+STL提供了大量算法：排序、查找、复制、删除等，学习其实现原理以及如何与迭代器、容器交互
+
+4. 仿函数
+即函数对象，实现了operator()，有助于了解很多算法的灵活性和通用性
+
+5. 分配器
+管理内存分配和释放
+
+6. 空间配置器
+底层的内存分配和释放
+
+7. 内存管理和性能优化
+学习SGI STL在内存管理和性能优化方面的思路
 
 
+# 第一章 STL概论与版本简介
 
+## 1.1 STL概论
+追求数据结构和算法的复用性
+STL提供了一种高层次的、具有泛型思维的“软件组件分类学”，STL可视作一个抽象概念库（可赋值、默认构造、输出功能迭代器、单项迭代器，二元函数、关联式容器）
+
+
+### 1.1.1 STL的历史
+于C++创造的前后
+
+### 1.1.2 STL与C++标准程序库
+98年，STL进入了C++标准程序库的一大脉系（stream、string都用template重新实现）
+
+## 1.2 STL六大组件 功能与运用
+1. 容器
+vector、list、deque、set、map，本质上都是类模板
+
+2. 算法
+sort、search、copy、erase，本质上是函数模板
+
+3. 迭代器
+容器和算法之间的胶合剂，又称“泛型指针”，重载了operator*、operator->、operator++等
+所有STL容器都附带有自己专属的迭代器
+
+4. 仿函数
+行为类似于函数，可以用作算法的某种策略
+本质上是一种重载了operator()的类或者类模板，一般函数指针可视为狭义的仿函数
+
+5. 配接器
+用于修饰容器、仿函数、迭代器接口
+例如STL提供的queue和stack虽然看作容器，但其实只能算是容器配接器，因为底层是借助deque实现的
+
+6. 配置器
+负责空间配置与管理，本质上是实现了动态空间配置、空间管理、空间释放的类模板
+
+C++编译器一定支持有一份STL，在各个C++头文件里
+C++标准规定所有标准头文件不再有扩展名（但是有的STL版本同时存在有无扩展名的两种版本）
+
+### STL六大组件的交互关系
+Container通过Allocator取得数据储存空间
+Algorithm通过Iterator存取Container内容
+Functor协助Algorithm完成不同的策略变化
+Adapter可以修饰或套接Functor
+
+## 1.3 GNU源码开放精神
+STL原始版本在惠普，允许拷贝、修改、传播，但必须把其声明放在开发者的文件内
+**GNU**是一个开放改革计划（GNU Is Not Unix）
+其中早期最著名的软件有Emacs（文本编辑器）和GCC
+（C/C++编译器），后期著名的是Linux操作系统
+GNU以GPL（Genral Public License，广泛开放授权）来保护其成员
+
+Cygnus公司之于GCC，就像Red Hat之于Linux，而GCC最终控制权仍在GCC指导委员会
+
+### 1.9.2 临时对象的产生与运用
+STL常将其用于仿函数和算法的搭配上
+
+### 1.9.3 静态常量整数成员在class内部直接初始化
+
+### 1.9.5 左闭右开区间表示法
 
 
 
@@ -13,7 +96,7 @@ STL定义了**五个全局函数，用于未初始化空间上**，有利于容�
 
 ### 2.3.1 uninitialzied_copy
 ```cpp
-    template<class InputIterator, class ForwardIterator>
+    template<class InputIt/*  */erator, class ForwardIterator>
     ForwardIterator
     uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result);
 ```
