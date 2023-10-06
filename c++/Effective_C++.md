@@ -2299,6 +2299,8 @@ if(size != sizeof(Base))
 在基类版本的delete函数中，判断如果入参size和sizeof(Base)不等，则令标准delete处理操作
 如果派生类对象将被删除，而基类中未定义virtual析构函数（那么就不会调用正确的析构函数），那么传入operator delete的size_t则不正确。
 
+
+
 # 52 实现new也要实现delete
 
 
