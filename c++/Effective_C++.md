@@ -2300,16 +2300,23 @@ if(size != sizeof(Base))
 如果派生类对象将被删除，而基类中未定义virtual析构函数（那么就不会调用正确的析构函数），那么传入operator delete的size_t则不正确。
 
 
+# 52 写了placement new也要写placement delete
+new一个对象，会调用operator new和类的构造函数。如果new成功，而构造函数抛出异常，那new操作分配的内存必须取消，要不然就内存泄漏了。
+如果new带参数，delete也要对应，
+常规的new：size_t为入参
+如果operator new有额外的入参重载（所谓的placement new），
+```cpp
+#include<new>
+void operator new(std::size_t, void* pMemory) thorw();  // 特殊入参：指向构造出来的对象的内存，可以指定对象构造在某块内存
+// 谈及placement new，就是指这个版本
 
-# 52 实现new也要实现delete
+// 考虑以下情况
+Widget* pw = new (std::cerr) Widget;    // cerr为其ostream实参
+// 想要让系统在new成功而构造失败时，把内存回收，只能通过调用相同参数（类型、个数都相同）的delete
 
 
 
-
-
-
-
-
+```
 
 
 
