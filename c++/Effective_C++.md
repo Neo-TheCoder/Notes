@@ -2307,27 +2307,23 @@ new一个对象，会调用operator new和类的构造函数。如果new成功�
 如果operator new有额外的入参重载（所谓的placement new），
 ```cpp
 #include<new>
-void operator new(std::size_t, void* pMemory) thorw();  // 特殊入参：指向构造出来的对象的内存，可以指定对象构造在某块内存
+void operator new(std::size_t, void* pMemory) throw();  // 特殊入参：指向构造出来的对象的内存，可以指定对象构造在某块内存
 // 谈及placement new，就是指这个版本
 
 // 考虑以下情况
 Widget* pw = new (std::cerr) Widget;    // cerr为其ostream实参
 // 想要让系统在new成功而构造失败时，把内存回收，只能通过调用相同参数（类型、个数都相同）的delete
 
-
+// 如果这样调用
+delete pw;  // 调用的是正常的，而非placement版本，因为其只有在调用到placement new的构造函数发生异常时才调用
+// 对一个指针调用delete，是不会调用placement版本delete
 
 ```
 
-
-
-
-
-
-
-
-
-
-
+还需要注意：由于成员函数的名字会掩盖外围作用域中的同名函数
+比如Base类中定义了operator new(std::size_t, std::ostream& logStream)，调用new的时候就只能调用这个版本而不能调用普通版本了。
+同样地，派生类中的new还会掩盖继承而得的new。
+如果还想要调用普通的new：可以在类内部再封装。
 
 
 
