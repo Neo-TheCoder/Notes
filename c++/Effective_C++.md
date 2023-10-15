@@ -2327,4 +2327,50 @@ delete pw;  // 调用的是正常的，而非placement版本，因为其只有�
 
 
 
+# 53 不要轻忽编译器的警告
+虽然警告的要紧程度低于错误，但也要注意，比如以下情况：
+B类中定义了一个const虚函数，在D中想要重写该虚函数，但是**忘记声明为const**
+编译器会警告：D中的f()隐藏了虚函数：B::f()
+（内层作用域优先于外层作用域）
+意思是：声明于B中的f，不仅没在D中重新声明，而是整个遮掩了（这个是重点）
+如果忽视了这条编译器早已发现的警告，就可能要调试半天
+警告和编译器是相关联的
+
+
+# 54 熟悉TR1在内的标准程序库
+TR1：Technical Report1
+
+C++98标准程序库：
+1. STL
+2. Iostream
+3. wchar_t、wstring以支持unicode
+4. 数值处理：complex、valarray
+5. 异常阶层体系
+6. C89标准程序库
+
+TR1：
+1. 智能指针
+2. function
+3. bind
+4. hash table
+5. 正则表达式
+6. 变量组
+7. array
+8. mem_fn
+9. reference_wrapper
+10. 随机数
+11. 数学函数
+12. C99兼容扩充
+13. type traits
+14. tr1::result_of
+
+
+# 55 让自己熟悉boost
+C++开发者集结的社群，自由下载
+http://boost.org
+
+boost相比其他组织，有两大优势：
+1. 和C++标准委员会之间关系密切，boost就是C++新标准的预备役
+2. 公开的同僚review
+
 
