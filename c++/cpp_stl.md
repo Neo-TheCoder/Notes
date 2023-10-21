@@ -150,14 +150,86 @@ struct __allocator {
 
 ```
 
-## 2.2 具备次配置力的SGI空间配置器
+## 2.2 具备次配置力(sub-allocation)的SGI空间配置器
 SGI STL的配置器和标准规范不同的，名称是alloc（不接收类型参数），而非allocator。
 ```cpp
-vector<int, std::allocator<int>> iv;    // 标准写法
+vector<int, std::allocator<int>> iv;    // 标准写法 VC中的
 
-vector<int, std::alloc> iv; // SGI写法
+vector<int, std::alloc> iv; // GCC写法
+// 但我们一般用缺省的空间配置器，不太需要自行指定配置器的名字
+
+// SGI STL的每个容器都已经指定缺省的空间配置器为alloc
+// 例如：
+template<class T, class Alloc = alloc>
+class vector{...};
 ```
 
+### 2.2.1 SGI标准的空间配置器 std::allocator
+它虽然符合部分标准，但是效率不好，只是对operator new和operator delete的简单封装
+
+### 2.2.2 SGI特殊的空间配置器 std::alloc
+该空间配置器考虑了效率问题
+#### new操作实际上分为两步：
+1. 配置内存
+2. 构造对象
+
+delete操作：
+1. 析构对象
+2. 释放内存
+
+std::alloc实现中：
+**allocate()**用于内存配置操作
+**deallocate()**用于内存释放
+**construct()**用于对象构造
+**destroy()**用于对象析构
+
+```cpp
+#include<memory>中含有以下文件：
+
+#include<stl_alloc.h> 
+// 负责内存空间的配置与释放 定义了一、二级配置器，二者协作
+allocate()、deallocate()
+
+#include<stl_construct.h>
+// 负责对象内容的构造与析构 隶属于STL标准规范
+construct()、destroy()
+
+#include<stl_uninitialized.h>
+// 定义了一些全局函数，用于fill或者copy大块内存数据 隶属于STL标准规范
+// 虽然不属于配置器的范畴，和对象初值有关，考虑了性能
+un_initialized_copy()
+un_initialized_fill()
+un_initialized_fill_n()
+// 它们的底层实现，在最差情况下会调用construct()、最佳情况下调用C标准函数memmove()直接进行内存数据的移动
+```
+
+### 2.2.3 构造和析构基本工具 construct()和destroy()
+```cpp
+#include<stl_construct.h>
+包含了：
+#include<new.h>
+
+template<class T1, class T2>
+inline void construct(T1* p, const T2& value){
+    new (p) T1(value);  // placement new，调用了T1的构造函数
+}
+
+template<class T>
+inline void destroy(T* pointer){
+    pointer->~T();
+}
+
+// 第二版本：析构指定范围的对象
+// 接收两个迭代器，该函数会找出元素的数值型别（value_type），以便得到最佳措施
+template<class ForwardIterator>
+inline void destroy(ForwardIterator first, ForwardIterator last){
+    __destroy(first, last, value_type(first));
+}
+
+// 其有不同的特化版本，是根据每个对象析构函数来判断的，先利用value_type()获得迭代器指定对象的型别，再利用_type_traits<T>判断其析构函数是否是无关痛痒的（即析构函数没有特殊操作，是编译器生成的），如果是，则什么都不做，如果不是，则循环范围内的所有对象，调用第一个版本的destroy()
+```
+
+### 2.2.4 空间的配置与释放 std::alloc
 
 
 
@@ -165,17 +237,6 @@ vector<int, std::alloc> iv; // SGI写法
 
 
 
-
-
-
-
-
-
-
-
-
-### 2.2.3 构造和析构基本工具
-construct()和destroy()
 
 ## 2.3 内存基本处理工具
 STL定义了**五个全局函数，用于未初始化空间上**，有利于容器的实现
@@ -212,6 +273,14 @@ uninitialized_fill(first, last, value)：
 
 uninitialized_fill_n(first, n, value)：
 是用于指定填充元素个数的函数，适用于某个范围的连续一段元素需要填充相同的值的情况
+
+
+
+
+
+
+
+
 
 
 # 第四章 序列式容器
