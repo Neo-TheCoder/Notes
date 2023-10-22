@@ -238,6 +238,12 @@ inline void destroy(ForwardIterator first, ForwardIterator last){
 
 
 
+
+
+
+
+
+
 ## 2.3 内存基本处理工具
 STL定义了**五个全局函数，用于未初始化空间上**，有利于容器的实现
 
