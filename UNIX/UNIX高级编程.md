@@ -347,7 +347,7 @@ size是共享内存段的长度 通常为系统页长的整数倍
 
 
 
-# 16章 网络IPC
+# 第16章 网络IPC
 
 
 
@@ -361,6 +361,31 @@ int socket(int domain,int type,int protocol);
 
 
 ```
+
+
+
+# 第17章 高级进程间通信
+## 17.1 引言
+UNIX域套接字（Unix Domain Socket），用于IPC通信
+
+## 17.2 UNIX域套接字
+相比传统的网络套接字效率更高，UNIX domain socket仅复制数据，并不执行协议处理：添加或删除网络报头、计算校验和、 产生顺序号、发送确认报文等操作
+UNIX域套接字提供**流**和**数据报**两种接口，它就像是**接字和管道的混合**
+```cpp
+#include <sys/socket.h>
+int socketpair(int domain, int type, int protocol, int sockfd[2]);  // 可用于创建一对无名的、相互连接的UNIX域套接字
+```
+
+
+
+
+
+
+
+
+
+
+
 
 
 
