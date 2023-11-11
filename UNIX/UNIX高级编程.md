@@ -370,7 +370,10 @@ UNIX域套接字（Unix Domain Socket），用于IPC通信
 
 ## 17.2 UNIX域套接字
 相比传统的网络套接字效率更高，UNIX domain socket仅复制数据，并不执行协议处理：添加或删除网络报头、计算校验和、 产生顺序号、发送确认报文等操作
-UNIX域套接字提供**流**和**数据报**两种接口，它就像是**接字和管道的混合**
+UNIX域套接字提供**流**和**数据报**两种接口，它就像是**套接字和管道的混合**
+是**可靠的**、不会丢失报文、也不会出错
+一对相互连接的UNIX域套接字可以起到**全双工管道**的作用
+
 ```cpp
 #include <sys/socket.h>
 int socketpair(int domain, int type, int protocol, int sockfd[2]);  // 可用于创建一对无名的、相互连接的UNIX域套接字

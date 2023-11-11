@@ -2451,12 +2451,38 @@ f(&svec[0]);
 ```
 
 
-
 ## 19.5 嵌套类
+常用于定义作为实现部分的类
+嵌套类是一个独立的类，与外层类基本没什么关系
+自然，外层类的对象和嵌套类的对象是相互独立的（二者在定义时，成员之间是无关的）
+**嵌套类的名字在外层类作用域中是可见的，在外层类作用域之外就不可见了**
 
+**重点**：嵌套类被视为外部类的成员（作用域和外部类相同），它们享有与外部类相同的访问权限。
 
+注意**嵌套类定义的类型的访问控制**：
+由于嵌套类在其外层类中定义了一个类型成员，和其他成员类似，这个类型的（对外）访问权限由外层类决定
+1. 位于外层类public部分的嵌套类实际上定义了一种可随处访问的类型
+2. 位于外层类protected部分的嵌套类定义的类型，只能被外层类及其友元和派生类访问
+3. private的话，只能被外层类的成员和友元访问
+（PS：之所以嵌套在别人的类里，就是为了便于访问这个类）
+嵌套类可以访问外部类的所有成员，包括私有成员。嵌套类可以用于实现更好的封装和组织代码的结构。
 
+常见做法是：把嵌套类作为外部类的成员
 
+也可以在外层列之外定义一个嵌套类，比如：
+```cpp
+class TextQuery::QueryResult{
+    public:
+        // 嵌套类可以直接使用外层类的成员，不需要对名字做限定（内层可以用外层）
+};
+```
+
+### 嵌套类的静态成员定义
+```cpp
+int TextQuery::QueryResult::static_mem = 1024;  // 这样访问
+```
+
+### 嵌套类和外层类是相互独立的
 
 ## 19.6 union
 可以有多个数据成员，但是任意时刻只有一个数据成员可以有值
@@ -2475,7 +2501,6 @@ union Token{
     double dval;
 }
 // Token可以保存以上类型中的一种 
-
 ```
 
 #### 使用
@@ -2489,9 +2514,6 @@ union Token{
     // 对一个数据成员赋值会使其他成员变成未定义状态
 ```
 
-
-
-
 #### 匿名union
 ```cpp
 // 一旦定义了一个匿名union，编译器就会自动为该union创建一个未命名的对象
@@ -2504,29 +2526,15 @@ union{
 cval = 'c';
 ival = 42;
 
-
 ```
 
 
 #### 含有类类型成员的union
-对于自定义类型的成员，想要该百年union保存的值比较复杂：
-
-
-
-
-
-
-
-
-
-
-
-
+对于自定义类型的成员，想要改变union保存的值比较复杂：
 
 
 
 # C++相关的补充：
-
 
 #### std::bind
 对于一个可调用对象，可以减少可调用对象传入的参数
@@ -2548,18 +2556,15 @@ bindFunc3的第二个参数和TestFunc的第一个参数匹配
 ```
 
 
-
 size_t
 size_t在32位架构中定义为：typedef   unsigned int size_t；
 size_t在64位架构中被定义为：typedef  unsigned long size_t；
 size_t是无符号的，并且是平台无关的，表示0-MAXINT的范围；int为是有符号的；
 
 
-
 std::packaged_task
 
 std::bind
-
 
 
 #### 异步编程 std::future
@@ -2592,11 +2597,9 @@ int main() {
     return 0;
 }
 ```
-
 在上面的例子中，我们创建了一个std::promise对象p，并使用get_future函数获取了一个std::future对象f。然后，我们在另一个线程中调用setValue函数，该函数将42设置为promise的值。最后，我们在主线程中调用f.get()函数获取promise的值，并输出到控制台上。
 
 总之，std::future和std::promise是C++中实现异步编程的重要工具，它们可以帮助我们实现并行计算和线程间通信。
-
 
 
 #### 条件变量
@@ -2679,26 +2682,70 @@ shared_Ptr<int>ptr2(p);
 （目的是不调用额外的shared_ptr的构造函数）
 
 
+#### std::add_pointer
+用于将给定类型**转换为指针类型**。它接受一个类型作为模板参数，并返回该类型的指针类型（在模板编程和类型转换方面常用）。
 
 
+#### string_view
+c++17加入了std::string_view
+很多情况下优于std::string（尤其是函数形参，优于const std::string&）
+它只是用来指代“字符串”（这个字符串可以指代的东西很多）的，并不拥有所有权，自然也**不可变**。
+通常实现只保有两个数据成员：
+1. 一个指向字符串的指针
+2. 一个表示字符串的的size（通常是size_t类型）。
+通常64位系统下大小为16个字节。
 
 
+##### std::string
+```cpp
+class string {//简单示例，实际不可能如此
+public:
+    // all 83 member functions
+private:
+    char* m_data;
+    size_type m_size;
+    size_type m_capacity;
+    std::array<char, 16> m_sso;
+};
+对于 64 位系统，每个字符串std::string有 24 个字节的“开销”（size，capacity，data），另外还有 16 个字节用于 SSO 缓冲区。
+加起来也就是40。
+```
 
+##### 实际使用
+```cpp
+void func(const std::string&s){
+    std::cout << s << '\n';
+}
 
+// 在很多传参的情况下，开销很大
+std::string s{"abc"};
+func("abc");    // 开销很大 实际传入的是字符串字面量（字符数组），先隐式转换为指针，然后再调用std::string的构造函数，构造一个临时string变量
+func(s);
+// 而const std::string&s这种形参类型是可以被赋纯右值表达式的，顺便延长了临时对象的生命周期
 
+// 另外，使用const std::string&还更容易造成一些bug，比如：
+ const std::string& f(const std::string& str) {
+    return str;
+}
+int main() {
+    auto& ret = f("abc");  // 根本不能传入临时的字符数组，会导致返回其引用（悬垂引用）
+    std::cout << ret << '\n';
+}
 
+// 使用std::string_view
+void func(std::string_view s){
+    std::cout << s << '\n';
+}
 
-
-
-
-
-
-
-
-
-
-
-
+int main(){
+    std::string s{"abc"};
+    const char* p = "abc";
+    func("abc");
+    func(s);
+    func(p);
+}
+```
+**std::string有一个到std::string_view的转换函数，其他的都是正常走std::string_view的构造函数。**
 
 
 
