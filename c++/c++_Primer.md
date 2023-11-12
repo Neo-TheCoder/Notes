@@ -2748,4 +2748,15 @@ int main(){
 **std::string有一个到std::string_view的转换函数，其他的都是正常走std::string_view的构造函数。**
 
 
+#### std::atomic
+首先要知道**原子操作**：该操作是连续执行，不可分割的
+std::atmoic用于保护一个变量
+而常规的互斥量保护的数据范围比较大
+如果共享数据只是一个变量的话，使用原子操作std::atmoic效率更高
+对std::atomic对象的访问不会造成竞争/冒险
+比如std::atomic<int>，实际上是将int拓展成了原子类型，使得int类型的++，--都变成了原子操作，同时拓展了fetch_add、fetch_sub等原子加减方法
+
+
+
+
 
