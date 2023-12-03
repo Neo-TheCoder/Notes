@@ -744,6 +744,7 @@ int pthread_equal(pthread_t tid1, pthread_t tid2);
 ```
 
 ## 11.4 线程创建
+传统UNIX进程模型中，每个进程只有一个控制线程
 ```cpp
 #include<pthread.h>
 int pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attr, void *(*start_rtn)(void*), void *restrict arg);
@@ -758,16 +759,52 @@ int pthread_create(pthread_t *restrict tidp, const pthread_attr_t *restrict attr
 pthread调用失败时返回错误码，而不像其他POSIX函数一样设置errno，每个线程提供errno的副本，对于线程而言，从函数中返回错误码更为清洗整洁，这样可以不依赖随着函数执行而不断变化的全局状态，从而把错误范围限制在引起出错的函数中
 
 
+## 11.5 线程终止
+如果进程中的任意线程调用了exit、_Exit或_exit，那么整个进程就会终止。类似地，如果默认动作是终止进程，那么发送到线程的信号就会终止整个进程
 
+### 线程的三种退出方式（不终止整个进程）
+1. 简单地从启动例程中返回，返回值是线程的退出码
+2. 被同一进程中的其他线程取消
+3. 线程调用`pthread_exit`
+```cpp
+#include<pthread.h>
+void pthread_exit(void *rval_ptr);
+// rval_ptr可传递参数
+```
 
-# 11.5 线程终止
+```cpp
+#include<pthread.h>
+int pthread_join(pthread_t thread, void **rval_ptr);
+// 使得调用线程一直阻塞，直到指定线程调用pthread_exit、从启动例程中返回或被取消
+// 如果线程简单地从启动例程中返回，rval_ptr就包含返回码，该函数可用于获得入参线程的退出状态
+```
+注意：以上无参类型指针rval_ptr可以传递的值不止一个，**可以传递复杂的结构体信息（前提是是其内存在调用者完成调用后仍然有效）**
+例如：如果在调用线程的栈上分配了那么一个结构，那么其他的线程在使用这个结构时内存内容可能已经改变了。
+又如，线程在自己的栈上分配了一个结构，然后把指向这个结构的指针传给pthread_exit（让其返回出去），那么调用pthread_join的线程试图使用该结构时，这个栈有可能已经被撤销，这块内存也已另作他用。
 
+```cpp
+#include<pthread.h>
+int pthread_cancel(pthread_t tid);
+// 线程调用该函数可以请求取消同一进程中的其他线程，该函数不等待线程终止，仅仅提出请求
+```
+线程可以安排它退出时需要调用的函数（常常被称为线程清理处理程序，thread cleanup handler）
+一个线程可以建立多个清理处理程序，处理程序记录在栈中，也就是说，它们的执行顺序与注册顺序**相反**
+```cpp
+#include<pthread.h>
+void pthread_cleanup_push(void(*rtn)(void*), void *arg);
+void pthread_cleanup_pop(int execute);
+```
+对于以下操作，清理函数rtn是由`pthread_cleanup_push函数`调度的，调用时只有一个参数arg：
+1. 调用`pthread_exit`时
+2. 响应取消请求时
+3. 用非零execute参数调用`pthread_cleanup_pop`时
+    如果executr参数设置为0，清理函数将不被调用
 
 
 
 ## 11.6 线程同步
-
-
+当多个控制线程共享相同的内存时，需要确保每个线程看到的数据一致。若临界资源不会被其他线程读取和修改，自然就不存在一致性问题。
+**但若一个线程可以修改的变量，其他线程也可以读取或修改时，就需要线程同步，确保多线程访问变量的存储内容时不会访问到无效的值**
 
 
 
