@@ -277,10 +277,10 @@ int main(int argc,char *argv[]);
 ## 7.3 进程终止
 ### 正常终止
 1. main返回
-2. 调用exit
-3. 调用_exit或_Exit
+2. 调用`exit`
+3. 调用`_exit`或`_Exit`
 4. 最后一个线程从其启动例程返回
-5. 从最后一个线程调用pthread_exit
+5. 从最后一个线程调用`pthread_exit`
 
 ### 异常终止有3种
 6. 调用abort
@@ -610,6 +610,11 @@ PATH=/bin:/usr/bin:/usr/local/bin:.
 
 
 ## 8.16 进程调度
+UNIX历史上提供对进程基于**调度优先级**的**粗粒度**控制
+**调度策略**和**调度优先级**是由内核确定的，进程可以通过调整nice值（）选择以更低优先级运行（nice越大，降低对CPU的占有，说明这个进程很nice），只有特权进程允许提高调度权限
+POSIX实时扩展增加了多个调度类别以进一步细调
+
+
 
 
 
@@ -840,10 +845,119 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex);
 ```
 
 
+### 11.6.2 避免死锁
+死锁的经典场景之一：
+**循环等待**：使用多个互斥量，如果允许一个线程一直占有第一个，而在试图锁住第二个时阻塞了，而拥有第二个互斥量的线程也在试图锁住第一个
+解决办法：**控制互斥量加锁的顺序**
+
+### 11.6.3 函数pthread_mutex_timedlock
+可以绑定线程阻塞时间，**防止永久的阻塞**
+```cpp
+#include<pthread.h>
+int pthread_mutex_timedlock(pthread_mutex_t *restrict mutex, const struct timespec *restrict tsptr);
+// 当达到超时时间，该函数不会对互斥量加锁，而是返回错误码：ETIMEDOUT
+```
+
+### 11.6.4 读写锁
+相比互斥锁，允许更高的并行性。
+读写锁有3种状态：
+1. 读模式下加锁状态
+2. 写模式下加锁状态
+3. 不加锁状态
+一次只有一个线程可以占有写模式的读写锁
+多线程可以同时占有读模式的读写锁
+当读写锁是写加锁状态时，在这个锁被解锁之前，所有试图对这个锁加锁的线程都会被阻塞
+当读写锁在读加锁状态时，所有试图以读模式对它进行加锁的线程都可以得到访问权，但是任何希望以写模式对此锁进行加锁的线程都会阻塞，直到所有的线程释放它们的读锁为止。
+虽然各操作系统对读写锁的实现各不相同，但当读写锁处于读模式锁住的状态，而这时有一个线程试图以写模式获取锁时，读写锁通常会阻寒随后的读模式锁请求。这样可以避免读模式锁长期占用，而等待的写模式锁请求一直得不到满足。
+读写锁非常适合于**对数据结构读的次数远大于写的情况**。当读写锁在写模式下时，它所保护的数据结构就可以被安全地修改，因为一次只有一个线程可以在写模式下拥有这个锁。当读写锁在读模式下时只要线程先获取了读模式下的读写锁，该锁所保护的数据结构就可以被多个获得读模式锁的线程读取。
+读写锁也叫做共享互斥锁 (***shared-exclusive lock***)。当读写锁是读模式锁住时，就可以说成是以共享模式锁住的。当它是写模式锁住的时候，就可以说成是以互斥模式锁住的。
+与互斥量相比，读写锁在使用之前必须初始化，在释放它们底层的内存之前必须销毁。
+```cpp
+#include<pthread.h>
+int pthread_mutex_init(pthread_rwlock_t *restrict rwlock, const pthread_rwlockattr_t *restrict attr);   // 读写锁需要调用该函数初始化
+
+int pthread_rwlock_destroy(pthread_rwlock_t *rwlock);   // 释放内存前要调用该函数做清理工作
+
+int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock);
+// rd: read, 在读模式下锁定读写锁
+
+int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock);
+// wr: write, 在写模式下锁定读写锁
+
+int pthread_rwlock_unlock(pthread_rwlock_t *rwlock);
+// 解锁
+
+// 各种实现可能对共享模式下可获取的读写锁的次数进行限制
+```
+
+### 11.6.5 带有超时的读写锁
+使得获取读写锁时避免陷入永久阻塞
+
+### 11.6.6 条件变量
+条件变量与互斥量一起使用时，允许线程以无竞争的方式等待特定的条件发生
+**条件本身是由互斥量保护的**
+线程要改变条件状态之前，**必须锁住互斥量**，那么对于其他线程而言，没获取到互斥量旧不会察觉到条件状态的改变，因为互斥量必须在锁定后才能计算条件
+```cpp
+#include<pthread.h>
+int pthread_cond_wait(pthread_cond_t *restrict cond, pthread_mutex_t *restrict mutex);
+// 将互斥量作为参数传入，从而对条件进行保护
+int pthread_cond_timedwait(pthread_cond_t *restrict cond, pthread_mutex_t *restrict mutex, const struct timespec *restrict tsptr);
+// 多了个超时时间的设定
+```
+调用者把锁住的互斥量传给函数，函数接着把调用线程放到等待条件的线程列表上，**对互斥量解锁**
+（目的是：关闭条件检查和线程进入休眠状态等待条件改变这两个操作之间的时间通道）
+当`pthread_cond_wait`返回时，**互斥量再次被锁住**
+
+```cpp
+#include <pthread.h>
+
+struct msg {
+struct msg *m_next;
+};
+
+struct msg *workq;  // 工作队列
+
+pthread_cond_t qready = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t qlock = PTHREAD_MUTEX_INITIALIZER;
+
+// 消费者
+void process_msg(void)
+{
+    struct msg *mp;
+    for (;;) {
+        pthread_mutex_lock(&qlock);
+        while (workq == NULL)
+            pthread_cond_wait(&qready, &qlock); // 阻塞
+        mp = workq;
+        workq = mp->m_next; // 链表节点后移
+        pthread_mutex_unlock(&qlock);
+        /* now process the message mp */
+    }
+}
+
+// 生产者
+void enqueue_msg(struct msg *mp)
+{
+    pthread_mutex_lock(&qlock);
+    mp->m_next = workq; // 新加入的节点添加到队列头部
+    workq = mp; // 只有对消息队列的改动操作，才需要互斥量的保护
+    pthread_mutex_unlock(&qlock);
+    pthread_cond_signal(&qready);
+    /*
+        给等待线程发信号不需要占有互斥量：
+        只要线程在调用pthread_cond_signal函数之前把消息从队列中拖出，消费者线程就可以在生产者线程释放互斥量后完成这部分工作，因为根本就不用阻塞了
+    */
+}
+```
+在消费者线程中使用了一个while循环来检查队列是否为空，而不是使用if语句。
+使用`while`的话，从`pthread_cond_wait`返回还会检测一次队列是否为空，发现队列为空，然后继续返回等待）。但是使用`if`的话，代码逻辑都往下执行了，就虚假唤醒了。
+生产者提前释放锁的意义是，让消费者更快地进入逻辑
 
 
 
-
+### 11.6.7 自旋锁
+类似互斥量，但不是通过休眠使进程阻塞，而是在获取锁之前一直处于**忙等（自旋）阻塞状态**
+常用的情况：锁被持有的**时间短**，而且线程并**不希望在重新调度上花费太多的成本**
 
 
 
