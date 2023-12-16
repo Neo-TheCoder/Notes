@@ -90,7 +90,7 @@ bool DdsServiceRegistryImpl::registerService(internal::skeleton::ServiceBase& se
     return true;
 }
 ```
-GetSkeleton函数：
+`GetSkeleton`函数：
 ```cpp
     std::unique_ptr<internal::skeleton::ServiceBase> GetSkeleton(internal::skeleton::ServiceBase& service,
         types::InstanceId instance_id,
@@ -111,7 +111,7 @@ public:
     virtual ara::core::Future<bool> ProcessNextMethodCall() = 0;    // 取得下一个调用并执行
 };
 ```
-其中的GetSkeleton()方法会调用到渲染生成的代码：radarServiceAdapter：
+其中的`GetSkeleton()`方法会调用到渲染生成的代码：radarServiceAdapter：
 模板类ServiceMappingImpl在：AP_Project/event_method_field/apd/RadarFusionMachine/src/radar/net-bindings/fastdds/fastdds_service_mapping-radar.cpp专门实例化。
 ```cpp
 ServiceMappingImpl<
@@ -265,10 +265,12 @@ void ServiceImpl::OfferMethod(MethodImplBase& method)
         return;
     }
     method.Offer(handle_, [this](MethodImplBase* methodRef, typename MethodImplBase::requestId_t requestId) {
-        Execute(methodRef, requestId);
-    ;
-    // MethodImpl实现基类方法Offer()
+        Execute(methodRef, requestId);  // 第二个入参：lambda，在收到proxy请求时调用
+    });
+    // 以下是MethodImpl实现基类方法Offer()
     // ************************************
+    // 就是set 当前MethodImpl对象的回调、replyTopic、writer_、requestTopic、reader_
+    onRequest_ = onRequest; // 设置回调
     auto replyTopic
         = handle.participant->GetTopic<typename dds_type_construct::reply>(MethodDescriptor::output_topic_name);    // output_topic_name
     
@@ -281,26 +283,26 @@ void ServiceImpl::OfferMethod(MethodImplBase& method)
     // !!! method一并创建了MethodDataReader
 
     reader_->AddMethodHandler(MethodDescriptor::kMethodHash, [this](auto& sample) { EnqueueRequest(sample); });
-    /* !!! 调用MethodDataReader的AddMethodHandler()，往map添加一个函数
-    / 该函数内容是把sample以及id加入map，并执行onRequest_函数（该函数在Offer()的开头传入
-    内容是：
+    /*  !!! 调用MethodDataReader的AddMethodHandler()，往map添加一个lambda
+        该函数内容是把sample以及id加入map，并执行onRequest_函数（该函数在Offer()的第二个入参传入
+        内容是：
     */
         [this](MethodImplBase* methodRef, typename MethodImplBase::requestId_t requestId) {
                 Execute(methodRef, requestId);
             }
-        其中Execute()：
+        其中Execute(methodRef, requestId)：
         void ServiceImpl::Execute(MethodImplBase* method, typename MethodImplBase::requestId_t requestId)
-        {
+        {   // ！！！MethodCallProcessingMode有多种模式
             common::logger().LogInfo() << "ServiceImpl::Execute called";
             std::unique_lock<std::mutex> lock(requestsMutex_);
             if (requestProcessingMode_ == MethodCallProcessingMode::kEventSingleThread) {
                 common::logger().LogInfo() << "kEventSingleThread: calling method ProcessRequest with ID" << requestId;
                 lock.unlock();
-                method->ProcessRequest(requestId);
-            } else if (requestProcessingMode_ == MethodCallProcessingMode::kEvent) {
+                method->ProcessRequest(requestId);  // 直接调用ProcessRequest
+            } else if (requestProcessingMode_ == MethodCallProcessingMode::kEvent) {    // 事件触发
                 common::logger().LogInfo() << "kEvent: calling method ProcessRequest with ID" << requestId;
                 common::logger().LogInfo() << "GetPendingRequestsIds";
-                auto requests = method->GetPendingRequestsIds();
+                auto requests = method->GetPendingRequestsIds();    // 调用EnqueueRequest时，保存了request ids
                 lock.unlock();
                 for (auto request : requests) {
                     common::logger().LogInfo() << "request:" << request;
@@ -310,54 +312,107 @@ void ServiceImpl::OfferMethod(MethodImplBase& method)
                     std::lock_guard<std::mutex> mlock(threadLock_);
                     startProcessing_ = true;
                 }
-                cond_.notify_one();     // ServiceImpl类的条件变量成员cond_
-            } else {
+                cond_.notify_one();     // ServiceImpl类的条件变量成员cond_，通知线程处理请求
+            } else {    // 对于轮询，不需要在这里处理，实际请求数据 会在用户层去主动调用ServiceImpl::ProcessNextMethodCall()来处理接收的请求数据
                 // do nothing in kPoll mode
                 lock.unlock();
                 common::logger().LogInfo() << "ServiceImpl::Execute kPoll for Id:" << requestId;
             }
         }
 
-        其中的ProcessRequest()：
-            bool ProcessRequest(requestId_t id) override
+            kPoll模式中在用户层代码所做的操作：
+            /// @uptrace{SWS_CM_11155, e4a512444fe4c660598f90c4543f23d358c1ad13}
+                ara::core::Future<bool> ServiceImpl::ProcessNextMethodCall()
+                {
+                    std::lock_guard<std::mutex> guard(requestsMutex_);
+                    if (requestProcessingMode_ != MethodCallProcessingMode::kPoll) {
+                        throw IllegalStateException("ProcessNextMethodCall() called in non-polling mode!");
+                    }
+
+                    if (pendingRequests_.get_size() == 0) {
+                        CollectPendingRequests();
+                    }
+
+                    request_t request;
+                    ara::core::Promise<bool> promise;
+                    if (pendingRequests_.try_pop(request)) {    // 判断非空，才出队列
+                        promise.set_value(request.second->ProcessRequest(request.first));
+                    } else {
+                        promise.set_value(false);
+                    }
+
+                    return promise.get_future();
+                }
+
+
+            kEvent通过条件变量唤醒其他线程所做的操作：
+            void ServiceImpl::ProcessRequestTask(uint32_t threadNum)
             {
-                if (!invoker_) {
-                    common::logger().LogError() << "skeleton::MethodImpl::ProcessRequest(): invoker_ is nullptr";
-                    return false;
+                common::logger().LogInfo() << "ProcessRequestTask" << threadNum << "started";
+                while (true) {
+                    std::unique_lock<std::mutex> mlock(threadLock_);
+                    cond_.wait(mlock, [this] { return startProcessing_ || shutdownWorker_; });
+                    if (!shutdownWorker_) {
+                        common::logger().LogInfo() << "ProcessRequestTask" << threadNum << "start processing";
+                        startProcessing_ = false;
+                        mlock.unlock();
+                        request_t request;
+                        while (pendingRequests_.try_pop(request)) {
+                            common::logger().LogInfo()
+                                << "ProcessRequestTask" << threadNum << "processing request id:" << request.first;
+                            request.second->ProcessRequest(request.first);  // 调用了具体的method内的ProcessRequest函数
+                        }
+                        common::logger().LogInfo() << "ProcessRequestTask finished processing";
+                    } else {
+                        common::logger().LogInfo() << "ProcessRequestTask" << threadNum << "terminates";
+                        mlock.unlock();
+                        break;
+                    }
                 }
-
-                std::unique_lock<std::mutex> lock(pending_requests_lock_);
-                /// @uptrace{SWS_CM_11111, 8b041812e6d247bf5ecb260cb9a9aa4b4a4d9103}
-                auto it = pendingRequests_.find(id);
-                if (it == pendingRequests_.end()) {
-                    lock.unlock();
-                    common::logger().LogError()
-                        << "skeleton::MethodImpl::ProcessRequest(): pendingRequests_ doesn't contain target id";
-                    return false;
-                }
-                // 从pendingRequests_去除请求
-                auto request = std::move(it->second);
-                pendingRequests_.erase(it); // 移除该请求
-                lock.unlock();
-
-                auto result = invoker_(request).GetResult(); // 此处的invoker_(request)返回值为radarImp类（继承了radarSkeleton类）实现的Adjust()方法，radarImp类和Adjust()方法已经是用户层面的
-                整体来看，method就是proxy端调用skeleton端的Adjust()函数，然后把结果返回
-                // request的类型：模板类型MethodTypesInfo::request_t，实际上传入的是定义在adapter_radar.h里的MethodAdjust结构体定义的dds_type_construct::request::dds_type_t
-                typename MethodTypesInfo::reply_t reply;    // dds_type_construct::reply::dds_type_t
-                /// @uptrace{SWS_CM_11112, 8333b7bcc1c505f3e5544511723341e9d33061f5}
-                reply.header().relatedRequestId().sequence_number().low(request.header().requestId().sequence_number().low());
-                // 具有一定格式的reply数据
-                MethodTypesInfo::SetReplyData(reply, result);   // MethodTypesInfo中的静态函数
-                // 作用是对第二个参数调用ConvertToIDL，调用reply.data().Adjust(result);此处的Ajust方法可能在fastdds_impl_type_radar_method_call.cxx中定义
-                std::unique_lock<std::mutex> writerLock(writer_lock_);
-                if (writer_) {
-                    writer_->Write(reply);  // 调用data writer 写应答数据
-                }
-                return true;
             }
 
+
+
+            kEventSingleThread模式中的ProcessRequest()：
+                bool ProcessRequest(requestId_t id) override
+                {
+                    if (!invoker_) {
+                        common::logger().LogError() << "skeleton::MethodImpl::ProcessRequest(): invoker_ is nullptr";
+                        return false;
+                    }
+
+                    std::unique_lock<std::mutex> lock(pending_requests_lock_);
+                    /// @uptrace{SWS_CM_11111, 8b041812e6d247bf5ecb260cb9a9aa4b4a4d9103}
+                    auto it = pendingRequests_.find(id);
+                    if (it == pendingRequests_.end()) {
+                        lock.unlock();
+                        common::logger().LogError()
+                            << "skeleton::MethodImpl::ProcessRequest(): pendingRequests_ doesn't contain target id";
+                        return false;
+                    }
+                    // 从pendingRequests_去除请求
+                    auto request = std::move(it->second);
+                    pendingRequests_.erase(it); // 移除该请求
+                    lock.unlock();
+
+                    auto result = invoker_(request).GetResult(); // 此处的invoker_(request)返回值为radarImp类（继承了radarSkeleton类）实现的Adjust()方法，radarImp类和Adjust()方法已经是用户层面的
+                    整体来看，method就是proxy端调用skeleton端的Adjust()函数，然后把结果返回
+                    // request的类型：模板类型MethodTypesInfo::request_t，实际上传入的是定义在adapter_radar.h里的MethodAdjust结构体定义的dds_type_construct::request::dds_type_t
+                    typename MethodTypesInfo::reply_t reply;    // dds_type_construct::reply::dds_type_t
+                    /// @uptrace{SWS_CM_11112, 8333b7bcc1c505f3e5544511723341e9d33061f5}
+                    reply.header().relatedRequestId().sequence_number().low(request.header().requestId().sequence_number().low());
+                    // 具有一定格式的reply数据
+                    MethodTypesInfo::SetReplyData(reply, result);   // MethodTypesInfo中的静态函数
+                    // 作用是对第二个参数调用ConvertToIDL，调用reply.data().Adjust(result);此处的Ajust方法可能在fastdds_impl_type_radar_method_call.cxx中定义
+                    std::unique_lock<std::mutex> writerLock(writer_lock_);
+                    if (writer_) {
+                        writer_->Write(reply);  // 调用data writer 发送应答数据
+                    }
+                    return true;
+                }
+
     methods_.push_back(&method);
-    // OfferMethod最后把method存入ara::core::Vector<MethodImplBase*>
+    // OfferMethod最后把调用Offer后的method存入ara::core::Vector<MethodImplBase*>
 
 
     // ************************************
@@ -407,7 +462,7 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
 ```
 
 # 2 proxy端初始化
-先看用户层面的部分，线程函数中调用了radar_activity.cpp中定义的init()函数，
+先看用户层面的部分，线程函数中调用了radar_activity.cpp中定义的`init()`函数，
 关键调用：
 ```cpp
     auto res = Proxy::StartFindService(
@@ -688,29 +743,35 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
 
 **当proxy侧的app向skeleton侧发送请求...**（怎么发送请求的详情见proxy侧的记录）
 在创建MethodDataReader时创建了MethodDataDispatcher对象
-调用MethodDataReaderListener的on_data_available()方法：
+调用MethodDataReaderListener的`on_data_available()`方法：
 ```cpp
     /// @uptrace{SWS_CM_11020, 95ae0a0855d8338d23a058118b07bda90315d478}
     inline void on_data_available(eprosima::fastdds::dds::DataReader* reader) override
-    {
+    {   // 监听proxy端发来的请求
         static_cast<void>(reader);  // 为了消除编译器的未使用警告？
         dispatcher_.Dispatch();
     }
     // 其中Dispatch()的实现：
         void Dispatch() override
     {
-        auto samples = reader_.Read(std::numeric_limits<size_t>::max());
-        for (auto& sample : samples) {
+        auto samples = reader_.Read(std::numeric_limits<size_t>::max());    // 调用Read方法直接返回数据
+        for (auto& sample : samples) {  // 判断收到的请求，是否和offer的service::method关联
             auto discriminator = sample.data()._d();    // 是请求-应答idl数据的_d()方法，作用是返回discriminator的值
             // discriminator是判别器，也就是标识符，看起来应该存储在handlers_中
-            auto handler = handlers_.find(discriminator);
-            if (handler == handlers_.end()) {
+            auto handler = handlers_.find(discriminator);   // handlers_是在AddMethodHandler时添加的
+            if (handler == handlers_.end()) {   // handler是std::function<void(SampleType&)>类型
                 common::logger().LogError()
                     << "MethodDataDispatcher::Dispatch(): Method not found for sample with discriminator "
                     << discriminator;
             } else {
                 handler->second(sample);
-                // 实际上是调用了初始化时AddMethodHandler()添加的函数，也就是EnqueueRequest
+                /*
+                    调用以下所述的lambda，重点是EnqueueRequest()，以及onRequest_(this, nextId); onRequest_调用的实际是Execute(methodRef, requestId)
+                */
+            }
+        }
+    }
+                // 此处的second(sample)，实际上是调用了初始化（调用Offer(common::HandleInfo handle, OnRequestType onRequest)）时AddMethodHandler()添加的函数，也就是EnqueueRequest
                         reader_->AddMethodHandler(MethodDescriptor::kMethodHash, [this](auto& sample) { EnqueueRequest(sample); });
                     的EnqueueRequest函数
                     // 内部实现：
@@ -718,16 +779,13 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
                         {
                             std::unique_lock<std::mutex> lock(pending_requests_lock_);
                             auto nextId = GetNextId();
-                            pendingRequests_[nextId] = std::move(sample);   // 填充pendingRequests_
+                            pendingRequests_[nextId] = std::move(sample);   // 增加<method, method data>
                             lock.unlock();
                             onRequest_(this, nextId);
-                            // onRequest_ 该函数在初始化时Offer()的开头传入 ！！！也就是处理请求的逻辑
-                            详情见初始化的分析：Execute()：
+                            // onRequest_ 该函数在初始化时Offer()的第二个入参传入 ！！！也就是处理请求的逻辑
+                            ！！！详情见初始化的分析：Execute(methodRef, requestId)：
                         }
 
-            }
-        }
-    }
     ！！！MethodDataReaderListener类的on_data_available()方法何时调用？？？
     --->    MethodDataReader的构造函数中：（在skeleton侧初始化时构造）
     this->reader_->set_listener(listener, this->listenerStatusMask_);
@@ -810,6 +868,16 @@ using Adjust = ara::com::internal::proxy::Method<ara::com::sample::radar::Adjust
 ```
 
 发送请求的函数：
+`MethodImpl`对象对外提供函数调用
+看起来是普通的函数，实际上做的是：
+    创建promise对象，得到future对象，将`<requestId, future>`加入`pendingRequests_`
+    Proxy端维护`<requestId, future>`的map，还用在`ReceiveRequestResults(&sample)`时`SetPromiseValue`
+    ！！！`ReceiveRequestResults`是在**proxy端的MethodImpl初始化**的时候传给reader的
+        `ReceiveRequestResults`的真正调用是在dds的`on_data_available`，里面的dispatch方法的实现中，通过`Read()`拿到数据，再触发函数
+        SetPromiseValue的实现在生成的代码中，负责解DDS的包，真正地给promise `set_value`
+        PS：因为`ReceiveRequestResults`的调用是在dds的线程里，所以需要使用promise进行线程间传值（通过promise端维护的`<requestId, future>`map取得相应的promise）
+    然后将request组到DDS包调用dds的`Write()`发送出去
+
 ```cpp
     /// @uptrace{SWS_CM_11108, f9ed7f13070d493f8b327596e9f0670b1064a9e5}
     ara::core::Future<Output> operator()(Args&&... args) override
@@ -896,7 +964,7 @@ public:
 “on change notification”、Get()、Set()
 
 proxy端field被用来：
-调用Get()或Set()方法
+调用`Get()`或`Set()`方法
 以事件/事件数据的形式访问field更新通知，由proxy所连接的服务实例发送，其机制与常规事件完全相同
 ```cpp
 class UpdateRate {

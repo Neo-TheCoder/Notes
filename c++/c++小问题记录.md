@@ -85,6 +85,119 @@ if(condition == false)
 
 
 
+# 关于std::function
+思考一下为什么可以包裹函数和lambda表达式？包裹的对象储存在哪里？
+
+## 简介
+`std::function`是一个可变参类模板，是一个通用的函数包装器（Polymorphic function wrapper）。
+`std::function`的实例可以存储、复制和调用任何可复制构造的**可调用目标**：包括普通函数、成员函数、类对象（重载了`operator()`的类的对象）、Lambda表达式等。是对C++现有的可调用实体的一种**类型安全**的包裹（相比而言，函数指针这种可调用实体，是类型不安全的）。
+`std::function`中存储的可调用对象被称之为`std::function`的目标。若`std::function`中不含目标，调用不含目标的std::function会抛出`std::bad_function_call`异常。
+
+
+## 使用
+```cpp
+
+
+```
+
+
+## 源码分析
+```cpp
+template<typename _Res, typename... _ArgTypes>
+class function<_Res(_ArgTypes...)>
+  : public _Maybe_unary_or_binary_function<_Res, _ArgTypes...>
+  , private _Function_base
+{
+private:
+    using _Invoker_type = _Res (*)(const _Any_data&, _ArgTypes&&...);
+    _Invoker_type _M_invoker;
+// ... ...
+// 还有很多成员函数
+};
+
+// 重载了operator()
+template<typename _Res, typename... _ArgTypes>
+_Res function<_Res(_ArgTypes...)>::operator()(_ArgTypes... __args) const
+{
+  if (_M_empty())
+      __throw_bad_function_call();
+  return _M_invoker(_M_functor, std::forward<_ArgTypes>(__args)...);    // 调用存储的可调用对象
+  // _M_functor的类型为_Any_data
+}
+
+```
+模板参数进行了偏特化，`_Res`为可调用目标的返回值类型，可调用目标的入参为`_ArgTypes`
+
+
+
+
+
+
+
+
+
+# 关于lambda表达式
+
+
+
+
+
+
+
+
+# 关于接收方缓存大小的问题
+GetNewSamples如果执行得太快，就会有数据没有来得及放入缓存中，也就是被丢弃了。
+
+
+
+
+
+## VECTOR代码中
+**size()返回实际作为payload的元素个数，capacity()返回实际申请的内存空间大小**
+
+(错误的调用)
+reactor_cache_是一个`StaticList<std::unique_ptr<IpcSampleCacheEntry<SampleType>>>`类型的变量
+### 调用`GetSamples`：
+将sample指针从reactor cache `move`到app cache，并提供对cache的访问
+该函数返回对`SampleCacheContainer`的引用，它应该被用于获取和移除cache中处理过的samples
+`GetSamples`的使用者不允许在修改返回的引用的同时调用`GetSamples`。
+
+调用该函数后，`SampleCacheContainer`可能有更少的、相同的、更多的元素
+更少：相比调用`GetSamples`时请求的可用元素更少了
+相等：至少还有请求时那么多的元素
+更多：在上一次`GetSamples`中，部分samples被处理了，并且当前调用请求更少的samples（比起上一次调用时未被处理的samples）
+
+#### 关于实现细节：
+
+
+（正确的调用）
+reactor_cache_是一个`StaticList<std::unique_ptr<SomeIpSampleCacheEntry>`类型的变量
+
+先对`reactor_cache_.size()`和`app_cache.size()`求和，计算`total_cache_size`，
+然后是一个for循环：
+  `InvisibleSampleCache`中，有一个`std::size_t`类型的成员`capacity_`，记录invisible cache存储的events的最大数量。
+  在for遍历的过程中，不断增加`drop_index`（初始化为`capacity`）
+  PS：对于超出buffer capacity的samples直接丢弃
+  直到：drop_index == total_cache_size
+  过程中，app_cache_不断`pop_front()`，所以其实是app_cache_有total_cache_size个元素出队列了（即便pop的次数超出了实际的长度，也没关系，对此会什么都不做）
+  （app_cache_总是有至少samples的充分的数量）
+
+接着，计算`cleaned_app_cache_size`（初始化为`app_cache_.size()`）。
+`available_samples_count`由`reactor_cache_.size()`和`cleaned_app_cache_size`求和得来。
+`samples_to_return`取自`requested_sample_count`（**入参**）和`available_samples_count`较小值。
+
+然后又是一个for循环：
+  遍历`samples_to_return - cleaned_app_cache_size`次，
+  过程中，
+  ```cpp
+  app_cache_.push_back(std::move(reactor_cache_.size()));
+  reactor_cache_.pop_front();
+  将samples移动到application cache
+  （application cache可能仍然储存上一次GetSamples调用的samples，只需从reactor_cache中移动差值即可达到请求的样本数）
+  ```
+循环的起始位置是应用程序缓存中已经存在的样本数量，因为这些样本不需要从反应堆缓存中获取。
+循环的终止条件是达到请求的样本数量或者反应堆缓存中的样本已经全部移动到应用程序缓存中。循环的每一次迭代都将反应堆缓存中的第一个样本移动到应用程序缓存的末尾，并从反应堆缓存中删除该样本。
+
 
 
 
