@@ -868,7 +868,7 @@ using Adjust = ara::com::internal::proxy::Method<ara::com::sample::radar::Adjust
 ```
 
 发送请求的函数：
-`MethodImpl`对象对外提供函数调用
+`MethodImpl`对象对外提供**函数调用**
 看起来是普通的函数，实际上做的是：
     创建promise对象，得到future对象，将`<requestId, future>`加入`pendingRequests_`
     Proxy端维护`<requestId, future>`的map，还用在`ReceiveRequestResults(&sample)`时`SetPromiseValue`
@@ -992,7 +992,9 @@ ara::core::Future<FieldType> Set(const FieldType& value);
 };
 ```
 
-客户端可以通过远程调用Getter方法获取Field的值，也可以通过远程调用 Setter 方法设置 Field 的值。另外和 Event 相似，当客户端订阅了某个事件组，若Event Group中包含的 Field 发生变化，服务端会主动的通过Notification消息通知客户端；当然，用户也可以选择周期发送Notification消息。
+客户端可以通过远程调用Getter方法获取Field的值，
+也可以通过远程调用Setter方法设置Field的值。另外和Event相似，当客户端订阅了某个事件组，若Event Group中包含的Field发生变化，服务端会主动的通过Notification消息通知客户端；
+当然，用户也可以选择周期发送Notification消息。
 
 **Field和Event的区别是：Field是一个持续存在的变量，比如多媒体音量、车速、环境温度等，这些可以在任何时刻获取；而Event指的是一个事件，事件没有发生就不存在，比如发生碰撞，出现故障等。**
 

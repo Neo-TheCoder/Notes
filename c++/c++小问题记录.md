@@ -142,14 +142,106 @@ _Res function<_Res(_ArgTypes...)>::operator()(_ArgTypes... __args) const
 
 
 
+# 关于std::forward的使用，以SamplePtr为例
+```cpp
+// 专用于sample数据的自定义智能指针
+template <typename T, typename... Args>
+SamplePtr<T> make_sample_ptr(Args&&... args)
+{
+    return SamplePtr<T>(new T(std::forward<Args>(args)...));
+}
+```
+此处使用了`std::forward`对入参进行完美转发（以保持参数的原始值类别和引用类型），
+`make_sample_ptr`函数的入参传递方式为右值引用，
+
+
+## 关于左值和右值
+简单理解：出现在等号左边的值是左值
+出现在等号右边的值是右值
+**左值可以用`&`取地址，而右值不行。**
+临时变量、字面值（1.23、100）也属于右值。
+```cpp
+Test t = T(); // T()就是临时变量，是右值，t属于左值
+
+const string &s = "asd";  // "asd"是字符串字面量，是不可被更改的左值，不具名，但是可以取地址，因而是左值
+```
+**纯右值**：
+1. 返回非引用类型的表达式
+`x+1、x++`
+2. 除了字符串字面量之外的字面量
+`42、true`
+
+**将亡值**：
+1. 隐式或显式调用函数的结果，该函数的返回类型是：对所返回对象类型的右值引用
+2. 对对象类型右值引用的转换
+```cpp
+static_cast<int&&>(7);
+std::move(7);
+```
+
+3. 类成员访问表达式，指定非引用类型的非静态数据成员，其中对象表达式是xvalue
+
+
+## 关于右值引用
+**&&不一定是代表右值引用**
+
+### 左值引用和右值引用
+**左值引用**：可以绑定到左值，某些情况下可以绑定到右值：
+  只有**常左值引用**可以绑定到右值，非常左值引用不能绑定到右值。
+
+**右值引用**：
+  只能绑定到右值
+
+**万能引用（转发引用）**：
+用&&声明，可能是左值引用，可能是右值引用
+
+### 万能引用出现场合
+如果一个变量或者参数被声明为`T&&`，**其中`T`是被推导的类型**，那这个变量或者参数就是一个**universal reference**。
+万能引用必须形如`T&&`
+
+实际情况中，几乎所有的万能引用都是**函数模板的参数**。因为auto声明的变量的类型推导规则本质上和模板是一样的，使用`auto`也可能得到一个万能引用。
+PS：使用`typedef`和`decltype`时，也可能出现万能引用。
+
+和所有的引用一样，你必须对universal references进行初始化，**正是其initializer决定了它到底代表的是lvalue reference 还是 rvalue reference**:
+如果用来初始化universal reference的表达式是一个**左值**，那么universal reference就变成**lvalue reference**。
+如果用来初始化universal reference的表达式是一个**右值**，那么universal reference就变成**rvalue reference**。
+
+
+## 生命周期延长
+一个变量的生命周期在超出作用域时结束。
+临时对象生命周期的规则是：一个临时对象 会在包含这个临时对象的完整表达式估值完成后、按生成顺序的逆序被销毁，除非有生命周期延长发生。
+
+
+### 临时对象生命周期的延长
+如果一个**prvalue**（对xvalue无效）被绑定到一个引用上，它的生命周期则会延长到跟这个引用变量一样长。
+如果纯右值在绑定到引用之前，就变成了将亡值，则生命周期不会延长。可以理解为，将亡值不会延长生命周期。
+
+#### 应用
+可以把没有（基类）虚析构的子类对象绑定到基类的引用变量上
+
+## 区分万能引用
+```cpp
+Widget&& var1 = someWidget;
+auto&& var2 = var1;
+```
 
 
 
-# 关于接收方缓存大小的问题
-GetNewSamples如果执行得太快，就会有数据没有来得及放入缓存中，也就是被丢弃了。
 
 
 
+
+
+## 把智能指针std::move会怎么样？
+
+
+
+
+
+
+
+# 关于通信的接收方缓存大小的问题
+GetNewSamples（ConvertToIdl）如果执行得太慢，就会有数据没有来得及放入缓存中，也就是被丢弃了，这是必然的，因为缓存不可能无限制增大（而且也必然是一开始就确定的一个大小），造成数据的堆积。
 
 
 ## VECTOR代码中
@@ -168,7 +260,6 @@ reactor_cache_是一个`StaticList<std::unique_ptr<IpcSampleCacheEntry<SampleTyp
 更多：在上一次`GetSamples`中，部分samples被处理了，并且当前调用请求更少的samples（比起上一次调用时未被处理的samples）
 
 #### 关于实现细节：
-
 
 （正确的调用）
 reactor_cache_是一个`StaticList<std::unique_ptr<SomeIpSampleCacheEntry>`类型的变量
@@ -195,9 +286,6 @@ reactor_cache_是一个`StaticList<std::unique_ptr<SomeIpSampleCacheEntry>`类�
   将samples移动到application cache
   （application cache可能仍然储存上一次GetSamples调用的samples，只需从reactor_cache中移动差值即可达到请求的样本数）
   ```
-循环的起始位置是应用程序缓存中已经存在的样本数量，因为这些样本不需要从反应堆缓存中获取。
-循环的终止条件是达到请求的样本数量或者反应堆缓存中的样本已经全部移动到应用程序缓存中。循环的每一次迭代都将反应堆缓存中的第一个样本移动到应用程序缓存的末尾，并从反应堆缓存中删除该样本。
-
-
-
+循环的起始位置是应用程序缓存中已经存在的样本数量，因为这些样本不需要从reactor缓存中获取。
+循环的终止条件是达到请求的样本数量或者reactor缓存中的样本已经全部移动到应用程序缓存中。循环的每一次迭代都将reactor缓存中的第一个样本移动到应用程序缓存的末尾，并从reactor缓存中删除该样本。
 
