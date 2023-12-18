@@ -218,14 +218,171 @@ PS：使用`typedef`和`decltype`时，也可能出现万能引用。
 
 #### 应用
 可以把没有（基类）虚析构的子类对象绑定到基类的引用变量上
+（绑定到派生类的引用和指向派生类的指针的区别在于：引用是别名，本身是不占据内存（先不考虑底层实现），因此不需要像指针那样`delete`，而是起到了延长生命周期的作用，到该析构的时候，自然是派生类析构了）
+
 
 ## 区分万能引用
 ```cpp
 Widget&& var1 = someWidget;
-auto&& var2 = var1;
+auto&& var2 = var1; // 等价于：Widget& var2 = var1;
+
+```
+注意：`var1`虽然是右值引用，但是左值。
+而`var2`由于类型声明为`auto&&`，所以是一个万能引用，并且因为被一个左值var1初始化了，所以`var2`变成了一个左值引用。
+
+```cpp
+std::vector<int> v;
+auto&& val = v[0];
+/*
+  v[0]，等价于std::vector<int>::operator[]，该函数返回vectot元素的左值引用（左值引用必然是左值），那么万能引用val也就被初始化为左值引用
+*/
+```
+
+```cpp
+template<typename T>
+void f(T&& param);  // “&&” might mean rvalue reference
+
+// 调用：
+f(10);  // 10是右值
+// param被字面值10（右值）初始化，则param变成右值引用，即int&&类型
+
+int x = 10;
+f(x); // param被左值初始化，param变成左值引用，即int&类型
+```
+在发生**类型推导**的时候，`&&`才代表 **universal reference**。
+如果没有**类型推导**，就没有universal reference。这种时候，类型声明当中的`&&`总是代表着rvalue reference。
+
+```cpp
+template<typename T>
+void f(T&& param);               // deduced parameter type ⇒ type deduction;
+                                 // && ≡ universal reference
+ 
+template<typename T>
+class Widget {
+    ...
+    Widget(Widget&& rhs);        // fully specified parameter type ⇒ no type deduction;
+    ...                          // && ≡ rvalue reference
+};
+ 
+template<typename T1>
+class Gadget {
+    ...
+    template<typename T2>
+    Gadget(T2&& rhs); // deduced parameter type ⇒ type deduction;
+    ... // && ≡ universal reference
+};
+ 
+void f(Widget&& param); // fully specified parameter type ⇒ no type deduction;
+// && ≡ rvalue reference
+```
+简单理解：如果你看到T&& (其中T是模板参数)，那这里就有类型推导，那T&&就是universal reference。如果你看到 “&&” 跟在一个具体的类型名后面 (e.g., Widget&&)，那它就是个rvalue reference。
+
+```cpp
+template<typename T>
+void f(std::vector<T>&& param); // “&&” means rvalue reference
+```
+！！！由于此处的参数不是`T&&`的形式，而是`std::vector<T>&&`，这就导致param只是一个普通的右值引用，而不是万能引用。
+```cpp
+template<typename T>
+void f(const T&& param);  // “&&” means rvalue reference
+// 也不是万能引用
+```
+
+```cpp
+template <class T, class Allocator = allocator<T> >
+class vector {
+public:
+    ...
+    void push_back(T&& x);       // fully specified parameter type ⇒ no type deduction;
+    ...                          // && ≡ rvalue reference
+};
+```
+为什么此处没有发生类型推导呢？
+这就要追溯到std::vector<T>::push_back的声明：
+```cpp
+template <class T>
+void vector<T>::push_back(T&& x);
+// 可见，和之前说的T&&的经典场景有所不同，因为vector<T>的T一旦确定，push_back的参数类型就完全确定了
+```
+
+```cpp
+template <class T, class Allocator = allocator<T> >
+class vector {
+public:
+    ...
+    template <class... Args>
+    void emplace_back(Args&&... args); // deduced parameter types ⇒ type deduction;
+    ...                                // && ≡ universal references
+};
+```
+`emplace_back`和`push_back`的情况不同：
+**它的每一个参数的类型都需要推导**。
+函数的模板参数Args和类的模板参数T无关。
+例如：std::vector<Widget>，还是没法知道`emplace_back`的入参类型
+
+```cpp
+template<class... Args>
+void std::vector<Widget>::emplace_back(Args&&... args); // 仍然需要推导
 ```
 
 
+### 表达式的左右值性质与类型无关
+**值类别（value category）**：用于区分左值、右值
+**值类型（value type）**：区分`reference type`，表明一个变量是实际数值，还是引用另外一个数值。
+在C++里，所有的原生类型、枚举、结构、联合、类都代表值类型，只有引用（&）和指针（*）才是引用类型。
+
+一个表达式的lvalueness (左值性)或者 rvalueness (右值性)和它的类型无关。
+
+来看下 int：可以有lvalue的int (e.g., 声明为int的变量)，还有rvalue的int (e.g., 字面值10)。用户定义类型Widget等等也是一样的。
+
+一个Widget对象可以是lvalue(e.g., a Widget 变量) 或者是rvalue (e.g., 创建Widget的工程函数的返回值)。
+
+表达式的类型不会告诉你它到底是个lvalue还是rvalue。因为表达式的 lvalueness 或 rvalueness 独立于它的类型，我们就可以有一个 lvalue，但它的类型确是 rvalue reference，也可以有一个 rvalue reference 类型的 rvalue :
+```cpp
+Widget makeWidget();
+// factory function for Widget
+ 
+Widget&& var1 = makeWidget();
+// var1 is an lvalue, but
+// its type is rvalue reference (to Widget)
+//  var1的类别是左值，但它的类型是右值引用
+
+Widget var2 = static_cast<Widget&&>(var1);
+// the cast expression yields an rvalue, but
+// its type is rvalue reference  (to Widget)
+// 右侧表达式是右值，但它的类型是右值引用
+```
+var1类别是左值，但它的类型是右值引用。static_cast<Widget&&>(var1)表达式是个右值，但它的类型是右值引用。
+
+把 lvalues (例如 var1) 转换成 rvalues 比较常规的方式是对它们调用std::move，所以 var2 可以像这样定义:
+```cpp
+Widget var2 = std::move(var1);             // equivalent to above
+```
+我最初的代码里使用 static_cast 仅仅是为了显示的说明这个表达式的类型是个rvalue reference (Widget&&)。rvalue reference 类型的具名变量和参数是 lvalues。(你可以对他们取地址。)
+
+```cpp
+template<typename T>
+class Widget {
+    ...
+    Widget(Widget&& rhs);        // rhs’s type is rvalue reference,
+    ...                          // but rhs itself is an lvalue
+};
+ 
+template<typename T1>
+class Gadget {
+    ...
+    template <typename T2>
+    Gadget(T2&& rhs);            // rhs is a universal reference whose type will
+    ...                          // eventually become an rvalue reference or
+};                               // an lvalue reference, but rhs itself is an lvalue
+```
+
+在 Widget 的构造函数当中, rhs 是一个rvalue reference，前面提到，**右值引用只能被绑定到右值上**，所以我们知道它被绑定到了一个rvalue上面(i.e., 因此我们需要传递了一个rvalue给它)。
+但是 rhs 本身是一个 lvalue，所以，当我们想要用到这个被绑定在 rhs 上的rvalue 的 rvalueness 的时候，我们就需要把 rhs 转换回一个rvalue。之所以我们想要这么做，是因为我们想将它作为一个移动操作的source，这就是为什么我们用`std::move`将它转换回一个 rvalue。
+
+类似地，Gadget 构造函数当中的rhs 是一个 universal reference，所以它可能绑定到一个 lvalue 或者 rvalue 上，但是**无论它被绑定到什么东西上，rhs 本身还是一个 lvalue**。
+如果它被绑定到一个 rvalue 并且我们想利用这个rvalue 的 rvalueness， 我们就要重新将 rhs 转换回一个rvalue。如果它被绑定到一个lvalue上，当然我们就不想把它当做 rvalue。
+**一个绑定到universal reference上的对象可能具有 lvalueness 或者 rvalueness，正是因为有这种二义性，所以催生了std::forward**: 如果一个本身是 lvalue 的 universal reference 如果绑定在了一个 rvalue 上面，就把它重新转换为rvalue。函数的名字 (“forward”) 的意思就是，我们希望在传递参数的时候，可以保存参数原来的lvalueness 或 rvalueness，即是说把参数**转发**给另一个函数。
 
 
 
