@@ -327,6 +327,7 @@ void std::vector<Widget>::emplace_back(Args&&... args); // 仍然需要推导
 
 
 ### 表达式的左右值性质与类型无关
+**！！！**
 **值类别（value category）**：用于区分左值、右值
 **值类型（value type）**：区分`reference type`，表明一个变量是实际数值，还是引用另外一个数值。
 在C++里，所有的原生类型、枚举、结构、联合、类都代表值类型，只有引用（&）和指针（*）才是引用类型。
@@ -382,10 +383,96 @@ class Gadget {
 
 类似地，Gadget 构造函数当中的rhs 是一个 universal reference，所以它可能绑定到一个 lvalue 或者 rvalue 上，但是**无论它被绑定到什么东西上，rhs 本身还是一个 lvalue**。
 如果它被绑定到一个 rvalue 并且我们想利用这个rvalue 的 rvalueness， 我们就要重新将 rhs 转换回一个rvalue。如果它被绑定到一个lvalue上，当然我们就不想把它当做 rvalue。
-**一个绑定到universal reference上的对象可能具有 lvalueness 或者 rvalueness，正是因为有这种二义性，所以催生了std::forward**: 如果一个本身是 lvalue 的 universal reference 如果绑定在了一个 rvalue 上面，就把它重新转换为rvalue。函数的名字 (“forward”) 的意思就是，我们希望在传递参数的时候，可以保存参数原来的lvalueness 或 rvalueness，即是说把参数**转发**给另一个函数。
+**一个绑定到universal reference上的对象可能具有 lvalueness 或者 rvalueness，正是因为有这种二义性，所以催生了`std::forward`**: 如果一个本身是 lvalue 的 universal reference 如果绑定在了一个 rvalue 上面，就把它重新转换为rvalue。
+函数的名字 (“forward”) 的意思就是，我们希望在传递参数的时候，可以保存参数原来的lvalueness 或 rvalueness，即是说把参数**转发**给另一个函数。
 
 
+### 引用折叠和完美转发
+为了说明一个万能引用是如何在经过类型推导和引用折叠后，变成一个左值引用的
+实际上，universal reference 其实只是一个身处于引用折叠背景下的rvalue reference。
 
+#### 引用折叠本质细节
+c++禁止引用的引用。
+在对一个universal reference的模板参数进行类型推导时候，同一个类型的 lvalues 和 rvalues 被推导为稍微有些不同的类型。
+具体来说，类型T的lvalues被推导为T&(i.e., lvalue reference to T)。
+而类型T的 rvalues 被推导为 T。
+(注意，虽然 lvalue 会被推导为lvalue reference，但 rvalues 却不会被推导为 rvalue references!) 
+我们来看下分别用rvalue和lvalue来调用一个接受universal reference的模板函数时会发生什么:
+```cpp
+template<typename T>
+void f(T&& param);
+ 
+int x;
+ 
+f(10);  // invoke f on rvalue
+// T被推导为int
+
+f(x); // invoke f on lvalue
+// T被推导为int&，那么代码就变成：
+void f(int& && param);
+
+// 编译器实际上处理为：
+void f(int& param);
+```
+为了避免编译器对此处的代码报错，C++提供了**引用折叠**的设定。
+
+**引用折叠可能的情况**
+1. lvalue reference to lvalue reference
+2. lvalue reference to rvalue reference
+3. rvalue reference to lvalue reference
+4. rvalue reference to rvalue reference
+
+**引用折叠两条规则**
+1. 一个 rvalue reference to an rvalue reference 会变成 (“折叠为”) 一个 rvalue reference.
+2. 所有其他种类的"引用的引用" (i.e., 组合当中含有lvalue reference) 都会折叠为 lvalue reference.
+
+```cpp
+// ！！！当一个变量本身的类型是引用类型，会忽略类型中所带的引用
+int x;
+ 
+int&& r1 = 10;  // r1’s type is int&&
+ 
+int& r2 = x;  // r2’s type is int&
+
+```
+调用`f`时，`r1`和`r2`的类型都被认为是`int`，为什么呢？
+```cpp
+template<typename T>
+void f(T &&param) {
+    static_assert(std::is_lvalue_reference<T>::value, "T& is lvalue reference");
+    cout << "T& is lvalue reference" << endl;
+}
+
+int main()
+{
+    int x;
+    int &&r1 = 10;
+    int &r2 = x;
+    f(r1);
+    f(r2);
+}
+```
+会发现，r1和r2的类型都被推导为`int&`。
+因为都是左值，所以对万能引用参数进行类型推导时，得到的类型都是`int&`。
+
+引用折叠只发生在“像是**模板实例化**这样的场景当中”。 
+声明auto变量是另一个这样的场景。
+**推导一个universal reference的 auto 变量的类型**，在本质上和**推导universal reference的函数模板参数是一样的**，所以类型T的lvalue被推导为T&，类型T 的rvalue被推导为T。
+```cpp
+Widget&& var1 = someWidget;      // var1 is of type Widget&& (no use of auto here)
+ 
+auto&& var2 = var1;              // var2 is of type Widget& (see below)
+var1 的类型是 Widget&&，但是它的 reference-ness 在推导 var2 类型的时候被忽略了;var1 这时候就被当做 Widget。
+```
+因为它是个lvalue，所以初始化一个universal reference(var2)的时候，var1 的类型就被推导成Widget&。
+在 var2 的定义当中将 auto 替换成Widget& 会生成下面的非法代码:
+```cpp
+Widget& && var2 = var1;          // note reference-to-reference
+```
+而在引用折叠之后，就变成了:
+```cpp
+Widget& var2 = var1;             // var2 is of type Widget&
+```
 
 
 
