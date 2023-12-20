@@ -462,8 +462,9 @@ int main()
 Widget&& var1 = someWidget;      // var1 is of type Widget&& (no use of auto here)
  
 auto&& var2 = var1;              // var2 is of type Widget& (see below)
-var1 的类型是 Widget&&，但是它的 reference-ness 在推导 var2 类型的时候被忽略了;var1 这时候就被当做 Widget。
 ```
+var1 的类型是 Widget&&，但是它的 reference-ness 在推导 var2 类型的时候被忽略了;var1 这时候就被当做 Widget。
+
 因为它是个lvalue，所以初始化一个universal reference(var2)的时候，var1 的类型就被推导成Widget&。
 在 var2 的定义当中将 auto 替换成Widget& 会生成下面的非法代码:
 ```cpp
@@ -473,6 +474,152 @@ Widget& && var2 = var1;          // note reference-to-reference
 ```cpp
 Widget& var2 = var1;             // var2 is of type Widget&
 ```
+
+
+
+#### 引用折叠之场景三
+在形成和使用`typedef`时
+```cpp
+template<typename T>
+class Widget {
+    typedef T& LvalueRefType;
+    ...
+};
+int main() {
+    Widget<int&> w; // 根据引用折叠规则，这样子调用Widget，T会被推导为int&，那么在typedef中，LvalueRefType就是T的引用，即左值引用的左值引用，折叠为左值引用
+}
+```
+
+
+#### `decltype`
+decltype对一个具名的、非引用类型的变量，会推导为类型T (i.e., 一个非引用类型)。
+在相同条件下，模板和auto却会推导出T&。
+decltype 进行类型推导只依赖于 decltype 的表达式; 用来对变量进行初始化的表达式的类型(如果有的话)会被忽略。
+```cpp
+Widget w1, w2;
+auto&& v1 = w1;   // v1是左值引用（因为w1是左值，是具名对象）
+decltype(w1)&& v2 = w2;    // decltype表达式推导结果为Widget，因此w2很明确地是右值引用，没法绑定到左值
+```
+
+```cpp
+template <typename T>
+foo(T &&)
+```
+**T类型的推导和形参的类型有关**
+如果传递过去的参数是左值，T 的推导结果是左值引用，那`T&&`的结果仍然是左值引用--即 T& && 坍缩成了T&。
+如果传递过去的参数是右值，T 的推导结果是参数的类型本身。那 T&& 的结果自然就是一个右值引用。
+
+
+```cpp
+#include<iostream>
+
+class shape{
+public:
+    shape() = default;
+};
+
+void foo(const shape&)
+{
+	puts("foo(const shape&)");
+}
+void foo(shape&&)
+{
+	puts("foo(shape&&)");
+}
+void bar(const shape& s)
+{
+	puts("bar(const shape&)");
+	foo(s);
+}
+void bar(shape&& s)
+{
+	puts("bar(shape&&)");
+	foo(s);
+}
+int main()
+{
+	bar(shape());
+}
+```
+
+结果：
+bar(shape&&)
+foo\(const shape&）
+
+bar中传入的是右值，调用bar的&&重载函数，但是对于void bar(shape&& s)来说，s本身是一个lvalue，所以在foo(s)后，仍旧调用的是&重载函数。
+
+
+```cpp
+void foo(const shape&)
+{
+	puts("foo(const shape&)");
+}
+void foo(shape&&)
+{
+	puts("foo(shape&&)");
+}
+template <typename T>
+void bar(T&& s)
+{
+	foo(std::forward<T>(s));  /// 完美转发的意义是：如果s绑定在了右值上，就重新转为右值，如果不完美转发的话，s是右值引用，但是本身是左值，就调用左值的函数去了
+}
+int main() {
+    circle temp;
+    bar(temp);
+    bar(circle());
+}
+```
+
+
+### `std::move()`与`std::forward()`源码剖析
+```cpp
+// 移除引用
+template<typename _Tp>
+struct remove_reference
+{ typedef _Tp   type; };
+// 目的是去除引T中的用部分，只获取类型部分
+
+// 特化版本
+template<typename _Tp>
+struct remove_reference<_Tp&>
+{ typedef _Tp   type; };
+
+template<typename _Tp>
+struct remove_reference<_Tp&&>
+{ typedef _Tp   type; };
+```
+
+
+```cpp
+// std::forward 转发左值
+template<typename _Tp>
+constexpr _Tp&&
+forward(typename std::remove_reference<_Tp>::type& __t) noexcept
+{ return static_cast<_Tp&&>(__t); }
+```
+
+```cpp
+// std::forward 转发右值
+template<typename _Tp>
+constexpr _Tp&&
+forward(typename std::remove_reference<_Tp>::type&& __t) noexcept
+{
+  static_assert(!std::is_lvalue_reference<_Tp>::value, "template argument"
+        " substituting _Tp is an lvalue reference type");
+  return static_cast<_Tp&&>(__t);
+}
+```
+
+```cpp
+// std::move
+template<typename _Tp>  constexpr typename std::remove_reference<_Tp>::type&&  move(_Tp&& __t) noexcept  
+{ 
+    return static_cast<typename std::remove_reference<_Tp>::type&&>(__t); 
+}
+```
+
+
+
 
 
 
