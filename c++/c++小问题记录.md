@@ -359,7 +359,7 @@ var1类别是左值，但它的类型是右值引用。static_cast<Widget&&>(var
 ```cpp
 Widget var2 = std::move(var1);             // equivalent to above
 ```
-我最初的代码里使用 static_cast 仅仅是为了显示的说明这个表达式的类型是个rvalue reference (Widget&&)。rvalue reference 类型的具名变量和参数是 lvalues。(你可以对他们取地址。)
+最初的代码里使用 static_cast 仅仅是为了显示的说明这个表达式的类型是个rvalue reference (Widget&&)。rvalue reference 类型的具名变量和参数是 lvalues。(你可以对他们取地址。)
 
 ```cpp
 template<typename T>
@@ -582,7 +582,7 @@ struct remove_reference
 // 特化版本
 template<typename _Tp>
 struct remove_reference<_Tp&>
-{ typedef _Tp   type; };
+{ typedef _Tp   type; };    // 原理是特化一个左值引用版本，如果是左值引用类型，就会匹配到这里，然后通过typedef使得type取得纯粹的类型
 
 template<typename _Tp>
 struct remove_reference<_Tp&&>
@@ -596,6 +596,7 @@ template<typename _Tp>
 constexpr _Tp&&
 forward(typename std::remove_reference<_Tp>::type& __t) noexcept
 { return static_cast<_Tp&&>(__t); }
+// 先取得纯粹类型type，然后定义一个type类型的左值引用类型的左值变量__t，再对这个变量强转为右值引用类型，！！！发生引用折叠，如果_Tp是左值引用类型，则折叠为_Tp&，最后返回一个左值引用类型，如果_Tp被推导为右值引用类型，则返回右值引用类型
 ```
 
 ```cpp
@@ -608,6 +609,9 @@ forward(typename std::remove_reference<_Tp>::type&& __t) noexcept
         " substituting _Tp is an lvalue reference type");
   return static_cast<_Tp&&>(__t);
 }
+/*
+    当不是左值类型的时候，才继续往下执行
+*/
 ```
 
 ```cpp
@@ -617,10 +621,14 @@ template<typename _Tp>  constexpr typename std::remove_reference<_Tp>::type&&  m
     return static_cast<typename std::remove_reference<_Tp>::type&&>(__t); 
 }
 ```
+传递的是左值，推导`_Tp`为左值引用，仍旧`static_cast`转换为右值引用。
+传递的是右值，推导`_Tp`为右值引用，仍旧`static_cast`转换为右值引用。
 
 
-
-
+## 总结
+在《Effective Modern C++》中建议：对于右值引用使用`std::move`，对于万能引用使用`std::forward`。
+`std::move()`与`std::forward()`都仅仅做了类型转换而已。**真正的移动操作**是在**移动构造函数**或者**移动赋值操作符**中发生的。
+`std::move()`可以应用于左值(普通的变量int这些使用move与不使用move效果一样)，但这么做要谨慎。因为一旦**移动了左值**，就**表示当前的值不再需要了**，如果后续使用了该值，产生的行为是未定义。
 
 
 ## 把智能指针std::move会怎么样？
