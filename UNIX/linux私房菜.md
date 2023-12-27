@@ -37,13 +37,114 @@ Linux一般将文件可存取的身份分为三个类别：
 1. owner
 2. group
 3. others（非本群组外的其他人）
-三个类别各自具有read/write/execute权限
+三个类别各自具有`read/write/execute`权限
 
 ## 5.1 使用者与群组
+### 1 文件拥有者
+
+### 2 群组
+使得文件能够某些群组的成员访问，其余人不能访问，而一个成员可以同时属于多个群组
+多个用户虽然在同一群组内，但是我们可以设置“权限”， 好让某些使用者个人的信息不被群组的拥有者查询，实现“私人空间”。 而设置群组共享，则可使得资源共享。
+而root什么都能访问
+
+Linux中，系统上的账号、root的相关信息，都记录在`/etc/passwd`，Linux所有的群组名称都记录在`/etc/group`，个人密码：`/etc/shadow`
+
+## 5.2 Linux文件权限概念
+### 5.2.1 Linux文件属性
+```sh
+drwxrwxrwx  4 test test 4096 Dec 26 10:09 .
+drwxrwxrwx 10 test test 4096 Dec 26 17:51 ..
+drwxrwxrwx  3 test test 4096 Dec 26 17:43 apd
+drwxrwxrwx  2 test test 4096 Dec 26 16:28 data
+-rwxrwxrwx  1 test test  692 Sep 27 13:45 someip_event_method_field.xml
+```
+#### 第一栏
+文件属性：
+`- rwx rwx ---`
+1. 第一个字符表示文件的类型：
+    d：目录
+    -：文件
+    l：链接文件
+    b：设备文件中的可随机存取设备
+    c：设备文件中的一次性读取设备（键盘、鼠标）
+
+2. 第一组rwx表示：**文件拥有者**可具备的权限
+3. 第二组rwx表示：加入此群组的账号的权限
+4. 第三组rwx表示：非本人、且没有加入本群组的账号的权限
+
+#### 第二栏
+表示有多少文件名链接到此节点（i-node）
+每个文件都会将他的权限与属性记录到文件系统的i-node中，不过，我们使用的目录树却是使用文件名来记录， 因此每个文件名就会链接到一个i-node。这个属性记录的，就是有多少不同的文件名链接到相同的一个i-node号码。 
+
+#### 第三栏
+表示这个文件（或目录）的拥有者账号
+
+#### 第四栏
+表示这个文件的所属群组
+
+#### 第五、六栏
+大小，单位为Byte
+文件创建日期/最近修改日期
+
+PS：对于目录这种文件而言，没有x（执行权限）就无法进入，因为无法`cd`
 
 
+### 5.2.2 如何改变文件属性与权限
+`chgrp`：change group
+改变文件所属群组
 
+`chown`
+改变文件拥有者
+```sh
+sudo chown bin initial-setup-ks.cfg # 将文件拥有者改为bin账号
+sudo chown root:root initial-setup-ks.cfg # 修改文件拥有者、群组，中间用冒号隔开
+```
+**使用场景**
+`cp`文件给别人时：
+```sh
+[root@study ~]# cp .bashrc .bashrc_test
+[root@study ~]# ls -al .bashrc*
+-rw-r--r--. 1 root root 176 Dec 29 2013 .bashrc
+-rw-r--r--. 1 root root 176 Jun 3 00:04 .bashrc_test # 复制时，新文件的属性没变
+```
 
+`chmod`
+改变文件的权限（SUID、SGID、SBIT等等）
+```sh
+[root@study ~]# chmod [-R] xyz 文件或目录
+选项与参数：
+xyz : 就是刚刚提到的数字类型的权限属性，为 rwx 属性数值的相加。
+-R : 进行递回（recursive）的持续变更，亦即连同次目录下的所有文件都会变更
+
+# 数字方式
+chmod 644 .bashrc
+
+#字符方式
+chmod u=rwx,go=rx .bashrc
+
+# 去掉所有人的可执行权限
+chmod a-x .bashrc
+```
+
+### 5.2.3 目录与文件之权限意义
+#### 对于文件
+文件是实际含有数据的地方，包括一般文本文件、数据库内容档、二进制可可执行文件（binary program）等等。 因此，权限对于文件来说，他的意义是这样的：
+1. r （read）：可读取此一文件的实际内容，如读取文本文件的文字内容等；
+2. w （write）：可以编辑、新增或者是修改该文件的内容（但**不含删除**该文件）；
+3. x （eXecute）：该文件具有可以被系统执行的权限。
+
+#### 对于目录
+目录主要的内容在记录文件名清单
+1. r （read contents in directory）：
+    表示具有读取目录结构清单的权限，所以当你具有读取（r）一个目录的权限时，表示你可以查询该目录下的文件名数据。
+2. w （modify contents of directory）：
+    表示你具有异动该目录结构清单的权限：
+        创建新的文件与目录；
+        删除已经存在的文件与目录（不论该文件的权限为何！）
+        将已存在的文件或目录进行更名；
+        搬移该目录内的文件、目录位置。
+3. x （access directory）：
+    目录的x代表的是使用者能否进入该目录成为工作目录（即当前目录）的用途
 
 
 
