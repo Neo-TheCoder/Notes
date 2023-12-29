@@ -25,6 +25,49 @@ void Dispatch() override
 }
 ```
 
+其中`Read`的逻辑
+```cpp
+/// @uptrace{SWS_CM_11023, d6e9c1dd378daaeab3db3f26c35dbc2db6c1761d}
+template <typename T>
+typename DataReader<T>::ContainerType DataReader<T>::Read(size_t maxNumberOfSamples)
+{
+    ContainerType result;
+
+    if (!IsValid()) {
+        return result;
+    }
+
+    typename DDSTypeInfo<T>::dds_type_t sample;
+
+    eprosima::fastdds::dds::SampleInfo samplesInfo;
+
+    auto status = reader_->take_next_sample(&sample, &samplesInfo);
+    // no new samples
+    if (status == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA) {
+        return result;
+    }
+
+    if (status != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        common::logger().LogError() << "DataReader::Read(): reading failed with status " << status();
+        return result;
+    }
+
+    if (samplesInfo.valid_data)
+    {
+        result.push_back(sample);
+    }
+    return result;
+}
+```
+
+
+
+
+
+
+
+
+
 ## proxy
 维护一个`std::unordered_map<types::RequestId, ara::core::Promise<Output>`类型的`pendingRequests_`，在用户层调用method方法时：
 发送请求，每发送一个method request，则创建promise对象，将`<request_id, promise>`存储到map
@@ -146,5 +189,70 @@ auto radarImp::Adjust(const Position& target_position) -> decltype(Skeleton::Adj
 ```
 
 
+# 收发相关的数据类型信息
+***AP_Project/event_method_field/apd/RadarFusionMachine/src/fusion/net-bindings/fastdds/ara/com/sample/type_info_proxy_impl_radar.h***
+猜测是结合了fastdds自带的`rpc机制`
 
+`Radar_Method_Request`的定义在：
+    **AP_Project/event_method_field/apd/RadarFusionMachine/src/radar/net-bindings/fastdds/ara/com/sample/fastdds_impl_type_radar_method_request.h**
+```cpp
+struct MethodCommonTypeInfo
+{
+    struct request
+    {
+        using dds_type_t = dds_types::ara::com::sample::Radar_Method_Request;
+        using dds_type_support_t = dds_types::ara::com::sample::Radar_Method_RequestPubSubType;  // TopicDataType
+        static constexpr char* dds_type_name="dds_types::ara::com::sample::Radar_Method_Request";
+    };
+
+    struct reply
+    {
+        using dds_type_t = dds_types::ara::com::sample::Radar_Method_Reply;
+        using dds_type_support_t = dds_types::ara::com::sample::Radar_Method_ReplyPubSubType;  // TopicDataType
+        static constexpr char* dds_type_name="dds_types::ara::com::sample::Radar_Method_Reply";
+    };
+
+};
+
+struct MethodAdjustTypeInfo
+{
+  using request = MethodCommonTypeInfo::request;
+  using reply = MethodCommonTypeInfo::reply;
+      static inline ::dds_types::ara::com::sample::Radar_Method_Adjust_In MakeObject(
+          ::ara::com::sample::Position const& target_position_
+  )
+  {
+    using namespace ara::com::internal::dds;
+    ::dds_types::ara::com::sample::Radar_Method_Adjust_In obj;
+        ConvertToIdl(target_position_,obj.target_position());
+        return obj;
+  }
+};
+```
+
+
+
+
+## 涉及到的dds数据类型
+### `Radar_Method_Request`
+两个成员：
+1. `dds::rpc::RequestHeader`
+2. `dds_types::ara::com::sample::Radar_Method_Call`
+
+
+    #### `Radar_Method_Call`
+    1. m__d
+    2. `dds_types::ara::com::sample::Radar_Method_Adjust_In`
+    建模时配置的method**入参**的类型
+
+
+
+### `Radar_Method_Reply`
+1. `dds::rpc::ReplyHeader m_header`
+2. `dds_types::ara::com::sample::Radar_Method_Return`
+
+    #### `Radar_Method_Return`
+    1. m__d
+    2. `dds_types::ara::com::sample::Radar_Method_Adjust_Result`
+    建模时配置的method**出参**的类型
 

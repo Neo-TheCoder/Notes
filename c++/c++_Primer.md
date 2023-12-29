@@ -2767,3 +2767,30 @@ std::atmoic用于保护一个变量
 比如在C＋＋中调用C库函数，就需要在C＋＋程序中用 extern “C” 声明要引用的函数。这是给链接器用的，告诉链接器在链接的时候用C函数规范来链接。主要原因是C＋＋和C程序编译完成后在目标代码中命名规则不同。
 
 
+#### optional
+容器类，表示一个可能存在或不存在的值，提高代码的可读性和安全性
+```cpp
+#include <iostream>
+#include <optional>
+
+std::optional<int> divide(int a, int b) {
+    if (b != 0) {
+        return a / b;
+    } else {
+        return std::nullopt; // 表示没有值
+    }
+}
+
+int main() {
+    std::optional<int> result = divide(10, 2);
+    if (result.has_value()) {
+        std::cout << "Result: " << result.value() << std::endl;
+    } else {
+        std::cout << "Division by zero!" << std::endl;
+    }
+    
+    return 0;
+}
+```
+
+
