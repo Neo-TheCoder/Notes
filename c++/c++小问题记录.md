@@ -879,3 +879,160 @@ reactor_cache_是一个`StaticList<std::unique_ptr<SomeIpSampleCacheEntry>`类�
 循环的起始位置是应用程序缓存中已经存在的样本数量，因为这些样本不需要从reactor缓存中获取。
 循环的终止条件是达到请求的样本数量或者reactor缓存中的样本已经全部移动到应用程序缓存中。循环的每一次迭代都将reactor缓存中的第一个样本移动到应用程序缓存的末尾，并从reactor缓存中删除该样本。
 
+
+# `unique_ptr`作为函数参数时，应该以`值`还是`右值引用`类型传递？
+情况无非以下几种：
+```cpp
+1. By value
+  callee(unique_ptr<Widget> smart_w)
+
+2. By non-const l-value reference
+  callee(unique_ptr<Widget> &smart_w)
+
+3. By const l-value reference
+  callee(const unique_ptr<Widget> &smart_w)
+
+4. By r-value reference
+  callee(unique_ptr<Widget> &&smart_w)
+
+// 裸指针调用
+callee(Widget *w)
+callee(Widget &w)
+callee(const Widget *w)
+callee(const Widget &w)
+// 虽然引用和指针本质上一样，但是使用时有区别：w是否可以是mullptr，引用可没法绑定到空指针上
+// const类型的指针，意味着w这个裸指针不能修改其内部数据，只允许调用Widget的只读方法
+```
+
+
+## By value: callee(unique_ptr<Widget> smart_w)
+caller（来调用callee），必然要产生一个copy，传给callee，让它使用。
+即从对象上看，caller有一个对象，callee也有一个对象，是**两个对象**，但是callee对象是从caller复制而来。
+caller和callee分别管理自己对象的生命周期lifetime。
+callee管理起来比较简单，因为函数参数总是在其堆栈上，所以是自动管理的，函数退出即销毁。
+如果Copy by value for smart pointer，也是两个对象，即两个smart pointer对象。
+但smart pointer会很特别：
+smart pointer里面有一个**内部指针**，指向一个要用的对象（一般在heap上）。即caller和callee，虽然都有一个自己的smart pointer对象（重点在于，毕竟还是个指针，不是本体），但它们可能通过内部指针，指向某一个共有的真正要用到的对象。
+对于`unique pointer`，这个内部指针所指向的对象，就是实际的Widget对象。
+对于`shared pointer`，这个内部指针所指向的对象，并不是实际的对象(Widget indirectly)，它包括两样东西：一个共享计数（或者准确说：两个共享计数，但常规理解，只考虑其中的唯一strong counter）和一个真正的Widget对象指针。
+
+
+## `unique_ptr`由于其特殊性，不可以copy
+```cpp
+void callee(unique_ptr<Widget> smart_w)
+{
+  // ... use smart_w
+}
+
+void caller()
+{
+  unique_ptr<Widget> smart_w = std::make_unique<Widget>();
+
+  callee(smart_w);    // 编译报错，unique pointer不能直接copy
+
+  // 必须调用std::move
+  callee(std::move(smart_w));
+
+}
+```
+`std::move`表示这个对象的资源（对于智能指针，资源就是`Widget对象`）理应被转移走了，
+
+```cpp
+void caller()
+{
+  callee(std::move(smart_w));
+
+  smart_w->method();    // 这个很可能导致Segment Fault，是绝对错误的，因为smart_w已经无效了(Widget不见了)，指针对象被转移到callee中去了，生命周期也改变了，其内部指针所指向的Widget，转给了callee。caller的smart_w，其内部指针不再指向Widget了。
+}
+```
+注意：caller的smart_w，其内部指针不再指向Widget了。
+我们也称之为sink。即Widget这个资源，从caller()，下降到callee()里;或者说，caller里的smart_w，已经转移Widget的ownership到callee里的smart_w。（之所以移动了指针对象，酒把指针指向的对象的所有权都转移了，是因为移动构造函数）
+
+`callee(const unique_ptr<Widget> smart_w)`是一个特别变种，本质和`unique_ptr<Widget> smart_w`差别不大，只是callee()申明smart_w不会变（但仍可以调用里面Widget的write动作）。类似`foo(int *p)`和`foo(int * const p)`的道理（注意：不是foo(const int *p)）。
+
+
+## By non-const l-value reference: callee(unique_ptr<Widget> &smart_w)
+
+### l-value reference的意义
+和raw pointer指针的意义是一样的: caller和callee都指向同一对象。
+从代码角度，我们为什么要用reference，几个理由：
+1. 避免上面的copy by value，因为copy可能是个很大的动作（cost is big），即callee()里的第二个对象（即参数）的建造constrution是很消耗资源的（CPU时间或大的内存分配）。
+2. 我们应该在callee()里修改这个对象，然后callee返回后，caller()可以看到这个改过的效果。
+当然，在callee()里，程序员有权可以不修改这个对象，如果是绝对不修改，我们不应该用non const，我们需要加上const（可以参考下面的By const l-value reference）。不管如何，这里既然没有加上const，也就是说：我们在callee()有意向要修改，至少有一行修改的代码，即使它可能出现在if等conditional语句下。
+
+#### 用在unique pointer这个对象上，又是何意义
+修改smart_w又是什么含义？正常来说，应该是**换掉里面的Widget**（因为unique ptr内容就一个指针，指向Widget）。比如：smart_w不再指向当前的Widget对象，而是另外一个Widget对象（或者清空为nullptr也可以，anyway，我们必须修改之）。
+
+但是实际生产应用中，上面的逻辑几乎看不到。通过上面的分析，我们发现实践中，这样做的可能性不大。我们为什么要换掉一个unique pointer里指向的Widget呢？
+所以，结论：By non-const l-value reference理论上可以用，但几乎看不到这样的实际案例。如果我是code viewer，如果有程序员这样用了l-value reference for unique ptr，第一时间，我会怀疑他/她用错了，然后仔细检查callee()的逻辑代码。
+
+
+## By const l-value reference: callee(const unique_ptr<Widget> &smart_w)
+unique pointer禁止copy，所以应该不用考虑copy的开销，那为什么不用原始指针呢？
+```cpp
+void caller()
+{
+  unique_ptr<Widget> smart_w = std::make_unique<Widget>();
+  callee(smart_w);
+}
+
+void callee(const unique_ptr<Widget> &smart_w)
+{ // callee不会修改smart_w对象
+  // use smart_w
+}
+
+// 这样调用
+void caller()
+{
+  unique_ptr<Widget> smart_w = std::make_unique<Widget>();
+  callee(smart_w.get());
+}
+
+void callee(Widget *w)
+{
+  // use w
+}
+
+```
+你可能会说，unique pointer安全呀，我们用smart pointer就是为了保证资源不会泄漏。而raw pointer做不到资源安全呀。
+**如果callee的raw pointer保证来自caller的smart pointer，它也保证资源是安全的**。
+```cpp
+void caller()
+{
+  unique_ptr<Widget> smart_w = std::make_unique<Widget>();
+
+  callee1(smart_w.get());
+
+  callee2(smart_w.get());
+
+  // 可以继续用smart_w，也可以随便抛出异常
+}   // guarantee: 当caller退出后，smart_w的析构函数会销毁Widget资源，不管发生任何异常 --> 而不造成资源泄露：因为抛出异常而没能释放资源
+
+void callee1(Widget *w)
+{
+  // use w，同时，可以随便抛出异常
+}
+
+void callee2(Widget *w)
+{
+  // use w，同时，可以随便抛出异常
+}
+```
+而从代码规范的角度来看，callee里`delete`的话，确实会有问题，但这种代码不应该通过code review，拿到裸指针，没有理由delete对象，delete对象的责任在caller。
+
+```
+Don’t pass a smart pointer as a function parameter unless you want to use or manipulate the smart pointer itself, such as to share or transfer ownership.  Prefer passing objects by value, *, or &, not by smart pointer.
+```
+
+
+
+## By r-value reference: callee(unique_ptr<Widget> &&smart_w)
+对于callee，如果参数是右值引用，我们应该在callee里拿走这个对象的资源（即Widget），同时，我们应该将参数的资源，设置为空（一般是nullptr）。
+当然，callee()里面可以不做这些动作（C++程序员的上帝自由），但在caller()角度，这非常让人疑惑，callee你到底是拿，还是不拿？或者说，为了调用callee()，caller必须用std::move()，callee你就算不拿，caller也不敢继续用了。
+
+### 对于unique pointer右值引用和上面的By value的对比
+`unique pointer`是个non-copiable object，请参考上面的By value说明，unique pointer不能直接copy，必须`std::move()`下才可以，即**unique pointer的copy内部就是右值引用**。
+所以，用copy by value和右值引用，本质上，没有什么区分，用哪个都可以。但理论上，对于unique pointer，右值引用还是和copy by value有稍微不同。
+针对unique pointer，特定情况下，**右值引用对于编译器而言，效率要略高于copy by value**，但带来的麻烦是，代码中，我们必须不停使用`perfect forwarding`。
+总之可以认为：**对于unique pointer，右值引用和Copy by value几乎等效**。
+
