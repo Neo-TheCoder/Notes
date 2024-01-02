@@ -3,6 +3,8 @@
 fastdds线程监听是否有数据，有则触发`on_data_available`，其中调用以下函数：
 解dds包，handlers_是`ara::core::Map<MethodId, Handler>`类型
 `using Handler = std::function<void(SampleType&)>;`
+维护：`ara::core::Map<requestId_t, typename MethodTypesInfo::request_t> pendingRequests_;`  `MethodTypesInfo::request_t`指的是dds::rpc生成的数据类型
+
 ```cpp
 void Dispatch() override
 {
@@ -10,7 +12,7 @@ void Dispatch() override
     for (auto& sample : samples) {  // 判断收到的请求，是否和offer的service::method关联
         auto discriminator = sample.data()._d();    // 是请求-应答idl数据的_d()方法，作用是返回discriminator的值
         // discriminator是判别器，也就是标识符，看起来应该存储在handlers_中
-        auto handler = handlers_.find(discriminator);   // handlers_是在AddMethodHandler时添加的
+        auto handler = handlers_.find(discriminator);   // handlers_是在AddMethodHandler时添加的，handlers_存储着method_id
         if (handler == handlers_.end()) {   // handler是std::function<void(SampleType&)>类型
             common::logger().LogError()
                 << "MethodDataDispatcher::Dispatch(): Method not found for sample with discriminator "
@@ -23,7 +25,37 @@ void Dispatch() override
         }
     }
 }
+
+
+其中handler->second(sample);的实际逻辑
+        // 此处的second(sample)，实际上是调用了初始化（调用Offer(common::HandleInfo handle, OnRequestType onRequest)）时AddMethodHandler()添加的函数，也就是EnqueueRequest
+                reader_->AddMethodHandler(MethodDescriptor::kMethodHash, [this](auto& sample) { EnqueueRequest(sample); });
+            的EnqueueRequest函数
+            // 内部实现：
+                void EnqueueRequest(typename MethodTypesInfo::request_t& sample)
+                {
+                    std::unique_lock<std::mutex> lock(pending_requests_lock_);
+                    auto nextId = GetNextId();
+                    pendingRequests_[nextId] = std::move(sample);   // 增加<method, method data>
+                    lock.unlock();
+                    onRequest_(this, nextId);
+                    // onRequest_ 该函数在初始化时Offer()的第二个入参传入 ！！！也就是处理请求的逻辑
+                    ！！！详情见初始化的分析：Execute(methodRef, requestId)：
+                }
+
 ```
+`Execute(methodRef, requestId)`处理请求的逻辑：
+1. `kEventSingleThread`
+    在Execute中直接调用`ProcessRequest(requestId)`
+
+2. `kEvent`
+    在Execute中，在`PendingRequests`中移除当前的request，通过条件变量，通知其他线程处理请求（对应`ProcessRequestTask`函数）
+    在`ServiceImpl`对象的`SetMethodCallProcessingMode`中，`StartWorkers`函数启动执行`ProcessRequestTask`的线程，而`SetMethodCallProcessingMode`是在`AddDelegate`中执行的，而`AddDelegate`是在`radarServiceAdapter`的`Connect()`中执行的，这一系列调用的**源头**是`OfferService`
+
+3. `kPoll`
+    不需要在Execute中处理，而是直接在用户层调用`ProcessNextMethodCall`：
+    其中调用`ProcessRequest()`，返回future对象，没处理完成的话，会阻塞，所以用户层调用`ProcessNextMethodCall`是在while循环中，并且sleep 500ms
+
 
 其中`Read`的逻辑
 ```cpp
@@ -62,12 +94,6 @@ typename DataReader<T>::ContainerType DataReader<T>::Read(size_t maxNumberOfSamp
 
 
 
-
-
-
-
-
-
 ## proxy
 维护一个`std::unordered_map<types::RequestId, ara::core::Promise<Output>`类型的`pendingRequests_`，在用户层调用method方法时：
 发送请求，每发送一个method request，则创建promise对象，将`<request_id, promise>`存储到map
@@ -83,7 +109,7 @@ typename DataReader<T>::ContainerType DataReader<T>::Read(size_t maxNumberOfSamp
         auto requestIterator = pendingRequests_.find(lastRequestId_);   // 判断是否有此request，有则是错误
         // 对象类型是std::unordered_map<types::RequestId, ara::core::Promise<Output>>
         if (requestIterator != pendingRequests_.end()) {
-            lock.unlock();  // 为什么临时解锁 减小锁的粒度
+            lock.unlock();  // 为什么临时解锁 --> 减小锁的粒度
             promise.SetError(ara::com::ComErrorDomainErrc::kNetworkBindingFailure);
             common::logger().LogError() << "Request Id is already used";
         } else {    // 说明是新的请求
@@ -91,7 +117,6 @@ typename DataReader<T>::ContainerType DataReader<T>::Read(size_t maxNumberOfSamp
             typename MethodTypesInfo::request_t request;
             /* ？？？最后发现这个类型是类似于Radar_Field_Request这种idl数据类型
             AP_Project/event_method_field/apd/RadarFusionMachine/src/fusion/net-bindings/fastdds/ara/com/sample/type_info_proxy_impl_radar.h
-
             */
             request.header.requestId.sequence_number.low = lastRequestId_;
             ++lastRequestId_;
@@ -117,7 +142,7 @@ typename DataReader<T>::ContainerType DataReader<T>::Read(size_t maxNumberOfSamp
 ```
 
 
-fastdds线程监听是否有数据，有则触发`ReceiveRequestResults`：
+fastdds线程监听是否有数据，有则触发`ReceiveRequestResults`（在`MethodImpl`构造时，通过`AddMethodHandler`传入）：
 判断request_id是否在map中，如果有，则说明该请求得到了应答，移除该元素，并`SetPromiseValue`
 ```cpp
 /// @uptrace{SWS_CM_11152, 96b6448a6e34a264203675aae4a1bc2111d97b25}
@@ -140,12 +165,7 @@ void ReceiveRequestResults(typename MethodTypesInfo::reply_t& sample)
 ```
 
 
-
-
-
-
 ## SOMEIP_TO_DDS
-
 ```cpp
 /*
     以下是skeleton端对于method方法的定义：
@@ -190,8 +210,9 @@ auto radarImp::Adjust(const Position& target_position) -> decltype(Skeleton::Adj
 
 
 # 收发相关的数据类型信息
+PS：（`Tool.py`系列脚本中）需要把模型（中的数据类型）作为输入，（利用`aragen`）生成相应的数据类型定义
 ***AP_Project/event_method_field/apd/RadarFusionMachine/src/fusion/net-bindings/fastdds/ara/com/sample/type_info_proxy_impl_radar.h***
-猜测是结合了fastdds自带的`rpc机制`
+是结合了fastdds自带的`rpc机制`
 
 `Radar_Method_Request`的定义在：
     **AP_Project/event_method_field/apd/RadarFusionMachine/src/radar/net-bindings/fastdds/ara/com/sample/fastdds_impl_type_radar_method_request.h**
@@ -231,8 +252,6 @@ struct MethodAdjustTypeInfo
 ```
 
 
-
-
 ## 涉及到的dds数据类型
 ### `Radar_Method_Request`
 两个成员：
@@ -246,7 +265,6 @@ struct MethodAdjustTypeInfo
     建模时配置的method**入参**的类型
 
 
-
 ### `Radar_Method_Reply`
 1. `dds::rpc::ReplyHeader m_header`
 2. `dds_types::ara::com::sample::Radar_Method_Return`
@@ -255,4 +273,3 @@ struct MethodAdjustTypeInfo
     1. m__d
     2. `dds_types::ara::com::sample::Radar_Method_Adjust_Result`
     建模时配置的method**出参**的类型
-

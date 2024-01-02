@@ -112,7 +112,7 @@ public:
 };
 ```
 其中的`GetSkeleton()`方法会调用到渲染生成的代码：radarServiceAdapter：
-模板类ServiceMappingImpl在：AP_Project/event_method_field/apd/RadarFusionMachine/src/radar/net-bindings/fastdds/fastdds_service_mapping-radar.cpp专门实例化。
+模板类ServiceMappingImpl在：`AP_Project/event_method_field/apd/RadarFusionMachine/src/radar/net-bindings/fastdds/fastdds_service_mapping-radar.cpp`专门实例化。
 ```cpp
 ServiceMappingImpl<
     ara::com::sample::radar::service_id,
@@ -244,7 +244,6 @@ Offer中的逻辑：
         auto topic = topics_.Get(topicName, [this, &topicName]() { return CreateTopic<T>(topicName); });    // 从topic对象池（封装了DDS的topic）取得topic指针，若无则调用第二个参数的函数：调用participant_的create_topic()方法（采用默认QOS）
         return std::dynamic_pointer_cast<TypedTopic<T>>(topic);
         // std::dynamic_pointer_cast用于在运行时确定指针所指向对象的实际类型，并将指针转换为对应类型的智能指针  比如可以将基类智能指针转为派生类指针
-
     }
 
     // 其中的GetDataWriter()执行类似操作
@@ -370,7 +369,6 @@ void ServiceImpl::OfferMethod(MethodImplBase& method)
                     }
                 }
             }
-
 
 
             kEventSingleThread模式中的ProcessRequest()：
@@ -758,7 +756,7 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
         for (auto& sample : samples) {  // 判断收到的请求，是否和offer的service::method关联
             auto discriminator = sample.data()._d();    // 是请求-应答idl数据的_d()方法，作用是返回discriminator的值
             // discriminator是判别器，也就是标识符，看起来应该存储在handlers_中
-            auto handler = handlers_.find(discriminator);   // handlers_是在AddMethodHandler时添加的
+            auto handler = handlers_.find(discriminator);   // handlers_是在AddMethodHandler时添加的，handlers_存储着method_id
             if (handler == handlers_.end()) {   // handler是std::function<void(SampleType&)>类型
                 common::logger().LogError()
                     << "MethodDataDispatcher::Dispatch(): Method not found for sample with discriminator "
@@ -870,8 +868,8 @@ using Adjust = ara::com::internal::proxy::Method<ara::com::sample::radar::Adjust
     创建promise对象，得到future对象，将`<requestId, future>`加入`pendingRequests_`
     Proxy端维护`<requestId, future>`的map，还用在`ReceiveRequestResults(&sample)`时`SetPromiseValue`
     ！！！`ReceiveRequestResults`是在**proxy端的MethodImpl初始化**的时候传给reader的
-        `ReceiveRequestResults`的真正调用是在dds的`on_data_available`，里面的dispatch方法的实现中，通过`Read()`拿到数据，再触发函数
-        SetPromiseValue的实现在生成的代码中，负责解DDS的包，真正地给promise `set_value`
+        `ReceiveRequestResults`的真正调用是在dds的`on_data_available`，里面的`dispatch`方法的实现中，通过`Read()`拿到数据，再触发函数
+        `SetPromiseValue`的实现在生成的代码中，负责解DDS的包，真正地给promise `set_value`
         PS：因为`ReceiveRequestResults`的调用是在dds的线程里，所以需要使用promise进行线程间传值（通过promise端维护的`<requestId, future>`map取得相应的promise）
     然后将request组到DDS包调用dds的`Write()`发送出去
 
