@@ -11,17 +11,41 @@
 # APP中SWC元素介绍
 ## Software Component
 即SWC，软件组件，定义了不同类型的软件单元的**行为和交互接口**。
-一般一个xml文件来描述一个SWC。
-对应到代码，就是一个C文件，包含了**函数、接口、变量**的相关定义。
-
-
-
-
+一般一个`xml`文件来描述一个`SWC`。
+对应到代码，就是一个C文件：包含了**函数、接口、变量**的相关定义。
+在AutoSAR 中 SWC 一般包括: 
+Application、 Sensor Actuator、I/0 Hardware Abstraction、 Complex Driver、 Non-Volatile  Component、Service components 类型的 SWC 设计。
 
 
 
 ## Port Interface
+一个Component有明确定义的Port，在SWC之间交互
 
+## Runnable
+函数实体，承载用户层C代码
+在SWC设计中一般分为三种：
+Init Runnable、Cyclic Runnable、Trigger Runnable
+
+## Data Element
+决定可以通过端口的`数据类型`以及`数据`
+
+## Data Type
+**Base Type**（Uint、int、float）
+
+**IDT**（Implementation Data Type）
+    对基于类型的特殊定义，即type define
+
+**Application Data Type**
+    用于实际的物理类型，具备了真实的物理数据含义
+
+## CompuMethod
+定义**数据元素内部数据的转换关系**，通常一些，通过 CM，可以实现数据元素的转换，例简单的线性运算 y = ax + b，就是CM中配置a(factor)和 b(offset)实现的。同时对于一些枚举元素的定义也可以在 CM 中设置。
+
+## TypeMapping Set
+建立数据类型的 Mapping 关系，通常在使用 ADT 和 DT 中，两者之间的映射关系就是在 Type Mapping Set 中实现的.
+
+## DataMapping
+在SWC中将`CAN、LIN、ETH`等Com层的**信号**与对应的SWC的Portlnterface中的**数据元素**建立关联，实现对系统信号的读写操作
 
 
 

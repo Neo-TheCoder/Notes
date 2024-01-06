@@ -1,6 +1,6 @@
 # 1 skeleton端初始化
 
-radar_activity.h 的Init()中的OfferService()，最后调用到：
+radar_activity.h 的`Init()`中的`OfferService()`，最后调用到：
 ```cpp
 void Runtime::OfferService(internal::skeleton::ServiceBase& service,
     internal::ServiceId service_id,
@@ -955,7 +955,7 @@ public:
 #### proxy侧
 概念上来说，一个field在任何时候都有一个确定的值，这不像event，这就导致相比event，field有以下的不同：
 1. 如果订阅了一个field，就会以类似event通知的模式，“立马”把初值就发回给subscriber
-可以通过调用 Get() 方法查询当前字段值，也可以通过 Set() 方法更新当前字段值。
+可以通过调用`Get()`方法查询当前字段值，也可以通过 Set() 方法更新当前字段值。
 
 注意：一个field提供的所有特征都是可选的：
 “on change notification”、Get()、Set()

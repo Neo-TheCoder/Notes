@@ -74,3 +74,95 @@ Service有2类：Server Service和Client Service。 Service有2种状态: Down和Available
 
 # SOME/IP和DDS的差异
 DDS是面向数据的，通信容量在理论上是无限，并且还使用了共享内存，QOS丰富。
+
+
+
+
+# 实例分析
+以以下**service**为例
+```json
+ "services" : [
+    {
+      "name" : "SomeipStartApplicationCmService1_ServiceInterface",
+      "service_id" : 1667,
+      "major_version" : 1,
+      "minor_version" : 0,
+      "methods" : [
+        {
+          "name" : "StartApplicationMethod1",
+          "id" : 5,
+          "proto" : "tcp"
+        },
+        {
+          "name" : "StartApplicationField1Getter",
+          "id" : 2,
+          "proto" : "tcp"
+        },
+        {
+          "name" : "StartApplicationField1Setter",
+          "id" : 4,
+          "proto" : "tcp"
+        }
+      ],
+      "events" : [
+        {
+          "name" : "StartApplicationEvent1",
+          "id" : 32769,
+          "field" : false,
+          "proto" : "tcp"
+        },
+        {
+          "name" : "StartApplicationField1Notifier",
+          "id" : 32770,
+          "field" : true,
+          "proto" : "tcp"
+        }
+      ],
+      "eventgroups" : [
+        {
+          "id" : 1,
+          "events" : [
+            32769,
+            32770
+          ]
+        }
+      ]
+    }
+ ]
+```
+## 服务发现
+**广播**
+### OfferService
+`Entries Array`属于`Offer Service`，包含Service ID、Instance ID
+
+### FindService
+`Entries Array`属于`Find Service`，包含Service ID、Instance ID
+
+一条**广播报文**，可以在`Entries Array`中，ARRAY1表示`FindService`，ARRAY2表示`OfferService`
+Options Array中，包含Ipv4 Endpoint Option：`IP地址 + 端口号 + 协议UDP`
+
+
+**单播**
+### Subscribe
+`Entries Array`属于`Subscribe Eventgroup Entry`
+指定要订阅的`service id - instance id - Eventgroup - version`
+
+### SubscribeAck
+`Entries Array`属于`Subscribe Eventgroup Ack Entry`
+
+一条**广播报文**，可以在`Entries Array`中，ARRAY1表示`Subscribe`，ARRAY2表示`SubscribeAck`
+
+## 通信
+### Event
+server发送`Message Type`为`Notification`类型的报文
+
+### Method
+（不需要订阅，是**请求-应答模式**）
+client发送Type`Message Type`为`Request`类型的报文
+server发送Type`Message Type`为`Response`类型的报文
+
+
+
+
+
+

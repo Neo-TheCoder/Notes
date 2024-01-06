@@ -989,6 +989,33 @@ int pthread_spin_init(pthread_spinlock_t *lock, int pshared);
 int pthread_spin_destroy(pthread_spinlock_t *lock);
 ```
 
+**²»Òªµ÷ÓÃÔÚ³ÖÓÐ×ÔÐýËøÇé¿öÏÂ¿ÉÄÜ»á½øÈëÐÝÃß×´Ì¬µÄº¯Êý£¬ËüÃÇ»áÀË·ÑCPU×ÊÔ´£¬ÒòÎªÆäËûÏß³ÌÐèÒª»ñÈ¡×ÔÐýËøÐèÒªµÈ´ýÊ±¼ä¾ÍÏàÓ¦µØÑÓ³¤ÁË**
+
+
+
+## 11.6.8 ÆÁÕÏ
+ÊÇ**ÓÃ»§Ð­µ÷¶à¸öÏß³Ì²¢ÐÐ¹¤×÷µÄÍ¬²½»úÖÆ**
+ÆÁÕÏÔÊÐíÃ¿¸öÏß³ÌµÈ´ý£¬Ö±µ½ËùÓÐµÄºÏ×÷Ïß³Ì¶¼µ½´ïÄ³Ò»µã£¬È»ºó´Ó¸Ãµã¼ÌÐøÖ´ÐÐ
+`pthread_join`¾ÍÊÇÒ»ÖÖÆÁÕÏ£ºÔÊÐíÒ»¸öÏß³ÌµÈ´ý Ö±µ½ÁíÒ»¸öÏß³ÌÍË³ö
+ÆÁÕÏÔÚ¹ãÒåÉÏ£¬ÔÊÐí**ÈÎÒâÊýÁ¿**µÄÏß³ÌµÈ´ý£¬Ö±µ½ËùÓÐµÄÏß³ÌÍê³É´¦Àí¹¤×÷£¬¶øÏß³Ì´ïµ½ÆÁÕÏºó¿ÉÒÔ¼ÌÐø¹¤×÷
+¾­µäÊ¾Àý£º
+¶àÏß³ÌÊµÏÖ¶ÑÅÅÐò£¬n¸ö¹¤×÷Ïß³ÌºÍÖ÷Ïß³Ì¶¼Ö´ÐÐ`pthread_barrier_wait`£¬Ê¹µÃ×îºóÖ÷Ïß³Ì½«½á¹ûºÏ²¢
+
+
+
+# µÚÊ®¶þÕÂ Ïß³Ì¿ØÖÆ
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1133,7 +1160,10 @@ int socketpair(int domain, int type, int protocol, int sockfd[2]);  // ¿ÉÓÃÓÚ´´½
 
 
 
-
+# ²¹³ä
+## Cgroup
+cgroupµÄ×÷ÓÃ»ù±¾ÉÏ¾ÍÊÇ**¿ØÖÆÒ»¸ö½ø³Ì»òÒ»×é½ø³Ì**¿ÉÒÔ**·ÃÎÊ»òÊ¹ÓÃ¸ø¶¨¹Ø¼ü×ÊÔ´£¨CPU¡¢ÄÚ´æ¡¢ÍøÂçºÍ´ÅÅÌ I/O£©µÄÁ¿**¡£
+Ò»¸öÈÝÆ÷ÖÐÍ¨³£ÔËÐÐÁË¶à¸ö½ø³Ì£¬²¢ÇÒÐèÒª¶ÔÕâÐ©½ø³ÌÊµÊ©Í³Ò»¿ØÖÆ£¬Òò´Ë cgroup ÊÇÈÝÆ÷µÄ¹Ø¼ü×é¼þ¡£
 
 
 

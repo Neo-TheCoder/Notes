@@ -130,6 +130,18 @@ _Res function<_Res(_ArgTypes...)>::operator()(_ArgTypes... __args) const
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 # C++函数调用的本质
 函数调用背后是栈帧（***stack frame***）的建立（与操作系统平台以及编译器的实现有关）
 
@@ -1035,4 +1047,9 @@ Don’t pass a smart pointer as a function parameter unless you want to use or m
 所以，用copy by value和右值引用，本质上，没有什么区分，用哪个都可以。但理论上，对于unique pointer，右值引用还是和copy by value有稍微不同。
 针对unique pointer，特定情况下，**右值引用对于编译器而言，效率要略高于copy by value**，但带来的麻烦是，代码中，我们必须不停使用`perfect forwarding`。
 总之可以认为：**对于unique pointer，右值引用和Copy by value几乎等效**。
+
+
+
+
+
 

@@ -10,9 +10,9 @@ void Dispatch() override
 {
     auto samples = reader_.Read(std::numeric_limits<size_t>::max());    // 实质是调用dds reader的take_next_sample接口
     for (auto& sample : samples) {  // 判断收到的请求，是否和offer的service::method关联
-        auto discriminator = sample.data()._d();    // 是请求-应答idl数据的_d()方法，作用是返回discriminator的值
-        // discriminator是判别器，也就是标识符，看起来应该存储在handlers_中
-        auto handler = handlers_.find(discriminator);   // handlers_是在AddMethodHandler时添加的，handlers_存储着method_id
+        auto discriminator = sample.data()._d();    // 是请求-应答idl数据的_d()方法，作用是返回m__d的值
+        // discriminator是判别器，也就是标识符，存储在handlers_中
+        auto handler = handlers_.find(discriminator);   // handlers_是在AddMethodHandler时添加的，handlers_存储着method_id  ！！！
         if (handler == handlers_.end()) {   // handler是std::function<void(SampleType&)>类型
             common::logger().LogError()
                 << "MethodDataDispatcher::Dispatch(): Method not found for sample with discriminator "
@@ -91,6 +91,12 @@ typename DataReader<T>::ContainerType DataReader<T>::Read(size_t maxNumberOfSamp
     return result;
 }
 ```
+
+
+
+
+
+
 
 
 
