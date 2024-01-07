@@ -57,7 +57,8 @@ PS：ROS中存在着parameter server这么一个APP
 
 ## 4.6 动作（Action）
 **动作**是基于ROS消息机制实现的一种**问答通信机制**，基于客户端/服务器模型，服务器可以连续反馈数据给客户端，客户端可以在任务运行过程中中止运行。
-动作Action的接口主要由goal、cancel、status、feedback和result组成，客户端可以在任务启动前向服务器发布任务目标goal，也可以在任务过程中向服务器发送cancel请求取消任务。服务器向客户端反馈服务器当前的状态，或周期性反馈任务运行的监控数据，而result在任务运行过程中只发布一次，仅在服务器完成动作后反馈一个最终结果。
+动作Action的接口主要由goal、cancel、status、feedback和result组成，客户端可以在任务启动前向服务器发布任务目标goal，也可以在任务过程中向服务器发送cancel请求取消任务。
+服务器向客户端反馈服务器当前的状态，或周期性反馈任务运行的监控数据，而result在任务运行过程中只发布一次，仅在服务器完成动作后反馈一个最终结果。
 
 ## 4.7 消息记录包（ROS Bag）
 **ROS Bag是一种用于保存和回放ROS消息数据的文件格式**。
@@ -74,3 +75,100 @@ Parameter Server能够保存一部分参数作为全局共享字典，**系统�
 
 ## 4.11 元功能包（Meta Package）
 元功能包是一种特殊的功能包，它只包含元功能包清单文件。它的作用是将多个具有相同功能的功能包整合成一个逻辑上独立的功能包，类似于功能包集合。
+
+
+# 核心概念
+## Domain Participant
+对应到一个使用DDS的用户
+
+## Topic
+一个Topic包含一个**名称**和一种**数据结构**
+
+## Publisher
+数据发布的执行者，发布一个或多个Topic
+
+## DataWriter
+应用向发布者更新数据的对象，每个`DataWriter`对应一个特定的`Topic`
+
+## Subscriber
+数据订阅的执行者，订阅一个或多个Topic
+
+## DataReader
+应用从订阅者读取数据的对象，每个`DataReader`对应一个特定的`Topic`
+
+## QoS
+服务质量
+控制各方面和底层的通讯机制：时间限制、可靠性、持续性、历史记录等方面
+满足用户针对不同场景的数据应用需求
+
+
+## 多种模式
+### Pub / Sub模式
+一个节点，既可以发布多个**Topic**，又可以订阅多个Topic，Topic是数据传递的核心
+
+### Call and Response模式
+`Service`（也是一个节点）仅在客户端专门调用时才提供数据
+
+### Action模式
+三部分组成：
+1. Goal
+2. Feedback
+3. Result
+`Action`实际上是由2个`Service`和1个`Topic`组成，提供稳定的、**周期性的**反馈（和Service的最大区别），而不是返回单一相应的服务，`Action`这种通信类型，适用于长时间运行的任务
+
+
+
+# 常用命令
+```shell
+ros2 run <package_name> <executable_name>		# 启动一个节点
+
+ros2 launch <package_name> <filename.launch>	# 同时启动一个或多个节点
+ros2 node list						# 查看已经启动的node列表
+ros2 node info <node_name>				# 查看某个node的详细信息
+```
+
+```shell
+ros2 topic list -t					# 查看话题列表
+ros2 topic info <topic_name>				# 查看一个话题信息
+ros2 topic type <topic_name>				# 查看一个话题类型
+ros2 topic echo <topic_name>				# 反馈一个话题数据
+
+ros2 service list -t					# 查看服务列表
+ros2 service type <service_name>			# 查看一个服务类型
+ros2 service call …					# 启动一个服务
+ros2 service call /spawn turtlesim/srv/Spawn "{x: 2, y: 2, theta: 0.2, name: ''}"
+
+ros2 action list -t					# 查看动作列表
+ros2 action info <action_name>				# 查看一个动作信息
+```
+
+```shell
+ros2 topic list -t					# 查看话题列表
+ros2 topic info <topic_name>				# 查看一个话题信息
+ros2 topic type <topic_name>				# 查看一个话题类型
+ros2 topic echo <topic_name>				# 反馈一个话题数据
+
+ros2 service list -t					# 查看服务列表
+ros2 service type <service_name>			# 查看一个服务类型
+ros2 service call …					# 启动一个服务
+    ros2 service call /spawn turtlesim/srv/Spawn "{x: 2, y: 2, theta: 0.2, name: ''}"
+
+ros2 action list -t					# 查看动作列表
+ros2 action info <action_name>				# 查看一个动作信息
+```
+
+```shell
+rqt_graph # 显示各个节点之间的通信关系图
+
+ros2 run tf2_tools view_frames.py		# 生成一个坐标转换的pdf文档
+
+ros2 bag record <topic_name>			# 生成对应topic的bag文件
+ros2 bag play <bag_name>			# 播放生成的bag文件
+```
+
+
+
+
+
+
+

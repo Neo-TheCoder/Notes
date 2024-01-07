@@ -279,3 +279,21 @@ struct MethodAdjustTypeInfo
     1. m__d
     2. `dds_types::ara::com::sample::Radar_Method_Adjust_Result`
     建模时配置的method**出参**的类型
+
+
+
+
+# 设计
+**APP1**向**SOMEIP_TO_DDS**发出某个`service`对应的`SOMEIP--Request`消息，在`SOMEIP_TO_DDS`的method实现中，将收到的`SOMEIP--Request`存入自己维护的`<request_id, result_type>`组成的map，这时就可以通过某种方式（条件变量）阻塞住了。
+然后，**SOMEIP_TO_DDS**向ROS发送一个ROS中`Service`通信类型的`Request`，当ROS端的节点，完成处理后，将结果发给**SOMEIP_TO_DDS**，**SOMEIP_TO_DDS**端自然是开线程持续监听ROS端发来的消息，通过fastdds提供的`on_data_available`接口，收到数据后，检查request_id，存到自己维护的MAP里，这个时候，调用条件变量的`notify()`，APP1请求的Method才是真正完成了，在完成之前，一直阻塞。
+
+
+PS：
+1. 还要考察下VECTOR对于METHOD的实现，是否是单线程的，因为如有必要，要开多线程来处理不同的method消息
+2. 具体考虑下，service -- method -- 线程 的数量关系
+3. 怎么包装出ROS中`Service`通信类型的`Request`？
+
+
+
+
+

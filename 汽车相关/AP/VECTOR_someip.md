@@ -10,7 +10,7 @@
 # IPC
 IPC 的通信方式和DDS有异曲同工之妙，IPC 绑定到了一个Local Host：127.0.0.1。
 IPC所有的消息，都会放到 127.0.0.1 这个地址上去。
-然后，任何IPC方式的 Service，它的 Required Service 和 Provider Service，都会去监控127.0.0.1 这个地址
+然后，任何IPC方式的 Service，它的 Required Service 和 Provider Service，都会去监控127.0.0.1这个地址
 它们所有消息的收发都是通过这个地址进行的。
 
 由于SOME/IP 的 Client 和 Server 之间的所有通信消息，Notify，Field 和 Method，全部都需要通过 **SOME/IP Daemon 做中转**，Client 跟 Server 之间不直接通讯，比如 Client 发送一个请求，它先到达本端的 SOME/IP Daemon，SOME/IP Daemon 再把 Message 发送到 Server 端的 SOME/IP Daemon。
