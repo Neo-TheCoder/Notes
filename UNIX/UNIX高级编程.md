@@ -1004,8 +1004,20 @@ int pthread_spin_destroy(pthread_spinlock_t *lock);
 
 
 # 第十二章 线程控制
+## 12.3 线程属性
+设计了一些函数来管理线程的属性对象
+```cpp
+#include<pthread.h>
+
+int pthread_attr_init(pthread_attr_t *attr);    // pthread_attr_t包含线程属性默认值
+int pthread_attr_destroy(pthread_attr_t *attr);
+```
 
 
+
+
+
+## 12.4 同步属性
 
 
 

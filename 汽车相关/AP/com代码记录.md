@@ -1,16 +1,588 @@
+# 用户层代码基本结构
+创建`RadarActivity`对象（准确来说，是`ServiceInterface_name` + `Activity`）
+## skeleton
+1. 调用`init()`
+```cpp
+m_logger_ctx3.LogDebug() << "enter init()";
+
+// Register
+m_skeleton->UpdateRate.RegisterGetHandler(std::bind(&RadarActivity::getUpdateRate, this));
+
+m_skeleton->UpdateRate.RegisterSetHandler(
+    std::bind(&RadarActivity::setUpdateRate, this, std::placeholders::_1));
+// Initialize Fields Values before Offering Service.
+::ara::com::sample::RadarObjects_field UpdateRate_value;
+//TODO:Need assign value
+m_skeleton->UpdateRate.Update(UpdateRate_value);    // 直接开始持续发送数据（是bug，要在OfferService之后，才是真正的发送数据）
+//Offering
+m_skeleton->OfferService(); // 这里有很多逻辑
+```
+！！！注意此处，调用对象`m_skeleton`是`radarSkeleton*`类型，实际指向的是`radarImp`类型的对象
+
+
+2. 在`while`循环中调用`act()`
+```cpp
+void RadarActivity::act()
+{
+    m_logger_ctx3.LogInfo() << "radar active";
+    static uint8_t i = 0;
+
+//brakeEvent sample
+    auto brakeEvent_allocation_result = m_skeleton->brakeEvent.Allocate();
+    if(!brakeEvent_allocation_result){
+        m_logger_ctx3.LogError() << "brakeEvent allocation failed with error: " << brakeEvent_allocation_result.Error();
+    }else{
+        auto brakeEventSample = std::move(brakeEvent_allocation_result).Value();
+        // set value:
+        // brakeEventSample ->object = value
+
+        // send sample
+        auto send_result = m_skeleton->brakeEvent.Send(std::move(brakeEventSample));
+        if (send_result) {
+            m_logger_ctx3.LogInfo() << "brakeEvent sent";
+        } else {
+            m_logger_ctx3.LogError() << "brakeEvent.Send failed with error: " << send_result.Error();
+        }
+    }
+
+//parkingBrakeEvent sample
+    auto parkingBrakeEvent_allocation_result = m_skeleton->parkingBrakeEvent.Allocate();
+    if(!parkingBrakeEvent_allocation_result){
+        m_logger_ctx3.LogError() << "parkingBrakeEvent allocation failed with error: " << parkingBrakeEvent_allocation_result.Error();
+    }else{
+        auto parkingBrakeEventSample = std::move(parkingBrakeEvent_allocation_result).Value();
+        // set value:
+        // parkingBrakeEventSample ->object = value
+
+        // send sample
+        auto send_result = m_skeleton->parkingBrakeEvent.Send(std::move(parkingBrakeEventSample));
+        if (send_result) {
+            m_logger_ctx3.LogInfo() << "parkingBrakeEvent sent";
+        } else {
+            m_logger_ctx3.LogError() << "parkingBrakeEvent.Send failed with error: " << send_result.Error();
+        }
+    }
+  
+// UpdateRate send notification
+    //TODO:Need assign value
+    ::ara::com::sample::RadarObjects_field UpdateRate_value;
+    // UpdateRate send notification
+    //TODO:Need assign value
+    auto UpdateRate_result = m_skeleton->UpdateRate.Update(UpdateRate_value);
+    if (UpdateRate_result) {
+        m_logger_ctx3.LogInfo() << "UpdateRate notify ";
+    } else {
+        m_logger_ctx3.LogError() << "UpdateRate notify failed with error: " << UpdateRate_result.Error();
+    }
+    i++;
+}
+```
+
+
+以上方法调用的对象都是`RadarActivity`对象，用户层直接接触
+## `RadarActivity`
+```cpp
+class RadarActivity
+{
+public: // 以下函数的实现都在用户层
+    RadarActivity();    // ！！！构造函数中，new了一个radarImp对象，赋给m_skeleton（基类指针指向派生类对象）
+    ~RadarActivity();
+
+    /*!
+     *  \brief Initializes radar activity.
+     *
+     *  Initializes radar activity. This is called during initialization of the runtime.
+     */
+    void init();
+
+    /*!
+     *  \brief Runs radar activity.
+     *
+     *  Executable unit triggered to perform radar activity.
+     */
+    void act();
+
+protected:
+
+ara::core::Future<ara::com::sample::skeleton::fields::UpdateRate::value_type> getUpdateRate();
+
+ara::core::Future<::ara::com::sample::RadarObjects_field> setUpdateRate(::ara::com::sample::RadarObjects_field field);
+
+    /*!
+     * \brief A pointer to the skeleton object.
+     */
+    ara::com::sample::skeleton::radarSkeleton* m_skeleton;  // ！！！持有radarSkeleton*类型的指针
+
+    enum class internalStates
+    {
+        READY,
+        NOT_READY
+    };
+    internalStates m_internal_state_for_update_rate_set_handler = internalStates::READY;    // 判断field的set handler的状态
+
+    ara::log::Logger& m_logger_ctx3{
+        ara::log::CreateLogger("CTX3", "context for update rate", ara::log::LogLevel::kVerbose)};
+    ara::log::Logger& m_logger_ctx4{
+        ara::log::CreateLogger("CTX4", "radar activity main context", ara::log::LogLevel::kVerbose)};
+};
+```
+
+
+
+## `radarImp`
+```cpp
+class radarImp : public ara::com::sample::skeleton::radarSkeleton
+{
+    using Skeleton = ara::com::sample::skeleton::radarSkeleton;
+
+public:
+    radarImp(ara::core::InstanceSpecifier instanceSpec, ara::com::MethodCallProcessingMode mode)
+        : Skeleton(std::move(instanceSpec), mode)   // 调用基类构造函数
+        , m_worker(&radarImp::ProcessRequests, this)
+    { } // 构造时启了一个method专用的线程
+
+    virtual ~radarImp()
+    {
+        m_finished = true;
+        m_worker.join();    // 主线程会调用该析构，然后调用join()，等待m_worker结束
+    }
+
+    virtual auto Adjust(
+        const ::ara::com::sample::Position& target_position
+        ) -> decltype(Skeleton::Adjust(target_position)) override;
+private:
+
+private:
+    /*!
+     * \brief Defines how the incoming service method invocations are processed.
+     *
+     * \uptrace{SWS_CM_00198}
+     * \uptrace{SWS_CM_00199}
+     */
+    void ProcessRequests();
+
+    std::atomic<bool> m_finished{false};
+    std::thread m_worker;
+
+    ara::log::Logger& m_logger_ctx1{
+        ara::log::CreateLogger("CTX1", "context for adjustment", ara::log::LogLevel::kVerbose)};
+    ara::log::Logger& m_logger_ctx2{
+        ara::log::CreateLogger("CTX2", "context for calibration", ara::log::LogLevel::kVerbose)};
+    ara::log::Logger& m_logger_ctx5{ara::log::CreateLogger("CTX5", "context for echo", ara::log::LogLevel::kVerbose)};
+};
+```
+
+
+
+## proxy
+1. 调用`init()`
+```cpp
+void RadarActivity::init()
+{
+    m_logger.LogInfo() << "init() enter";
+
+    ara::core::InstanceSpecifier portSpecifier{"fusion/fusion/radar_RPort"};
+    m_logger.LogInfo() << "Port In Executable Ref:" << portSpecifier.ToString();
+
+    auto instanceIDs = ara::com::runtime::ResolveInstanceIDs(portSpecifier);    // 搜索<portSpecifier, instance_id>，此处是：<fusion/fusion/radar_RPort, DDS:19>
+    if (instanceIDs.empty()) {
+        throw std::runtime_error{"No InstanceIdentifiers resolved from provided InstanceSpecifier"};
+    }
+    m_logger.LogInfo() << "Searching for Service Instance:" << instanceIDs[0].ToString();
+
+    auto res = Proxy::StartFindService(
+        [this](ara::com::ServiceHandleContainer<Proxy::HandleType> handles, ara::com::FindServiceHandle handler) {
+            RadarActivity::serviceAvailabilityCallback(std::move(handles), handler);
+        },
+        portSpecifier); // 注册了一个找到service时调用的函数
+    if (!res) {
+        m_logger.LogError() << "StartFindService failed with error: " << res.Error();
+        throw std::runtime_error{"StartFindService failed"};
+    }
+
+    m_logger.LogInfo() << "init() exit";
+}
+```
+
+## `RadarActivity`
+```cpp
+/*!
+ *  \brief Class implementing radar activity.
+ *
+ *  Radar activity implementing function of data radar.
+ */
+class RadarActivity
+{
+    using Proxy = ara::com::sample::proxy::radarProxy;  // ！！！使用到了radarProxy，是组合关系，fusion端的RadarActivity持有radarProxy类型的指针
+
+public:
+    RadarActivity();
+
+    /*!
+     *  \brief Initializes radar activity.
+     *
+     *  Initializes radar activity. This is called during initialization of the runtime.
+     */
+    void init();
+
+    /*!
+     *  \brief Runs radar activity.
+     *
+     *  Executable unit triggered to perform radar activity.
+     */
+    void act();
+
+    /*!
+     *  \brief Callback to change to radar service offer changes.
+     *
+     *  Callback executed whenever a change for radar service offers happen.
+     *
+     */
+
+    void serviceAvailabilityCallback(ara::com::ServiceHandleContainer<Proxy::HandleType> handles,
+        ara::com::FindServiceHandle handler)
+    {
+        for (auto it : handles) {
+            m_logger.LogInfo() << "Instance " << it.GetInstanceId().ToString() << " is available";
+        }
+        if (handles.size() > 0) {
+            std::lock_guard<std::mutex> lock(m_proxy_mutex);
+            if (nullptr == m_proxy) {
+                m_proxy = std::make_shared<Proxy>(handles[0]);
+                m_logger.LogInfo() << "Created proxy from handle with instance: "
+                                   << m_proxy->GetHandle().GetInstanceId().ToString();
+                // Construct some handles (implementation-specific).
+                auto first_handle = handles[0];
+                auto aux_handle = first_handle;
+                for (auto current_handle : handles) {
+                    // Call equality operator.
+                    m_logger.LogInfo() << "Check handle::operator==: "
+                                       << static_cast<uint8_t>(aux_handle == current_handle);
+                    // Call copy assignment operator.
+                    aux_handle = current_handle;
+                    // Call less-than operator.
+                    m_logger.LogInfo() << "Check handle::operator<: "
+                                       << static_cast<uint8_t>(aux_handle < first_handle);
+                }
+            }
+        }
+    }
+    /*!
+     * \brief Callback Received when the Field UpdateRate is changed.
+     *
+     * Callback Received when the Field UpdateRate is changed.
+     */
+    void UpdateRateReceived()
+    {
+        ara::log::LogStream logMsg{m_logger.LogVerbose()};
+
+        m_proxy->UpdateRate.GetNewSamples(
+            [&logMsg](auto sample) {
+                logMsg << FIELDS_HEADER << "Callback: UpdateRate Field ";
+            },
+            1);
+    }
+protected:
+    std::shared_ptr<Proxy> m_proxy;
+    std::mutex m_proxy_mutex;
+    std::uint32_t m_act_count;
+    std::random_device m_rd;
+
+    /*!
+     * Subscribe to UpdateRate Field.
+     */
+    void UpdateRateSubscription();
+
+    /*!
+     * Testing Field Getter.
+     */
+    void fieldGetter();
+
+    /*!
+     * Testing Field Setter.
+     */
+    void fieldSetter();
+
+    // this class own logger
+    // this class own logger
+    ara::log::Logger& m_logger{
+        ara::log::CreateLogger("FACT", "RadarActivity class own context", ara::log::LogLevel::kVerbose)};
+};
+```
+
+
+
+2. 在`while`循环中调用`act()`
+```cpp
+void RadarActivity::act()
+{
+    m_logger.LogInfo() << "radar alive";
+
+    if (nullptr != m_proxy) {
+        if(m_proxy->brakeEvent.IsSubscribed()){
+            auto e2eState = ara::com::e2e::internal::GetSMState(m_proxy->brakeEvent);
+            bool stateResult = (e2eState == ara::com::e2e::SMState::kNoData);
+            // LogStream logMsg{m_logger.LogVerbose()};
+            // logMsg << "brakeEvent E2E state:" << (stateResult ? "ok (NoData)" : "not ok");
+            // logMsg.Flush();  
+            
+            auto callback = [&](auto sample) {
+            m_logger.LogInfo() << "recive brakeEvent message";
+            // logMsg << "recive brakeEvent message";
+
+            // logMsg.Flush();    
+            };
+            // execute callback for every samples in the context of GetNewSamples
+            m_proxy->brakeEvent.GetNewSamples(callback);    // 得到event数据，此时早已订阅        
+        }
+        else{
+            m_logger.LogInfo() << "not subscribed to brakeEvent yet";
+            // subscribe to event
+            auto brakeEvent_subscription_result = m_proxy->brakeEvent.Subscribe(3);
+            if (brakeEvent_subscription_result.HasValue()) {
+                m_logger.LogInfo() << "brakeEvent Callback registered.";
+            } else {
+                m_logger.LogError() << "brakeEvent Subscription failed with error: " << brakeEvent_subscription_result.Error();
+                return;
+            }
+            m_logger.LogInfo() << "brakeEvent subscription complete";
+        }
+        if(m_proxy->parkingBrakeEvent.IsSubscribed()){
+            auto e2eState = ara::com::e2e::internal::GetSMState(m_proxy->parkingBrakeEvent);
+            bool stateResult = (e2eState == ara::com::e2e::SMState::kNoData);
+            // LogStream logMsg{m_logger.LogVerbose()};
+            // logMsg << "parkingBrakeEvent E2E state:" << (stateResult ? "ok (NoData)" : "not ok");
+            // logMsg.Flush();  
+            
+            auto callback = [&](auto sample) {
+            m_logger.LogInfo() << "recive parkingBrakeEvent message";
+            // logMsg << "recive parkingBrakeEvent message";
+
+            // logMsg.Flush();    
+            };
+            // execute callback for every samples in the context of GetNewSamples
+            m_proxy->parkingBrakeEvent.GetNewSamples(callback);            
+        }
+        else{
+            m_logger.LogInfo() << "not subscribed to parkingBrakeEvent yet";
+            // subscribe to event
+            auto parkingBrakeEvent_subscription_result = m_proxy->parkingBrakeEvent.Subscribe(3);
+            if (parkingBrakeEvent_subscription_result.HasValue()) {
+                m_logger.LogInfo() << "parkingBrakeEvent Callback registered.";
+            } else {
+                m_logger.LogError() << "parkingBrakeEvent Subscription failed with error: " << parkingBrakeEvent_subscription_result.Error();
+                return;
+            }
+            m_logger.LogInfo() << "parkingBrakeEvent subscription complete";
+        }
+
+        m_logger.LogInfo() << "Subscribe to UpdateRate Field";
+        this->UpdateRateSubscription();
+
+        // "Testing Field Getter.";
+        this->fieldGetter();
+
+        // "Testing Field Setter.";
+        this->fieldSetter();
+
+        ::ara::com::sample::Position target_position;
+
+        // proxy method call
+        auto getUpdateRateFuture = m_proxy->Adjust(target_position);    // 发送请求，实现RPC，不需要订阅
+
+        auto res = getUpdateRateFuture.get();
+
+        m_logger.LogInfo() << "method call result is : "
+            << "if sucess: " << res.success
+            << "position" << res.effective_position.x << res.effective_position.y << res.effective_position.z;
+
+    }
+    m_act_count++;
+}
+
+```
+
+
+
+
+
+
 # 1 skeleton端初始化
 
-radar_activity.h 的`Init()`中的`OfferService()`，最后调用到：
+```cpp
+m_skeleton = new radarImp(instanceSpec, ara::com::MethodCallProcessingMode::kPoll); // ！！！重要的初始化
+```
+在`radarImp`的初始化过程中，
+初始化了基类对象`radarSkeleton`，这里涉及到很多的构造：
+```cpp
+/// @uptrace{SWS_CM_00002, 4d3a2b51c78573d1d34cd3d2aff93527b4a97d63}
+class radarSkeleton
+    : public ara::com::sample::radar    // radar类记录了service相关信息：id、version、AdjustOutput结构体
+    , public ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>
+{
+    /// @uptrace{SWS_CM_00152, b772a2873b407e2731b5b05529fb74cda8bce3df}
+    radarSkeleton(ara::core::InstanceSpecifier instanceSpec,
+        ara::com::MethodCallProcessingMode mode = ara::com::MethodCallProcessingMode::kEvent)
+        : ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>(std::move(instanceSpec), mode)
+    { }
+
+    /// @uptrace{SWS_CM_00191, e3ee8aca56f9a3b371df808324769584093419f3}
+    using ara::com::sample::radar::AdjustOutput;
+    virtual ara::core::Future<AdjustOutput> Adjust(const ::ara::com::sample::Position& target_position) = 0;
+}
+// ！！！这里还涉及到radarSkeleton对象的成员的初始化：
+    fields::UpdateRate UpdateRate;
+    events::brakeEvent brakeEvent;
+    events::parkingBrakeEvent parkingBrakeEvent;
+```
+
+`radarSkeleton`的几个重要成员（涉及field、event）
+1. field
+```cpp
+/// @uptrace{SWS_CM_00007, 42d730a95751bac3ee6019e706f92c406b2499b8}
+using UpdateRate = ara::com::internal::skeleton::MutableFieldDispatcher<::ara::com::sample::RadarObjects_field>;
+```
+
+2. event
+```cpp
+using brakeEvent = ara::com::internal::skeleton::EventDispatcher<::ara::com::sample::RadarObjects>;
+```
+！！！重要特点：这里的各种`XXXdispatcher类`继承的`DispatcherBase`实际都是`list<xxx>`，这个list的填充是在调用`OfferService`时，对`Adapter类`初始化时才做的
+
+
+PS：注意到，`MethodCallProcessingMode`默认为`kEvent`
+再看一下`radarSkeleton`的重要基类：`TypedServiceImplBase`的构造
+```cpp
+// Defines the methods for all skeletons that require knowledge about the service type that they offer.
+TypedServiceImplBase(ara::com::InstanceIdentifier instance, ara::com::MethodCallProcessingMode mode)
+    : ServiceImplBase(instance)
+{
+    SetMethodCallProcessingMode(mode);
+    // 调用到基类ServiceImplBase的同名函数：
+}
+        基类ServiceImplBase的SetMethodCallProcessingMode：
+        virtual void SetMethodCallProcessingMode(ara::com::MethodCallProcessingMode mode) override
+        {
+            mode_ = mode;   // 其实就是kEvent
+            for (ServiceBase* delegate : Dispatcher::delegates_) {
+                delegate->SetMethodCallProcessingMode(mode);    // 尚未OfferService时，这里是空的
+            }
+        }
+
+// 基类ServiceImplBase构造函数（Base class for all generated skeleton classes.）
+ServiceImplBase(ara::core::InstanceSpecifier instanceSpec)
+    : ServiceImplBase(::ara::com::runtime::ResolveInstanceIDs(instanceSpec))
+{ } // 委托构造
+
+    // 委托构造调用的构造函数
+    ServiceImplBase(ara::com::InstanceIdentifierContainer instanceIDs)
+        : instanceIDs_(std::move(instanceIDs))
+        , it_(Dispatcher::delegates_.end())
+    {
+        // Passing an empty container is treated as a Violation
+        // unless otherwise stated in SWS
+        if (instanceIDs_.empty()) {
+            throw std::invalid_argument("Unable to create service, instance identifier container is empty");
+        }
+    }
+
+
+    // ServiceImplBase的两个基类：
+    DispatcherBase<ServiceBase>、ServiceBase
+！DispatcherBase：
+server端的所有dispatcher的基类，每个dispatcher为所有clients（即delegate）分配method调用，该基类提供对外接口，用于添加或删除代理
+本质上是list<ServiceBase>
+
+！ServiceBase：
+定义skeleton实现的接口（全是纯虚函数），除了声明在其中的method，生成出的从属类也添加了纯虚函数（必须在派生类中根据模型的定义来实现）
+```
+
+
+
+`radar_activity.h`的`Init()`中的`OfferService()`，外层调用是这样的：
+`radarImp`对象调用了基类`radarSkeleton`的方法！！！
+```cpp
+    void OfferService()
+    {
+        if (!UpdateRate.IsInitialized()) {
+            throw ara::com::IllegalStateException(
+                "Attempt to offer service \"/apd/serviceinterfaces/radar\" with uninitialized field \"UpdateRate\"");
+        }
+
+        ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>::OfferService();  // 调用下一级基类方法
+    }
+```
+调用了基类`TypedServiceImplBase<radarSkeleton>`的`OfferService`
+（！！！`radarSkeleton`是`TypedServiceImplBase`的“派生类模板”，相当于是一种特化的Base类，比单纯继承更灵活）
+```cpp
+// TypedServiceImplBase
+    /**
+     * \brief Offer service to all bindings that are able to offer the service.
+     *
+     * It is OK to call this method repeatedly.
+     *
+     * \uptrace{SWS_CM_00101, a4b7416191b6d3795f020d8c96b607408cbe6d3f}
+     */
+    void OfferService()
+    {
+        Runtime::OfferService(static_cast<Service&>(*this));    // *this已经是指向radarImp对象了
+    }
+```
+！！！`TypedServiceImplBase<radarSkeleton>`这层直接调用`Runtime`提供的`static`方法：`OfferService`，注意到其中做了`static_cast`，将当前`radarImp`指针类型强转为`radarSkeleton&`类型（派生类指针转为基类指针），并传入了radarImp对象作为入参
+```cpp
+// Runtime，Service是src-gen的radarSkeleton类型
+    template <typename Service>
+    /**
+     * @brief Offer the service instance.
+     *
+     * method is idempotent - could be called repeatedly.
+     * @param service service to offer
+     **/
+    inline static void OfferService(Service& service)
+    {
+        static_assert(std::is_base_of<internal::skeleton::ServiceBase, Service>::value,
+            "OfferService only accepts classes derived from generated service skeletons");  // radarSkeleton必须是ServiceBase的后代
+        Init();     // 调用ara::com::internal::runtime的Initialize（只调用一次），！！！其实现在src-gen生成出的ara_com_main-radar.cpp中，根据绑定的协议，调用各自的Register()
+        for (const auto& instanceId : service.GetInstanceIDs()) {   // instance id为"DDS:19"
+            OfferService(service, Service::service_id, instanceId);
+        }
+    }
+```
+
+在src-gen生成出的`ara_com_main-radar.cpp`中，根据绑定的协议，调用各自的`Register()`，本质上就是：
+解析配置，得到`DdsProxyFactoryImpl`对象和`DdsServiceRegistryImpl`对象（这两个对象都有一个manifest_成员，存储着`domainProvidedServiceProperties`），构造`vector<ProxyFactoryBuilder>`、`vector<ServiceRegistry>`
+```cpp
+void Register()
+{
+    static runtime::ServiceInstanceManifest manifest;
+
+    if (!manifest.parseJsonFile("./etc/service_instance_manifest.json")) {
+        common::logger().LogError() << "runtime::Register(): Failed service instance manifest:";
+    }
+
+    static runtime::DdsProxyFactoryImpl proxyFactory(manifest);
+    internal::runtime::ProxyFactoryBuilderList& proxyFactoryBuilderList
+        = internal::runtime::ProxyFactoryBuilderList::GetInstance();
+    proxyFactoryBuilderList.push_back(proxyFactory);
+
+    static runtime::DdsServiceRegistryImpl serviceRegistry(manifest);
+    internal::runtime::ServiceRegistryList& serviceRegistryList = internal::runtime::ServiceRegistryList::GetInstance();
+    serviceRegistryList.push_back(serviceRegistry);
+}
+```
+
+
+然后调用到`Runtime`提供的`static`的`OfferService`：
 ```cpp
 void Runtime::OfferService(internal::skeleton::ServiceBase& service,
     internal::ServiceId service_id,
-    ara::com::InstanceIdentifier instance_id)   // 入参：radarSkeleton类型，建模生成的
+    ara::com::InstanceIdentifier instance_id)   // 入参：radarImp类型，62303，"DDS:19"
 {
     bool serviceRegistered{false};
     // 遍历存储service instance的vector
     for (internal::runtime::ServiceRegistry& registry : internal::runtime::ServiceRegistryList::GetInstance()) {
         serviceRegistered |= registry.registerService(service, service_id, instance_id);
-    }   // ServiceRegistry对象根据service instance信息调用registerService()方法
+    }   // ！！！ServiceRegistry对象根据service instance信息调用registerService()方法
 
     if (!serviceRegistered) {
         std::stringstream s;
@@ -19,7 +591,9 @@ void Runtime::OfferService(internal::skeleton::ServiceBase& service,
     }
 }
 ```
+`ServiceRegistry`就是用来做`Network Binding`
 
+`registerService`的实现：
 ```cpp
 bool DdsServiceRegistryImpl::registerService(internal::skeleton::ServiceBase& service,
     ServiceId service_id,
@@ -32,8 +606,8 @@ bool DdsServiceRegistryImpl::registerService(internal::skeleton::ServiceBase& se
         registered_objects_.end(),
         [service_id, instance_id](const RegisteredObjectsMap::value_type& o) -> bool {
             return (service_id == o.second.service_id_ && instance_id == o.second.instance_id_);
-        }); // 匹配已注册的对象
-    // 防止二次注册
+        });     // registered_objects_是std::unordered_map<internal::skeleton::ServiceBase*, RegisteredObject>
+        // 匹配已注册的对象，防止二次注册
     if (registered_object != registered_objects_.end()) {
         // The object was re-registered, so only check if this was done consistently
         common::logger().LogError()
@@ -42,13 +616,13 @@ bool DdsServiceRegistryImpl::registerService(internal::skeleton::ServiceBase& se
         return false;
     }
 
-    const DdsServiceMapping::Mapping* mapping = DdsServiceMapping::GetMappingForServiceId(service_id);
-    if (!mapping) { // 返回DdsServiceMapping::Mapping类型的指针
+    const DdsServiceMapping::Mapping* mapping = DdsServiceMapping::GetMappingForServiceId(service_id);  //拿到ServiceMappingImpl<ara::com::sample::radar::service_id,NoProxy,ara::com::sample::radar_binding::dds::radarServiceAdapter>类型的ara__com__sample__radar__mapping对象（在src-gen中），匹配静态常量service id（同样生成在src-gen）
+    if (!mapping) {
         common::logger().LogError()
             << "DdsServiceRegistryImpl::registerService(): there is no mapping for service with id " << service_id;
         return false;
     }
-    // 解析MANIFEST得到instance实体
+
     auto instanceProperties = manifest_.getPrividedInstanceProperties(instance_id);
     if (!instanceProperties) {
         common::logger().LogError()
@@ -57,15 +631,15 @@ bool DdsServiceRegistryImpl::registerService(internal::skeleton::ServiceBase& se
         return false;
     }
 
-    auto participant    // 创建participant，得到domain id和qos profile
-        = DomainParticipant::get(instanceProperties.Value()->domainId_, instanceProperties.Value()->qosProfile_);
+    auto participant
+        = DomainParticipant::get(instanceProperties.Value()->domainId_, instanceProperties.Value()->qosProfile_);   // // 创建participant，得到domain id和qos profile
     if (!participant) {
         common::logger().LogError() << "DdsServiceRegistryImpl::registerService(): participant is nil";
         return false;
     }
 
-    auto deployment_id = mapping->GetDeploymentId();
-    common::ServiceInfo info{deployment_id, instance_id};
+    auto deployment_id = mapping->GetDeploymentId();    // 是"Radar"  来自建模信息，存储在service_desc_radar.h，并且取得这个信息是来自ara__com__sample__radar__mapping，该对象的类型的第三个模板参数是radarServiceAdapter，注意到radarServiceAdapter对象在这里只是类型参数，不需要构造
+    common::ServiceInfo info{deployment_id, instance_id};   // "Radar","DDS:19"
 
     auto publisher = participant->GetPublisher(info);
     if (!publisher) {
@@ -80,16 +654,28 @@ bool DdsServiceRegistryImpl::registerService(internal::skeleton::ServiceBase& se
     }
 
     std::unique_ptr<internal::skeleton::ServiceBase> adapter
-        = mapping->GetSkeleton(service, instance_id, {participant, publisher, subscriber});
+        = mapping->GetSkeleton(service, instance_id, {participant, publisher, subscriber});     // ！！！重要调用，生成了Adapter对象
     if (!adapter) {
         common::logger().LogError() << "DdsServiceRegistryImpl::registerService(): adapter is nil";
         return false;
     }
 
-    registered_objects_.emplace(&service, RegisteredObject{std::move(adapter), service_id, instance_id});
+    registered_objects_.emplace(&service, RegisteredObject{std::move(adapter), service_id, instance_id});   // map增加一个元素，就等于注册好了，实际存储的是<radarImp类型对象, RegisteredObject对象>，然后RegisteredObject的第一个成员是指向radarServiceAdapter类型对象的指针
     return true;
 }
+这里的 radarImp 和 radarServiceAdapter 都是ServiceBase的后代，但是意义却不同！！！
+    RegisteredObject的定义：
+    struct RegisteredObject
+    {
+        std::unique_ptr<internal::skeleton::ServiceBase> service_;
+        ServiceId service_id_;
+        ara::com::InstanceIdentifier instance_id_;
+    };
 ```
+注意到：
+`radarServiceAdapter`继承自`ServiceImpl`，负责skeleton端的service的真正实现
+`radarServiceAdapter`的构造需要有`radarImp`对象作为入参
+
 `GetSkeleton`函数：
 ```cpp
     std::unique_ptr<internal::skeleton::ServiceBase> GetSkeleton(internal::skeleton::ServiceBase& service,
@@ -97,8 +683,21 @@ bool DdsServiceRegistryImpl::registerService(internal::skeleton::ServiceBase& se
         common::HandleInfo handle) const override
     {
         return AdapterBuilder<SkeletonType>().make(service, instance_id, handle);
-    }
+    }   // SkeletonType在src-gen里传入
 // 返回值是ServiceBase类型的指针
+        此处调用的make（是为了捕获dynamic_cast时可能产生的异常）：
+            std::unique_ptr<Adapter> make(internal::skeleton::ServiceBase& service,
+            types::InstanceId instance_id,
+            common::HandleInfo handle)
+        {
+            try {
+                typename Adapter::ServiceInterface& interface = dynamic_cast<typename Adapter::ServiceInterface&>(service); // 把绑定到radarImp对象的引用，强转为radarSkeleton类型的引用（派生类指针转为基类指针）
+                std::unique_ptr<Adapter> adapter = std::make_unique<Adapter>(interface, instance_id, handle);
+                return adapter;
+            } catch (std::bad_cast&) {
+                throw IllegalStateException("Given service interface does not fit to the binding adapter!");
+            }
+        }
 
 class ServiceBase   // 抽象基类
 {   // 定义了skeleton的接口 除了以下方法，派生类也要提供纯虚函数，它们必须由模型中定义的要实现method调用的server来实现
@@ -125,11 +724,10 @@ PS：由
 ```cpp
 using ServiceInterface = skeleton::radarSkeleton;
 ```
-可以看出，radarSkeleton类就是代码层面的service interface
-Adapter其实也体现了适配器模式，接口之间做转换，形如另一种接口
-radarSkeleton继承自ara::com::sample::radar和ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>类
+可以看出，`radarSkeleton`类就是代码层面的`service interface`（持有几个event、method、field）
+Adapter其实也体现了`适配器模式`，接口之间做转换，形如另一种接口
+`radarSkeleton`继承自ara::com::sample::radar和ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>类
 其中的TypedServiceImplBase<radarSkeleton>继承自ServiceImplBase类
-
 
 ```cpp
 // ServiceMappingImpl模板类实例化所需的第三个模板参数
@@ -153,36 +751,56 @@ radarSkeleton继承自ara::com::sample::radar和ara::com::internal::skeleton::Ty
             ServiceDescriptor::kMinorVersion);
     }
 
+// 持有以下关键对象
+    ara::com::internal::dds::skeleton::EventImpl<
+        EventbrakeEventTypeInfo,
+        descriptors::brakeEvent>
+        brakeEvent;
+    ara::com::internal::dds::skeleton::EventImpl<
+        EventparkingBrakeEventTypeInfo,
+        descriptors::parkingBrakeEvent>
+        parkingBrakeEvent;
+    ara::com::internal::dds::skeleton::MethodImpl<
+        MethodAdjust,
+        descriptors::Adjust>
+        Adjust;
+    ara::com::internal::dds::skeleton::MutableFieldImpl<
+        FieldUpdateRate>
+        UpdateRate;
+
 ```
 
-// 重点看下其中的构造函数做了什么操作
+// 重点看下其中构造函数执行了什么操作
 ## 1. Connect(service)
 ```cpp
     void Connect(ServiceInterface& service)
     {
         service.AddDelegate(*this);
-        // 增加代理，即radarServiceAdapter代理ServiceImplBase类
-        // DispatcherBase<ServiceBase>提供了AddDelegate()
-        service.brakeEvent.AddDelegate(brakeEvent);
-        /* service.brakeEvent是radarSkeleton类的成员，是ara::com::internal::skeleton::EventDispatcher<::ara::com::sample::RadarObjects>类型
-        RadarObjects是brakeEvent所用的数据类型
-        入参brakeEvent是radarServiceAdapter类的成员之一，是EventImpl模板类的实例化
+        /* 
+            ！！！为radarImp对象，增加代理：即当前的radarServiceAdapter对象
+            DispatcherBase<ServiceBase>提供了AddDelegate()，ServiceImplBase继承了DispatcherBase，DispatcherBase有list<ServiceBase*>，也就是说，！！！radarServiceAdapter代理了radarImp（虽然是实现类），真正承载了service的功能
+        */ 
+        service.brakeEvent.AddDelegate(brakeEvent);     // 同样地，EventImpl代理了EventDispatcher
+        /* 
+            service.brakeEvent是radarSkeleton类的成员，是ara::com::internal::skeleton::EventDispatcher<::ara::com::sample::RadarObjects>类型
+            RadarObjects是brakeEvent所用的数据类型
+            入参brakeEvent是radarServiceAdapter类的成员之一，是EventImpl模板类的实例化
         */
         service.parkingBrakeEvent.AddDelegate(parkingBrakeEvent);
-        Adjust.SetInvoker(MethodAdjust::CreateInvoker(dynamic_cast<ServiceInterface&>(service_)));  // service_是ServiceImpl的成员变量 ServiceBase类型（抽象类）
+        Adjust.SetInvoker(MethodAdjust::CreateInvoker(dynamic_cast<ServiceInterface&>(service_)));  // service_是ServiceImpl的成员变量，是ServiceBase类型的引用，绑定的是radarImp对象
         /*
-        Adjust是radarServiceAdapter类的成员（代表method）
-        提供了SetInvoker()方法用于接收一个可调用对象：CreateInvoker内部返回的匿名函数
+            Adjust是radarServiceAdapter类的成员（代表method）
+            提供了SetInvoker()方法用于接收一个可调用对象：CreateInvoker内部返回的匿名函数
         */
         PS: CreateInvoker的函数体
         template <class T>
-        static auto CreateInvoker(T& service)
+        static auto CreateInvoker(T& service)   // service实际上是radarImp类型
         {
-            return [&](MethodAdjust::request_t const& request) {
-                auto input = request.data().Adjust();
+            return [&](MethodAdjust::request_t const& request) {    // 入参是模型定义产生的dds产生的入参类型
+                auto input = request.data().Adjust();   // 得到引用
                     ::ara::com::sample::Position result_target_position;
                     ara::com::internal::dds::ConvertFromIdl(input.target_position(),result_target_position);    // 数据转换
-                return service.Adjust(  // radarSkeleton类的Adjust()是纯虚函数
+                return service.Adjust(  // 调用用户层传入的radarImp类的Adjust方法
                     result_target_position
                 );
             };
@@ -192,13 +810,67 @@ radarSkeleton继承自ara::com::sample::radar和ara::com::internal::skeleton::Ty
         // UpdateRate是radarSkeleton类的成员变量，是ara::com::internal::skeleton::MutableFieldDispatcher<::ara::com::sample::RadarObjects_field>类型
 
     }
-// ConvertFromIdl意义在于，将IDL生成的数据类，转换成简单的结构体
-
+// ConvertFromIdl意义在于，将IDL生成的数据类，转换成c++中可操作的结构体
 ```
+
+对于method而言，调用`AddDelegate`时，会调用`SetMethodCallProcessingMode(mode_)`
+代码模板默认生成：
+```cpp
+m_skeleton = new radarImp(instanceSpec, ara::com::MethodCallProcessingMode::kPoll);
+```
+
+`OfferService`中，构造`radarServiceAdapter`对象，最后构造`ServiceImpl`，该类的构造函数设定`requestProcessingMode_`的初值为`MethodCallProcessingMode::kPoll`
+可见，skeleton端处理request默认采用`kPoll`
+
+1. `requestProcessingMode_`若为`kPoll`
+    若入参不是`kPoll`
+        就调用用户层传入的函数处理请求（先处理剩余的请求）
+        是`kEventSingleThread`
+        是`kEvent`
+            启动专用线程，处理请求
+
+2. `requestProcessingMode_`若为`kEvent`
+    若入参不是`kEvent`（才有切换的必要），即是`kEventSingleThread`、或`kPoll`
+    调用`StopWorkers();`
+
+```cpp
+void ServiceImpl::SetMethodCallProcessingMode(ara::com::MethodCallProcessingMode mode)
+{
+    common::logger().LogInfo() << "SetMethodCallProcessingMode";
+    std::lock_guard<std::mutex> guard(requestsMutex_);
+    // execute remaining requests in case we're switching away from kPoll
+    if ((requestProcessingMode_ == MethodCallProcessingMode::kPoll) && (mode != MethodCallProcessingMode::kPoll)) {
+        CollectPendingRequests();
+        request_t request;
+        while (pendingRequests_.try_pop(request)) {
+            request.second->ProcessRequest(request.first);
+        }
+
+        if (mode == MethodCallProcessingMode::kEvent) {
+            common::logger().LogInfo() << "SetMethodCallProcessingMode to kEvent";
+            StartWorkers();
+        } else {
+            common::logger().LogInfo() << "SetMethodCallProcessingMode to kEventSingleThread";
+        }
+    } else if ((requestProcessingMode_ == MethodCallProcessingMode::kEvent)
+        && (mode != MethodCallProcessingMode::kEvent)) {
+        StopWorkers();
+        if (mode == MethodCallProcessingMode::kEvent) { // Bug: 无意义的判断
+            common::logger().LogInfo() << "SetMethodCallProcessingMode to kEvent";
+        } else {
+            common::logger().LogInfo() << "SetMethodCallProcessingMode to kPoll";
+        }
+    }
+
+    requestProcessingMode_ = mode;
+}
+```
+
 
 ## 2. OfferEvent(brakeEvent)
 ```cpp
 auto offerRes = event.Offer(handle_);   // 关键调用
+
 PS：本radarServiceAdapter类就是继承自ServiceImpl类
 在radarServiceAdapter构造函数中就调用了ServiceImpl提供的各种方法
 handle_是common::HandleInfo类型的成员变量
@@ -213,7 +885,7 @@ Offer中的逻辑：
 ```cpp
     ara::core::Result<void> Offer(common::HandleInfo handle) override
     {
-        if (!handle.participant || !handle.publisher) {
+        if (!handle.participant || !handle.publisher) { // 判断是否在之前实例化，registerService时应该创建了对象（其实当前还在registerService，这个函数的调用栈很深）
             return ara::core::Result<void>::FromError(ara::com::ComErrorDomainErrc::kBadArguments);
         }   // participant publisher
         auto topic = handle.participant->GetTopic<EventTypesInfo>   (descriptor_type::topic_name);  // 1
@@ -439,6 +1111,7 @@ Offer的逻辑：
 ```
 
 ## 5. OfferService(ServiceDescriptor::kServiceId,instance,ServiceDescriptor::kMajorVersion,ServiceDescriptor::kMinorVersion);
+真正在DDS层面提供服务
 ```cpp
 void ServiceImpl::OfferService(const types::ServiceId serviceId,
     const InstanceIdentifier& instanceIdentifier,
@@ -459,9 +1132,19 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
 }
 ```
 
+
+
+
+
+
+
+
+
+
+
 # 2 proxy端初始化
 先看用户层面的部分，线程函数中调用了radar_activity.cpp中定义的`init()`函数，
-关键调用：
+关键调用：`StartFindService`：
 ```cpp
     auto res = Proxy::StartFindService(
         [this](ara::com::ServiceHandleContainer<Proxy::HandleType> handles, ara::com::FindServiceHandle handler) {
@@ -526,7 +1209,7 @@ inline ara::core::Result<FindServiceHandle> ProxyBase<ProxyBinding>::StartFindSe
         std::function<void(ServiceHandleContainer<std::shared_ptr<internal::proxy::ProxyFactory>>, FindServiceHandle)>
             handler)
     {
-        Init(); // Runtime中的初始化，Initialize()，根据绑定的协议调用Register
+        Init(); // Runtime中的初始化，Initialize()，根据绑定的协议调用Register！！！这里开始的后续调用就确定了哪一种协议的调用栈
         return DoStartFindServiceById(service_id, instance_id, handler);
     }
 
@@ -1018,10 +1701,10 @@ ara::core::Future<FieldType> Set(const FieldType& value);
      */
     ara::core::Result<void> Update(const_reference data)
     {
-        typename LastValueType::LockedPtr last_value{last_value_sent_->Get()};  // 返回一个<std::tuple<T, bool>, unique_lock对象>构造的LockedPtrWrapper对象
+        typename LastValueType::LockedPtr last_value{last_value_sent_->Get()};  // ！！！返回一个<std::tuple<T, bool>, unique_lock对象>构造的LockedPtrWrapper对象
         std::get<0>(*last_value) = data;    // 解引用以取得元组对象，更新数据
         std::get<1>(*last_value) = true;    // 这个bool的意义是在FieldDispatcher内部的其他函数里做判断，比如是否初始化
-        return Base::Send(data);
+        return Base::Send(data);    // Base即EventDispatcher
     }
 
 // 其中：LastValueType：
@@ -1040,7 +1723,7 @@ ara::core::Future<FieldType> Set(const FieldType& value);
     */
 ```
 该函数用于判断field数据是否有更新。
-如果事件数据很大并且发送频率很高，这个版本的Update函数可能会占用较多的内存，因为需要将数据复制到输出缓冲区。但是，它不需要调用Allocate函数，并且可以发送用户分配的任意数据缓冲区。
+如果事件数据很大并且发送频率很高，这个版本的Update函数可能会占用较多的内存，因为需要将数据复制到输出缓冲区。但是，它不需要调用`Allocate`函数，并且可以发送用户分配的任意数据缓冲区。
 `FieldDispatcher`在初始化的时候，`last_value_sent_`赋值为false
 
 
