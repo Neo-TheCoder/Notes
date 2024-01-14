@@ -1050,6 +1050,59 @@ Don’t pass a smart pointer as a function parameter unless you want to use or m
 
 
 
+# `std::ref`和`std::reference_wrapper`
+`std::reference_wrapper`用于包装一个对象的引用，常用于STL容器中存储引用类型的对象（STL容器要求元素必须是可复制的）
+`std::ref`是一个函数模板，接收一个对象，返回一个`std::reference_wrapper`对象。相比`std::reference_wrapper`，`std::ref`可以直接将一个对象作为参数传递给函数，而不需要事先创建一个`std::reference_wrapper`对象。
+
+`std::bind`可以将函数调用的参数延迟绑定，以便在以后的调用中使用。
+
+```cpp
+#include <iostream>
+#include <functional>
+#include <vector>
+
+void foo(int& x) {
+    x++;
+}
+
+int main() {
+    int x = 1;
+    std::reference_wrapper<int> r1(x);  // r1是x的引用
+    std::cout << r1 << std::endl; // 输出1  
+    r1.get() = 2;  // get()取得绑定的引用，而不能直接赋值
+    std::cout << x << std::endl; // 输出2
+
+    std::vector<std::reference_wrapper<int>> v;
+    v.push_back(x); // int类型，会创建临时对象，绑定到x上
+    v.push_back(r1);  // reference_wrapper<int>类型
+    for (auto& i : v) {
+        i.get()++;  // 两个引用对象，实质都是绑定x，也就是加两次
+    }
+    std::cout << x << std::endl; // 输出4
+
+    std::function<void()> f = std::bind(foo, std::ref(x));
+    f();  // std::bind创建函数对象，无出入参，将函数foo和f绑定在一起，当f被调用时，调用函数foo，并且将std::ref(x)作为参数传递给它
+    std::cout << x << std::endl; // 输出5
+
+    return 0;
+}
+```
+注意，以上代码中的`std::bind(foo, x)`的调用，和`foo(x)`是不一样的。换言之，传入`std::ref(x)`是有必要的，要不然会做隐式的拷贝。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
