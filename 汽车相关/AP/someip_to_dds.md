@@ -26,7 +26,6 @@ void Dispatch() override
     }
 }
 
-
 其中handler->second(sample);的实际逻辑
         // 此处的second(sample)，实际上是调用了初始化（调用Offer(common::HandleInfo handle, OnRequestType onRequest)）时AddMethodHandler()添加的函数，也就是EnqueueRequest
                 reader_->AddMethodHandler(MethodDescriptor::kMethodHash, [this](auto& sample) { EnqueueRequest(sample); });
@@ -290,8 +289,69 @@ struct MethodAdjustTypeInfo
 
 PS：
 1. 还要考察下VECTOR对于METHOD的实现，是否是单线程的，因为如有必要，要开多线程来处理不同的method消息
-2. 具体考虑下，service -- method -- 线程 的数量关系
-3. 怎么包装出ROS中`Service`通信类型的`Request`？
+    VECTOR的SOME/IP binding是如何实现记录method request的
+
+2. 具体考虑下，`service -- method -- 线程`的数量关系
+一个service可含有多个method（一个method对应一个数据类型，用method名字来区分promise对象）
+
+3. 怎么包装出ROS中`Service`通信类型的`Request`？--> √
+
+4. 注意method方法的连续调用
+
+`ara::com`中`SOMEIP_TO_DDS`视作Server端。持续监听Client端发来的数据，调用`Dispatch()`。
+自己维护一个`Map<MethodId, Handler>`类型的handlers_（在`OfferService`中的`OfferMethod`中调用`AddMethodHandler`传入一个`<kMethodHash, EnqueueRequest(sample)>`，`EnqueueRequest`中会执行`pendingRequests_`，然后是一个`onRequest_`回调，去根据`MethodCallProcessingMode`判断处理方式，最终会执行用户层代码中的Method实现），根据数据中的标识符，判断使用哪个handler，执行`EnqueueRequest(sample)`，最终会执行用户层代码中的Method实现，包装dds的reply数据并发送
+
+
+
+
+
+
+
+维护一个请求map：`<request_id, handler>`，开辟线程`thread_process_request`专门（同步地）处理request（一个线程，就够了），`SOMEIP_TO_DDS`的method调用中，使用条件变量阻塞住，等待`thread_process_request`处理：向**ROS2的server节点**发送封装的`ROS2 request`，（线程中）等待**ROS2的server节点**处理，处理完后收到**ROS2的server节点**发来的`ROS2 response`，处理完之后使用条件变量来通知，数据类型是一样的，封装成future对象，直接返回
+
+
+## server端的method定义
+```cpp
+// ---- Methods of Service1 -------------------------------------------------------------------------------------- */
+ara::core::Future<service1::skeleton::methods::StartApplicationMethod1::Output>
+StartApplicationCmServerService1::StartApplicationMethod1(const std::uint8_t& input_argument) {
+  service1::skeleton::methods::StartApplicationMethod1::Output result{0};
+
+  log_.LogInfo() << "[Service1] [Method1] Called with value " << input_argument << ".";
+
+  result.output_argument = static_cast<std::uint8_t>(input_argument + 1U);
+
+  log_.LogInfo() << "[Service1] [Method1] Return value " << result.output_argument << ".";
+  ara::core::Promise<service1::skeleton::methods::StartApplicationMethod1::Output> promise;
+  promise.set_value(result);
+  return promise.get_future();
+}
+```
+
+可以这样改：
+```cpp
+// ---- Methods of Service1 -------------------------------------------------------------------------------------- */
+ara::core::Future<service1::skeleton::methods::StartApplicationMethod1::Output>
+StartApplicationCmServerService1::StartApplicationMethod1(const std::uint8_t& input_argument) {
+    someip_to_dds_participant.Send_StartApplicationMethod1_Request_Topic(input_argument);   // !!!
+    // service1::skeleton::methods::StartApplicationMethod1::Output result = start_application_method1_future.get();
+
+    ara::core::Promise<service1::skeleton::methods::StartApplicationMethod1::Output> promise;
+    promise.set_value(start_application_method1_value);     // start_application_method1_value全局变量，在on_data_available时set
+
+    return promise.get_future();  // !!!由on_data_available给future对象对应的promise对象set_value，在ara::com实现的内部，调用当前函数时，如果promise没准备好，会阻塞，如果是单线程，如果client端想要对其他的method发送request，那就会忽略其他的request
+}   // start_application_method1_promise对象是全局的
+```
+
+
+
+
+
+
+
+
+
+
 
 
 

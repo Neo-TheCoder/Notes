@@ -1,4 +1,3 @@
-# 
 # ROS基本概念
 ***Robot Operating System***，即机器人操作系统
 ROS是一个适用于机器人的开源的**元操作系统**。它提供了**操作系统应有的服务**：包括硬件抽象，底层设备控制，常用函数的实现，进程间消息传递，以及包管理。
@@ -165,6 +164,20 @@ ros2 run tf2_tools view_frames.py		# 生成一个坐标转换的pdf文档
 ros2 bag record <topic_name>			# 生成对应topic的bag文件
 ros2 bag play <bag_name>			# 播放生成的bag文件
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

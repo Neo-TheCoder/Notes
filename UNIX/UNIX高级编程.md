@@ -49,7 +49,7 @@ open read write lseek close
 是一个存储在磁盘上某个目录中的可执行文件、内核使用exec函数，将程序读入内存，并执行程序
 
 ### 2 进程和进程ID
-程序的执行实例被称为进程(process)，某些OS用任务task表示正在被执行的程序
+程序的`执行实例`被称为`进程`(process)，某些OS用`任务task`表示正在被执行的程序
 UNIX系统确保每个进程都有一个唯一的标识符
 
 ### 3 进程控制
@@ -63,8 +63,10 @@ fork exec waitpid
 
 ## 1.7 出错处理
 整型变量errno记录错误类型
+```c
 #include<errno.h>
 extern int errno;
+```
 多线程环境中每个线程都有属于自己的局部errno
 
 
@@ -1032,7 +1034,6 @@ int pthread_attr_destroy(pthread_attr_t *attr);
 
 
 
-
 # 第十五章 进程间通信
 
 
@@ -1137,10 +1138,9 @@ int shmget(key_t key,size_t size,int flag);
 ## 16.2 套接字描述符
 ```c++
 #include<sys/socket.h>
-int socket(int domain,int type,int protocol);
+int socket(int domain, int type, int protocol);
 // 若成功，则返回文件（套接字）描述符
-
-
+// 第一个参数填写: AF_UNIX
 ```
 
 
@@ -1160,14 +1160,80 @@ UNIX域套接字提供**流**和**数据报**两种接口，它就像是**套接字和管道的混合**
 int socketpair(int domain, int type, int protocol, int sockfd[2]);  // 可用于创建一对无名的、相互连接的UNIX域套接字
 ```
 
+### 经典案例
+借助UNIX域套接字轮询XSI消息队列
+**套接字和文件描述符相关**
 
 
 
+### 补充
+创建`UDS`这种socket时，指定参数family为：`AF_UNIX`。
+server端的标识不再是ip和端口，而是一个路径（`/tmp/xxx`）。
 
+#### 连接过程
+相比inet的socket连接过程简单多了。
+`client`端会先创建一个自己用的socket，然后调用`connect`和服务器建立连接，建立好后，就放到服务器正在监听的socket的接收队列中。此时，`server`就能通过accept得到和客户端配对好的新socket了（client端会创建这么一个socket给server使用）
 
+连接
+操作的实现：
+```c
+//file: net/unix/af_unix.c
+static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
+          int addr_len, int flags)
+{
+ struct sockaddr_un *sunaddr = (struct sockaddr_un *)uaddr;
 
+ ...
 
+ // 1. 为服务器侧申请一个新的 socket 对象
+ newsk = unix_create1(sock_net(sk), NULL);
 
+ // 2. 申请一个 skb，并关联上 newsk
+ skb = sock_wmalloc(newsk, 1, 0, GFP_KERNEL);
+ ...
+
+ // 3. 建立两个 sock 对象之间的连接
+ unix_peer(newsk) = sk;
+ newsk->sk_state  = TCP_ESTABLISHED;
+ newsk->sk_type  = sk->sk_type;
+ ...
+ sk->sk_state = TCP_ESTABLISHED;
+ unix_peer(sk) = newsk;
+
+ // 4. 把连接中的一头（新 socket）放到服务器接收队列中
+ __skb_queue_tail(&other->sk_receive_queue, skb);
+}
+```
+
+#### 发送过程
+`send`
+会去调用`sendto`系统调用
+1. 找到socket（内核有片区域，记录了各种协议栈的函数地址）
+2. 构造`msghdr`对象，其中存有buffer地址，data size。
+进入协议栈`inet_sendmsg`后，内核会找到socket上的具体协议发送函数:`unix_stream_sendmsg`：
+```c
+//file:
+static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
+          struct msghdr *msg, size_t len)
+{
+ // 1.申请一块缓存区
+ skb = sock_alloc_send_skb(sk, size, msg->msg_flags&MSG_DONTWAIT,
+      &err);
+
+ // 2.拷贝用户数据到内核缓存区
+ err = memcpy_fromiovec(skb_put(skb, size), msg->msg_iov, size);
+
+ // 3. 查找socket peer
+ struct sock *other = NULL;
+ other = unix_peer(sk);
+
+ // 4.直接把 skb放到对端的接收队列中!!!
+ skb_queue_tail(&other->sk_receive_queue, skb);
+
+ // 5.发送完毕回调
+ other->sk_data_ready(other, size);
+}
+```
 
 
 

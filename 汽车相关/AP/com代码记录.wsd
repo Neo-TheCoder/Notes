@@ -1,0 +1,70 @@
+@startuml
+
+radarSkeleton -> radar
+radarSkeleton -> TypedServiceImplBase<radarSkeleton>
+"TypedServiceImplBase<radarSkeleton>" -> "internal skeleton ServiceImplBase"
+
+' ---src-gen---
+' radar
+' 很简单，直接定义了service_id, version, method_datatype
+
+' ---ara-api---
+' TypedServiceImplBase<radarSkeleton>   这种继承结构可以实现静态多态
+' 定义了所有skeleton的方法，这些skeleton需要了解其提供的服务类型
+' 关键方法OfferService(), StopOfferService()
+'   得到指向radarImp对象的radarSkeleton类型的指针(指向派生类的基类指针), 调用Runtime提供的OfferService
+
+' ---src-gen---
+' radarSkeleton
+' 调用基类TypedServiceImplBase的OfferService
+' 构造函数入参: instance_id, MethodCallProcessingMode, TypedServiceImplBase<radarSkeleton>对象
+' 定义method接口(纯虚函数)
+' 持有EventDispatcher、MutableFieldDispatcher对象
+
+"internal skeleton ServiceImplBase" -> DispatcherBase<ServiceBase>
+
+"internal skeleton ServiceImplBase" -> ServiceBase
+
+ServiceImpl -> "internal skeleton ServiceImplBase"
+' ---ara-api---
+'internal skeleton ServiceImplBase
+' 是src-gen的skeleton类的基类，用于分发skeleton的方法给所有的binding
+'  !!!本质用途是操作代理类对象
+
+' ServiceBase
+' 抽象类, 定义接口:
+' SetMethodCallProcessingMode, ProcessNextMethodCall
+
+radarImp -> radarSkeleton
+' ---src-gen---
+' radarImp
+' 实现了radarSkeleton的method接口
+' 提供ProcessRequests
+
+radarServiceAdapter -> ServiceImpl
+' ---src-gen---
+' radarServiceAdapter视作skeleton，主要工作就是设置代理
+' 持有EventImpl, MethodImpl, MutableFieldImpl对象(所以能够代理)
+
+' !!!
+' radarServiceAdapter代理radarImp
+' EventImpl代理EventDispatcher
+
+ServiceImpl -> ServiceImplBase
+' ---ara-api---
+' ServiceImplBase是抽象类，定义接口:
+'OfferService, StopOfferService, OfferEvent, StopOfferEvent, OfferMethod, StopOfferMethod, OfferField, StopOfferField
+
+' ServiceImpl实现抽象类的以上接口:
+' OfferService, StopOfferService...
+
+
+
+
+
+
+
+
+
+
+@enduml

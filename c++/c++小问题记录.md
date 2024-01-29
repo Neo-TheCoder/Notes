@@ -1091,14 +1091,132 @@ int main() {
 
 
 
+# 类模板的派生
+```cpp
+// 基类模板
+template <typename T>
+class BaseTemplate {
+public:
+    BaseTemplate(T value) : data(value) {}
+    void print() {
+        std::cout << "BaseTemplate: " << data << std::endl;
+    }
+protected:
+    T data;
+};
+
+// 派生类模板
+template <typename T>
+class DerivedTemplate : public BaseTemplate<T> {
+public:
+    DerivedTemplate(T value) : BaseTemplate<T>(value) {}
+    void printDerived() {
+        std::cout << "DerivedTemplate: " << this->data << std::endl; // 可以访问基类的成员变量
+    }
+};
+
+int main() {
+    DerivedTemplate<int> derived(42);
+    derived.print(); // 调用基类的成员函数
+    derived.printDerived(); // 调用派生类的成员函数
+    return 0;
+}
+```
 
 
 
+# CRTP(Curiously Recurring Template Pattern)
+在C++中，派生类可以继承基类的模板，其中模板参数是派生类本身(奇异递归模板模式)
+1. 静态多态性：通过CRTP，可以在编译时实现静态多态性。派生类可以通过继承基类模板来获得基类的行为，并在编译时进行类型检查。
+2. 提供编译时代码生成：通过CRTP，可以在派生类中生成特定于派生类的代码。基类模板可以使用派生类的类型信息来生成特定的代码，从而提高代码的效率和灵活性。
+3. 实现静态接口：通过CRTP，可以在派生类中实现静态接口。基类模板可以定义一组接口函数，并在派生类中实现这些函数。这样可以在编译时进行接口检查，确保派生类正确地实现了基类的接口。
+
+```cpp
+// 举例
+#include <iostream>
+using namespace std;
+
+template <typename Child>
+struct Base
+{
+	void interface()
+	{
+		static_cast<Child*>(this)->implementation();  // 转为派生类指针，调用派生类方法
+	} // 使用static_cast是因为只有继承了基类的类型才能调用interface()，且是向下转型，是安全的
+};
+
+struct Derived : Base<Derived>
+{
+	void implementation()
+	{
+		cerr << "Derived implementation\n";
+	}
+};
+
+int main()
+{
+	Derived d;  // 调用派生类对象的基类提供的方法
+	d.interface();  // Prints "Derived implementation"
+
+	return 0;
+}
+```
 
 
+```cpp
+template<typename Child>
+class Animal
+{
+public:
+	void Run()
+	{
+		static_cast<Child*>(this)->Run();
+	}
+};
 
+class Dog :public Animal<Dog>
+{
+public:
+	void Run()
+	{
+		cout << "Dog Run" << endl;
+	}
+};
 
+class Cat :public Animal<Cat>
+{
+public:
+	void Run()
+	{
+		cout << "Cat Run" << endl;
+	}
+};
 
+template<typename T>
+void Action(Animal<T> &animal)
+{
+	animal.Run();
+}
+
+int main()
+{
+	Dog dog;
+	Action(dog);  // 该函数具有多态性，对于不同的对象，调用不同的方法
+
+	Cat cat;
+	Action(cat);
+	return 0;
+}
+```
+
+# 类的引用成员的初始化 必须在初始化列表
+在C++中，类的引用类型成员必须在初始化列表中进行初始化，这是因为引用类型成员在创建时必须引用一个已经存在的对象。
+**引用类型成员不能被重新赋值，一旦初始化后，它将一直引用同一个对象**。
+初始化列表提供了一种在对象构造时初始化成员的机制，它**在构造函数的函数体执行之前执行**。
+通过在初始化列表中初始化引用类型成员，可以**确保在构造函数的函数体中使用这些成员时，它们已经被正确地初始化**。
+另外，引用类型成员的初始化不能延迟到构造函数的函数体中，因为**引用类型成员没有默认构造函数**。
+如果不在初始化列表中初始化引用类型成员，编译器将会报错。
+总结来说，引用类型成员必须在初始化列表中初始化，以确保它们引用一个已经存在的对象，并且避免编译错误。
 
 
 

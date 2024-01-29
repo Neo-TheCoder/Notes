@@ -1,3 +1,227 @@
+# 前言
+## 涉及到的设计模式
+### 代理模式
+`代理模式`可以为其他对象提供一个代理，以便在访问对象时添加额外的功能或控制访问的方式。
+
+**三个关键角色**
+1. `目标对象`
+定义了代理对象和真实对象的共同接口，代理对象和真实对象都实现了这个接口。
+
+2. `代理对象`
+持有一个对真实对象的引用，并在其上执行操作。代理对象通常在执行操作之前或之后执行额外的逻辑，例如权限验证、缓存、延迟加载等。
+
+3. `真实对象`
+实际执行操作的对象。
+
+代理模式的**核心思想**是通过代理对象来控制对真实对象的访问。
+当客户端需要访问真实对象时，它并不直接与真实对象交互，而是通过代理对象来完成操作。代理对象可以在执行操作前后添加额外的逻辑，或者在必要时延迟创建真实对象。
+
+而在AP的框架中，由于有些实现类要根据用户输入的模型来生成，需要涉及到一定的代码生成，而这些生成的类负责实际的一些操作，就涉及到代理模式，而ara-api层面的对象是代理对象，而他们都继承自某些抽象类，就是目标对象。举例如下：
+
+1. `目标对象`
+```cpp
+/// @uptrace{SWS_CM_00002, 4d3a2b51c78573d1d34cd3d2aff93527b4a97d63}
+class radarSkeleton
+    : public ara::com::sample::radar
+    , public ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>
+{
+public:
+    /// @uptrace{SWS_CM_00130, 296a1309a7a0c7ed9c22860bac1f8e8da1d6d781}
+    radarSkeleton(ara::com::InstanceIdentifier instance_id,
+        ara::com::MethodCallProcessingMode mode = ara::com::MethodCallProcessingMode::kEvent)
+        : ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>(instance_id, mode)
+    { }
+
+    /// @uptrace{SWS_CM_00152, b772a2873b407e2731b5b05529fb74cda8bce3df}
+    radarSkeleton(ara::core::InstanceSpecifier instanceSpec,
+        ara::com::MethodCallProcessingMode mode = ara::com::MethodCallProcessingMode::kEvent)
+        : ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>(std::move(instanceSpec), mode)
+    { }
+
+    /// @uptrace{SWS_CM_00153, 8b59a23d227f152aad94749801c8ddea75d1622d}
+    radarSkeleton(ara::com::InstanceIdentifierContainer instanceIDs,
+        ara::com::MethodCallProcessingMode mode = ara::com::MethodCallProcessingMode::kEvent)
+        : ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>(std::move(instanceIDs), mode)
+    { }
+
+    virtual ~radarSkeleton()
+    {
+        StopOfferService();
+    }
+
+    /// @brief Skeleton shall be move constructable.
+    ///
+    /// @uptrace{SWS_CM_00135, 3e590d73cd77c5afbc592cec60094e43c8dfbf97}
+    explicit radarSkeleton(radarSkeleton&&) = default;
+
+    /// @brief Skeleton shall be move assignable.
+    ///
+    /// @uptrace{SWS_CM_00135, 3e590d73cd77c5afbc592cec60094e43c8dfbf97}
+    radarSkeleton& operator=(radarSkeleton&&) = default;
+
+    /// @brief Skeleton shall not be copy constructable.
+    ///
+    /// @uptrace{SWS_CM_00134, 988e39db973396943ac710bbeb3a6e4af033b727}
+    explicit radarSkeleton(const radarSkeleton&) = delete;
+
+    /// @brief Skeleton shall not be copy assignable.
+    ///
+    /// @uptrace{SWS_CM_00134, 988e39db973396943ac710bbeb3a6e4af033b727}
+    radarSkeleton& operator=(const radarSkeleton&) = delete;
+
+    void OfferService()
+    {
+        if (!UpdateRate.IsInitialized()) {
+            throw ara::com::IllegalStateException(
+                "Attempt to offer service \"/apd/serviceinterfaces/radar\" with uninitialized field \"UpdateRate\"");
+        }
+
+        ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>::OfferService();
+    }
+
+    /// @uptrace{SWS_CM_00191, e3ee8aca56f9a3b371df808324769584093419f3}
+    using ara::com::sample::radar::AdjustOutput;
+    virtual ara::core::Future<AdjustOutput> Adjust(
+        const ::ara::com::sample::Position& target_position
+    ) = 0;
+    fields::UpdateRate UpdateRate;
+    events::brakeEvent brakeEvent;
+    events::parkingBrakeEvent parkingBrakeEvent;
+};
+```
+
+
+2. `代理对象`
+```cpp
+class radarImp : public ara::com::sample::skeleton::radarSkeleton
+{
+    using Skeleton = ara::com::sample::skeleton::radarSkeleton;
+
+public:
+    radarImp(ara::core::InstanceSpecifier instanceSpec, ara::com::MethodCallProcessingMode mode)
+        : Skeleton(std::move(instanceSpec), mode)   // 调用基类构造函数
+        , m_worker(&radarImp::ProcessRequests, this)
+    { } // 构造时启了一个method专用的线程
+
+    virtual ~radarImp()
+    {
+        m_finished = true;
+        m_worker.join();    // 主线程会调用该析构，然后调用join()，等待m_worker结束
+    }
+
+    virtual auto Adjust(
+        const ::ara::com::sample::Position& target_position
+        ) -> decltype(Skeleton::Adjust(target_position)) override;
+private:
+
+private:
+    /*!
+     * \brief Defines how the incoming service method invocations are processed.
+     *
+     * \uptrace{SWS_CM_00198}
+     * \uptrace{SWS_CM_00199}
+     */
+    void ProcessRequests();
+
+    std::atomic<bool> m_finished{false};
+    std::thread m_worker;
+
+    ara::log::Logger& m_logger_ctx1{
+        ara::log::CreateLogger("CTX1", "context for adjustment", ara::log::LogLevel::kVerbose)};
+    ara::log::Logger& m_logger_ctx2{
+        ara::log::CreateLogger("CTX2", "context for calibration", ara::log::LogLevel::kVerbose)};
+    ara::log::Logger& m_logger_ctx5{ara::log::CreateLogger("CTX5", "context for echo", ara::log::LogLevel::kVerbose)};
+};
+```
+
+3. `真实对象`
+```cpp
+class radarServiceAdapter : public ::ara::com::internal::dds::skeleton::ServiceImpl
+{
+public:
+    using ServiceInterface = skeleton::radarSkeleton;
+    using ServiceDescriptor = descriptors::internal::Service;
+
+    radarServiceAdapter(ServiceInterface& service,
+        ara::com::InstanceIdentifier instance,
+        ara::com::internal::dds::common::HandleInfo handle)
+        : ::ara::com::internal::dds::skeleton::ServiceImpl(service, ServiceDescriptor::kServiceId, instance, handle)
+        , brakeEvent(instance)
+        , parkingBrakeEvent(instance)
+        , Adjust(instance)
+        , UpdateRate(instance)
+    {
+        Connect(service);
+        OfferEvent(brakeEvent);
+        OfferEvent(parkingBrakeEvent);
+        OfferMethod(Adjust);
+        OfferField(UpdateRate);
+        OfferService(ServiceDescriptor::kServiceId,
+            instance,
+            ServiceDescriptor::kMajorVersion,
+            ServiceDescriptor::kMinorVersion);
+    }
+
+    virtual ~radarServiceAdapter()
+    {
+        StopOfferService();
+        StopOfferField(UpdateRate);
+        StopOfferMethod(Adjust);
+        StopOfferEvent(brakeEvent);
+        StopOfferEvent(parkingBrakeEvent);
+        Disconnect(dynamic_cast<ServiceInterface&>(service_));
+    }
+
+private:
+    ara::com::internal::dds::skeleton::EventImpl<
+        EventbrakeEventTypeInfo,
+        descriptors::brakeEvent>
+        brakeEvent;
+    ara::com::internal::dds::skeleton::EventImpl<
+        EventparkingBrakeEventTypeInfo,
+        descriptors::parkingBrakeEvent>
+        parkingBrakeEvent;
+    ara::com::internal::dds::skeleton::MethodImpl<
+        MethodAdjust,
+        descriptors::Adjust>
+        Adjust;
+    ara::com::internal::dds::skeleton::MutableFieldImpl<
+        FieldUpdateRate>
+        UpdateRate;
+
+    void Connect(ServiceInterface& service)
+    {
+        service.AddDelegate(*this);
+        service.brakeEvent.AddDelegate(brakeEvent);
+        service.parkingBrakeEvent.AddDelegate(parkingBrakeEvent);
+        Adjust.SetInvoker(MethodAdjust::CreateInvoker(dynamic_cast<ServiceInterface&>(service_)));
+        service.UpdateRate.AddDelegate(UpdateRate);
+    }
+
+    void Disconnect(ServiceInterface& service)
+    {
+        service.RemoveDelegate(*this);
+        service.brakeEvent.RemoveDelegate(brakeEvent);
+        service.parkingBrakeEvent.RemoveDelegate(parkingBrakeEvent);
+        Adjust.SetInvoker(nullptr);
+        service.UpdateRate.RemoveDelegate(UpdateRate);
+    }
+};
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # 用户层代码基本结构
 创建`RadarActivity`对象（准确来说，是`ServiceInterface_name` + `Activity`）
 ## skeleton
@@ -943,7 +1167,7 @@ void ServiceImpl::OfferMethod(MethodImplBase& method)
     // 就是set 当前MethodImpl对象的回调、replyTopic、writer_、requestTopic、reader_
     onRequest_ = onRequest; // 设置回调
     auto replyTopic
-        = handle.participant->GetTopic<typename dds_type_construct::reply>(MethodDescriptor::output_topic_name);    // output_topic_name
+        = handle.participant->GetTopic<typename dds_type_construct::reply>(MethodDescriptor::output_topic_name);    // output_topic_name    PS：此处的topic_name都记录在src-gen的AP_Project/event_method_field/apd/RadarFusionMachine/src/radar/net-bindings/fastdds/ara/com/sample/service_desc_radar.h中，此处的topic_name是DdsTopicRadarMethodRequest，是模型输入的
     
     writer_ = handle.publisher->GetDataWriter(replyTopic, MethodDescriptor::qos_profile);
 
@@ -1131,9 +1355,6 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
     offered_ = true;
 }
 ```
-
-
-
 
 
 
@@ -1599,7 +1820,6 @@ using Adjust = ara::com::internal::proxy::Method<ara::com::sample::radar::Adjust
         return future;  // 把future对象返回到用户层，用户层可以调用GetResult()得到值
     }
 ```
-
 
 
 
