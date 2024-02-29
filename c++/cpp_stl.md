@@ -230,11 +230,21 @@ inline void destroy(ForwardIterator first, ForwardIterator last){
 ```
 
 ### 2.2.4 空间的配置与释放 std::alloc
+`<std_alloc.h>`负责：对象构造前的空间配置 和 对象析构后的空间释放
+SGI对此的设计哲学：
+1. 向`system heap`要求空间
+2. 考虑`多线程状态`
+3. 考虑内存不足时的应变措施
+4. 考虑内存碎片问题
 
+对于内存碎片，SGI设计了`双层级配置器`
+1. 第一级配置器
+    直接使用`malloc()`，`free()`
 
-
-
-
+2. 第二级配置器
+    当配置区块超过`128bytes`，认为`足够大`，使用第一级配置器
+    当小于`128bytes`，认为`过于小`，为了降低负担，使用复杂的`memory pool`整理方式 --> 减少内存碎片，提高利用率
+(第二级配置器的开关取决于`__USE_MALLOC`)
 
 
 
