@@ -244,9 +244,71 @@ SGI对此的设计哲学：
 2. 第二级配置器
     当配置区块超过`128bytes`，认为`足够大`，使用第一级配置器
     当小于`128bytes`，认为`过于小`，为了降低负担，使用复杂的`memory pool`整理方式 --> 减少内存碎片，提高利用率
+相比第一级就是多了个对要分配内存大小的判断
 (第二级配置器的开关取决于`__USE_MALLOC`)
 
+```cpp
+// 取得SGI规定的配置器类型
+#ifdef __USE_MALLOC
+// ...
+typedef __malloc_alloc_template<0> malloc_alloc;
+typedef malloc_alloc alloc; // 使得alloc表示第一级配置器
 
+# else
+// ...
+typedef __default_alloc_template<__NODE_ALLOCATOR_THREADS, 0> alloc; // 第二级配置器
+# endif
+```
+alloc不接受任何`template型别参数`
+
+如此包装才能使得alloc符合STL规格
+```cpp
+template<class T, class Alloc>
+class simple_alloc
+//  简单的传递调用，使得配置器的配置单位由"bytes"转为元素类型的大小
+{    
+    static T *allocate(size t n)
+    {
+        return 0 == n?0 : (T*) Alloc::allocate(n * sizeof(T));
+    }
+    static T *allocate(void)
+    {
+        return (T*) Alloc::allocate(sizeof(T));
+    }
+    static void deallocate(T *p， size_t n)
+    {
+        if (0 != n)
+            Alloc::deallocate(p，n * sizeof(T));
+    }
+    static void deallocate(T *p)
+    {
+        Alloc::deallocate(p，sizeof(T)); 
+    }
+};
+
+```
+
+```cpp
+template<class T, class Alloc = alloc> // 默认使用alloc
+class Vector{
+protected:
+    // 专属的空间配置器
+    typedef simple_alloc<value_type, Alloc> data_allocator;
+
+    void deallocate(){
+        if(...)
+            data_allocator::deallocate(start, end_of_storage - start);
+    }
+}
+
+```
+
+# 一、二级配置器对比
+## SGI STL第一级配置器
+
+
+## SGI STL第二级配置器
+1. 维护16个自由链表(free lists)，负责16个小型区块的次配置能力
 
 
 
