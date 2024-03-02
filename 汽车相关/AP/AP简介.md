@@ -109,3 +109,19 @@ AP既是中间件，又是面向服务的架构，增加功能和节点很方便
 
 
 
+
+
+
+
+
+# 示例
+以ADAS系统为例，有视觉、雷达等sensor，作为一个输入的software component，要以service interface形式提供出来。
+vision和data perception之间形成了对于VisionData这一service interface的P-R关系（Radar同理）。
+
+
+
+
+
+
+
+

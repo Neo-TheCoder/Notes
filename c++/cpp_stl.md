@@ -293,7 +293,8 @@ template<class T, class Alloc = alloc> // 默认使用alloc
 class Vector{
 protected:
     // 专属的空间配置器
-    typedef simple_alloc<value_type, Alloc> data_allocator;
+    typedef simple_alloc<T, Alloc> data_allocator;
+    data_allocator::allocate(n);    // 配置n个元素，然后设定初值
 
     void deallocate(){
         if(...)
@@ -303,12 +304,47 @@ protected:
 
 ```
 
+```cpp
+template<class T, class Alloc = alloc, size_t BufSiz = 0>
+class deque{
+protected:
+    typedef simple_alloc<T, Alloc> data_allocator;
+    typedef simple_alloc<T*, Alloc> map_allocator;
+    data_allocator::allocate(n);    // 配置n个元素
+    map_allocator::allocate(n);    // 配置n个元素
+    // 配置完成后，设置初值
+}
+```
+
+
+
 # 一、二级配置器对比
 ## SGI STL第一级配置器
-
+```cpp
+template<int inst>
+class __malloc_alloc_template{...};
+```
+1. `allocate()`直接使用`malloc()`
+   `deallocate()`直接使用`free()`
+2. 模拟C++的`set_new_handler()`以处理内存不足的状况
 
 ## SGI STL第二级配置器
-1. 维护16个自由链表(free lists)，负责16个小型区块的次配置能力
+```cpp
+template<bool threads, int inst>
+class __default_alloc_template{...};
+```
+1. 维护`16个自由链表`(free lists)，负责16个小型区块的次配置能力
+内存池以`malloc()`配置而得
+如果内存不足，则转调用第一级配置器（有对内存不足的处理程序）
+2. 如果需求区块大于128bytes，则转而调用第一级配置器
+
+### 2.2.5 第一级配置器__malloc_alloc_template剖析
+
+
+
+
+
+
 
 
 
