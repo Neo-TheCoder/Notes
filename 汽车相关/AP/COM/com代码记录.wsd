@@ -1,5 +1,7 @@
 @startuml
 
+' skeleton
+
 radarSkeleton -> radar
 radarSkeleton -> TypedServiceImplBase<radarSkeleton>
 "TypedServiceImplBase<radarSkeleton>" -> "internal skeleton ServiceImplBase"

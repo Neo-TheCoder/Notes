@@ -19,6 +19,7 @@
 而在AP的框架中，由于有些实现类要根据用户输入的模型来生成，需要涉及到一定的代码生成，而这些生成的类负责实际的一些操作，就涉及到代理模式，而ara-api层面的对象是代理对象，而他们都继承自某些抽象类，就是目标对象。举例如下：
 
 1. `目标对象`
+是生成出来的
 ```cpp
 /// @uptrace{SWS_CM_00002, 4d3a2b51c78573d1d34cd3d2aff93527b4a97d63}
 class radarSkeleton
@@ -92,6 +93,7 @@ public:
 
 
 2. `代理对象`
+是生成出来的，继承了`radarSkeleton`
 ```cpp
 class radarImp : public ara::com::sample::skeleton::radarSkeleton
 {
@@ -135,6 +137,7 @@ private:
 ```
 
 3. `真实对象`
+也是生成出来的，是许多操作的直接执行者
 ```cpp
 class radarServiceAdapter : public ::ara::com::internal::dds::skeleton::ServiceImpl
 {
@@ -212,16 +215,6 @@ private:
 
 
 
-
-
-
-
-
-
-
-
-
-
 # 用户层代码基本结构
 创建`RadarActivity`对象（准确来说，是`ServiceInterface_name` + `Activity`）
 ## skeleton
@@ -237,11 +230,12 @@ m_skeleton->UpdateRate.RegisterSetHandler(
 // Initialize Fields Values before Offering Service.
 ::ara::com::sample::RadarObjects_field UpdateRate_value;
 //TODO:Need assign value
-m_skeleton->UpdateRate.Update(UpdateRate_value);    // 直接开始持续发送数据（是bug，要在OfferService之后，才是真正的发送数据）
+m_skeleton->UpdateRate.Update(UpdateRate_value);    // 直接开始持续发送数（是field的特性，有初值的设定）
 //Offering
 m_skeleton->OfferService(); // 这里有很多逻辑
 ```
-！！！注意此处，调用对象`m_skeleton`是`radarSkeleton*`类型，实际指向的是`radarImp`类型的对象
+！！！注意此处，`RadarActivity`所持有的调用对象`m_skeleton`是`radarSkeleton*`类型，实际指向的是`radarImp`类型的对象，也就是持有一个基类指针，指向派生类对象，并且`radarImp`类是skeleton侧`method的实现类`，是method专属的
+而`radarSkeleton`类则是代表了skeleton侧的service interface的概念，持有除了method以外的event、field对象
 
 
 2. 在`while`循环中调用`act()`
@@ -302,9 +296,8 @@ void RadarActivity::act()
 }
 ```
 
-
 以上方法调用的对象都是`RadarActivity`对象，用户层直接接触
-## `RadarActivity`
+## skeleton侧的`RadarActivity`
 ```cpp
 class RadarActivity
 {
@@ -350,7 +343,6 @@ ara::core::Future<::ara::com::sample::RadarObjects_field> setUpdateRate(::ara::c
         ara::log::CreateLogger("CTX4", "radar activity main context", ara::log::LogLevel::kVerbose)};
 };
 ```
-
 
 
 ## `radarImp`
@@ -427,8 +419,10 @@ void RadarActivity::init()
     m_logger.LogInfo() << "init() exit";
 }
 ```
+！！！注意此处，proxy侧的`RadarActivity`类，持有的`radarProxy`指针，是在`FindService`过程中构造出来的
 
-## `RadarActivity`
+
+## proxy侧的`RadarActivity`
 ```cpp
 /*!
  *  \brief Class implementing radar activity.
@@ -472,7 +466,7 @@ public:
         if (handles.size() > 0) {
             std::lock_guard<std::mutex> lock(m_proxy_mutex);
             if (nullptr == m_proxy) {
-                m_proxy = std::make_shared<Proxy>(handles[0]);
+                m_proxy = std::make_shared<Proxy>(handles[0]);  // !!! 服务发现完成时，才构造radarProxy对象
                 m_logger.LogInfo() << "Created proxy from handle with instance: "
                                    << m_proxy->GetHandle().GetInstanceId().ToString();
                 // Construct some handles (implementation-specific).
@@ -497,7 +491,7 @@ public:
      * Callback Received when the Field UpdateRate is changed.
      */
     void UpdateRateReceived()
-    {
+    {   // 该函数作为field对象的SetReceiveHandler函数的参数
         ara::log::LogStream logMsg{m_logger.LogVerbose()};
 
         m_proxy->UpdateRate.GetNewSamples(
@@ -535,7 +529,6 @@ protected:
 ```
 
 
-
 2. 在`while`循环中调用`act()`
 ```cpp
 void RadarActivity::act()
@@ -543,7 +536,7 @@ void RadarActivity::act()
     m_logger.LogInfo() << "radar alive";
 
     if (nullptr != m_proxy) {
-        if(m_proxy->brakeEvent.IsSubscribed()){
+        if(m_proxy->brakeEvent.IsSubscribed()){ 
             auto e2eState = ara::com::e2e::internal::GetSMState(m_proxy->brakeEvent);
             bool stateResult = (e2eState == ara::com::e2e::SMState::kNoData);
             // LogStream logMsg{m_logger.LogVerbose()};
@@ -562,7 +555,7 @@ void RadarActivity::act()
         else{
             m_logger.LogInfo() << "not subscribed to brakeEvent yet";
             // subscribe to event
-            auto brakeEvent_subscription_result = m_proxy->brakeEvent.Subscribe(3);
+            auto brakeEvent_subscription_result = m_proxy->brakeEvent.Subscribe(3); // 设置接收端 cache size为3
             if (brakeEvent_subscription_result.HasValue()) {
                 m_logger.LogInfo() << "brakeEvent Callback registered.";
             } else {
@@ -626,13 +619,59 @@ void RadarActivity::act()
 
 ```
 
+## `radarProxy`
+持有对proxy端的event、method、field对象的引用
+构造时，调用了基类`ProxyBase<radarProxyBase>`对象的成员`proxy_base_`的各种方法来将自己持有的各种引用初始化
 
 
+```cpp
+/// @uptrace{SWS_CM_00004, bedfd6edb7e40a5e31639e01621800cfc077b498}
+class radarProxy
+    : public ara::com::internal::proxy::ProxyBase<radarProxyBase>
+    , public ara::com::sample::radar
+{
+public:
+    /// @brief Proxy constructor.
+    ///
+    /// @uptrace{SWS_CM_00131, a4bb0196ec1ba17aed6d599f4dc3259f7b7ed02b}
+    explicit radarProxy(const HandleType& proxy_base_factory)
+        : ara::com::internal::proxy::ProxyBase<radarProxyBase>(proxy_base_factory)
+        , Adjust(proxy_base_->GetAdjust())
+        , UpdateRate(proxy_base_->GetUpdateRate())
+        , brakeEvent(proxy_base_->GetbrakeEvent())
+        , parkingBrakeEvent(proxy_base_->GetparkingBrakeEvent())
+    { }
 
+    /// @brief Proxy shall be move constructable.
+    ///
+    /// @uptrace{SWS_CM_00137, c198eaaf815fde7c1ebe1f7c31a75bf1ccc57f19}
+    explicit radarProxy(radarProxy&&) = default;
+
+    /// @brief Proxy shall be move assignable.
+    ///
+    /// @uptrace{SWS_CM_00137, c198eaaf815fde7c1ebe1f7c31a75bf1ccc57f19}
+    radarProxy& operator=(radarProxy&&) = default;
+
+    /// @brief Proxy shall not be copy constructable.
+    ///
+    /// @uptrace{SWS_CM_00136, 2565b350c03a33dff1af61b8fc65aacbccb7ea9a}
+    explicit radarProxy(const radarProxy&) = delete;
+
+    /// @brief Proxy shall not be copy assignable.
+    ///
+    /// @uptrace{SWS_CM_00136, 2565b350c03a33dff1af61b8fc65aacbccb7ea9a}
+    radarProxy& operator=(const radarProxy&) = delete;
+
+    /// @uptrace{SWS_CM_00196, 2bdfebdbb1957ea558963073c804f27d13405c80}
+    methods::Adjust& Adjust;
+    fields::UpdateRate& UpdateRate;
+    events::brakeEvent& brakeEvent;
+    events::parkingBrakeEvent& parkingBrakeEvent;
+};
+```
 
 
 # 1 skeleton端初始化
-
 ```cpp
 m_skeleton = new radarImp(instanceSpec, ara::com::MethodCallProcessingMode::kPoll); // ！！！重要的初始化
 ```
@@ -1364,7 +1403,7 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
 
 
 # 2 proxy端初始化
-先看用户层面的部分，线程函数中调用了radar_activity.cpp中定义的`init()`函数，
+先看用户层面的部分，线程函数中调用了`radar_activity.cpp`中定义的`init()`函数，
 关键调用：`StartFindService`：
 ```cpp
     auto res = Proxy::StartFindService(
@@ -1554,6 +1593,228 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
 
 ```
 
+有待深挖：
+`ProxyBase`
+```cpp
+/**
+ * \brief This is the base class that all proxies derive from.
+ *
+ * It provides all the methods that are common for service discovery. It also serves as the link from the user-visible
+ * API to the binding. The template parameter designates the respective base class that has to provide getters for all
+ * interface elements declared.
+ *
+ */
+template <typename ProxyBinding>
+class ProxyBase
+{
+public:
+    /**
+     * \brief Type of the handle that identifies one particular instance of the service.
+     * \uptrace{SWS_CM_00312, 5375d8c7e5188912edeb968a872caf5bfa9991bd}
+     *
+     * The underlying type is lightweight and can therefore be freely copied and stored by the application developer.
+     */
+    using HandleType = ProxyFactoryWrapper<ProxyBinding>;
+
+    /**
+     * \brief Creates a proxy using the instance information from the given handle. See \ref FindService() and
+     * \ref StartFindService() for means to obtain a handle.
+     *
+     * \param proxy Instance the proxy shall be connected to.
+     *
+     * \uptrace{SWS_CM_00131, 4dbc501350571efc37be84e68c998c95a73adbda}
+     */
+    ProxyBase(const HandleType& proxy)
+        : proxy_base_(proxy.Create())
+        , handle_(proxy)
+    { }
+    virtual ~ProxyBase()
+    { }
+
+    /**
+     * \brief Returns the handle from which the Proxy instance has been created.
+     *
+     * \remark since the proxy may be "auto updated" during runtime, in case the (remote) service has been restarted
+     * with a different transportlayer adressing, the handles returned at time t0 and t1 from the same proxy instance
+     * need not be binary-equal!
+     *
+     * \return handle The handle that may be used to create another instance of a proxy for the same instance.
+     *
+     * \uptrace{SWS_CM_10383, 17f578b19b796bdb8dbafd9b287f6dbd0f013139}
+     */
+    HandleType GetHandle() const
+    {
+        return handle_;
+    }
+
+    /**
+     *
+     * \brief Retrieves a list of compatible instances for the service.
+     *
+     * Opposed to \ref StartFindService() this version is a "one-shot" find request, which is
+     * - synchronous, i.e. it returns after the find has been done and a result list of matching service instances is
+     *   available. (list may be empty, if no matching service instances currently exist)
+     * - does reflect the availability at the time of the method call. No further (background) checks of availability
+     *   are done.
+     *
+     * \param instance Instance of the service type that shall be searched/found. A wildcard may be given.
+     *  Default value is wildcard.
+     *
+     * \uptrace{SWS_CM_00122, d485774f111eb58f6cfa351c02570b425400aca6}
+     */
+    static ara::core::Result<ServiceHandleContainer<HandleType>> FindService(
+        InstanceIdentifier instance = InstanceIdentifier::MakeAny());
+
+    /**
+     *
+     * \brief Retrieves a list of compatible instances for the service.
+     *
+     * Opposed to \ref StartFindService() this version is a "one-shot" find request, which is
+     * - synchronous, i.e. it returns after the find has been done and a result list of matching service instances is
+     *   available. (list may be empty, if no matching service instances currently exist)
+     * - does reflect the availability at the time of the method call. No further (background) checks of availability
+     *   are done.
+     *
+     * \param instance Instance Specifier qualifying the service instances that shall be searched/found.
+     *
+     * \uptrace{SWS_CM_00622, b102b02dce909ff9796a59e634e9f5ad9370806a}
+     */
+    static ara::core::Result<ServiceHandleContainer<HandleType>> FindService(ara::core::InstanceSpecifier instance);
+
+    /**
+     * \brief Installs a handler that is called whenever the set of offered instances for this service changes.
+     *
+     * If you use this method, the middleware will continuously monitor the availability of the services and call the
+     * handler on any change. This means also that service instances that are not available anymore simply disappear
+     * from the list that is given to the callback.
+     *
+     * StartFindService does not need an explicit version parameter as this is internally available in ProxyClass
+     * That means only compatible services are returned.
+     *
+     * \param handler Handler that gets called any time the service availability of the services matching the given
+     * instance criteria changes.
+     *
+     * \param instance Which instance of the service shall be searched/found. A wildcard may be given to
+     * look for all compatible instances. Default value is wildcard.
+     *
+     * \return a handle for this search/find request, which shall be used to stop the availability monitoring and
+     * related firing of the given handler. (\ref StopFindService())
+     *
+     * \uptrace{SWS_CM_00123, 01fa2c1b9fac60d7ae46b7af48403600fb2e683b}
+     **/
+    static ara::core::Result<FindServiceHandle> StartFindService(FindServiceHandler<HandleType> handler,
+        InstanceIdentifier instance = InstanceIdentifier::MakeAny());
+
+    /**
+     * \brief Installs a handler that is called whenever the set of offered instances for this service changes.
+     *
+     * If you use this method, the middleware will continuously monitor the availability of the services and call the
+     * handler on any change. This means also that service instances that are not available anymore simply disappear
+     * from the list that is given to the callback.
+     *
+     * StartFindService does not need an explicit version parameter as this is internally available in ProxyClass
+     * That means only compatible services are returned.
+     *
+     * \param handler Handler that gets called any time the service availability of the services matching the given
+     * instance criteria changes.
+     *
+     * \param instance Instance Specifier qualifying the service instances that shall be searched/found.
+     *
+     * \return a handle for this search/find request, which shall be used to stop the availability monitoring and
+     * related firing of the given handler. (\ref StopFindService())
+     *
+     * \uptrace{SWS_CM_00623, d290d7f3ab8ff20337af911263cd3aaf107e32e9}
+     **/
+    static ara::core::Result<FindServiceHandle> StartFindService(FindServiceHandler<HandleType> handler,
+        ara::core::InstanceSpecifier instance);
+
+    /**
+     * \brief Unregisters the previously installed handler using the returned handle.
+     *
+     * \param handle
+     *
+     * \uptrace{SWS_CM_00125, 623b1cf4ca84f3c9b7b93e895546caf037666b21}
+     */
+    static void StopFindService(FindServiceHandle handle);
+
+protected:
+    std::unique_ptr<ProxyBinding>
+        proxy_base_;  ///< Binding specific class that holds references to all interface elements.
+    HandleType handle_;  ///< Handle that was used to create this instance.
+};
+
+```
+
+！！！关键类`ara::com::sample::radar_binding::dds`的`radarImpl`，继承自`radarProxyBase`
+`radarProxy`继承自`ProxyBase<radarProxyBase>`，而`radarImpl`是继承自`radarProxyBase`
+
+
+```cpp
+class radarImpl
+    : public proxy::radarProxyBase
+    , public ::ara::com::internal::dds::proxy::ProxyImplBase
+{
+public:
+    using ProxyInterface = proxy::radarProxy;
+    using ServiceDescriptor = descriptors::internal::Service;
+
+    explicit radarImpl(
+        ara::com::InstanceIdentifier instance,
+        ara::com::internal::dds::common::HandleInfo handle)
+        : ::ara::com::internal::dds::proxy::ProxyImplBase(ServiceDescriptor::kServiceId,
+            instance,
+            ServiceDescriptor::kMajorVersion,
+            ServiceDescriptor::kMinorVersion,
+            handle)
+        , brakeEvent(instance, handle)
+        , parkingBrakeEvent(instance, handle)
+        , Adjust(instance, handle)
+        , UpdateRate(instance, handle)
+    { }
+
+    virtual ~radarImpl()
+    { }
+
+    virtual proxy::events::brakeEvent& GetbrakeEvent() override
+    {
+        return brakeEvent;
+    }
+
+    virtual proxy::events::parkingBrakeEvent& GetparkingBrakeEvent() override
+    {
+        return parkingBrakeEvent;
+    }
+
+    virtual proxy::methods::Adjust& GetAdjust() override
+    {
+        return Adjust;
+    }
+
+    virtual proxy::fields::UpdateRate& GetUpdateRate() override
+    {
+        return UpdateRate;
+    }
+
+private:
+    ara::com::internal::dds::proxy::EventImpl<descriptors::brakeEvent,
+        EventbrakeEventTypeInfo>
+        brakeEvent;
+    ara::com::internal::dds::proxy::EventImpl<descriptors::parkingBrakeEvent,
+        EventparkingBrakeEventTypeInfo>
+        parkingBrakeEvent;
+  ara::com::internal::dds::proxy::MethodImpl<descriptors::Adjust,
+      MethodAdjust,
+      typename MethodAdjust::signature_t>
+      Adjust;
+  ara::com::internal::dds::proxy::MutableFieldImpl<FieldUpdateRate>
+      UpdateRate;
+};
+```
+
+
+
+
+
 # 3 skeleton端通信
 ## 1 event
 **从用户层深入**
@@ -1644,7 +1905,7 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
 创建DataReader，MethodDataReaderListener
 
 **当proxy侧的app向skeleton侧发送请求...**（怎么发送请求的详情见proxy侧的记录）
-在创建MethodDataReader时创建了MethodDataDispatcher对象
+在创建`MethodDataReader`时创建了`MethodDataDispatcher`对象
 调用MethodDataReaderListener的`on_data_available()`方法：
 ```cpp
     /// @uptrace{SWS_CM_11020, 95ae0a0855d8338d23a058118b07bda90315d478}
@@ -1698,7 +1959,6 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
 
 
 
-
 # 4 proxy端通信
 ## 1 event
 在初始化时订阅，如果有数据处理回调则调用
@@ -1710,7 +1970,7 @@ SetSubscriptionStateChangeHandler()、SetReceiveHandler()
 对应的成员是internal::proxy::EventDataContainer<ara_type_t>类型（其中有成员std::deque，双端队列，兼备list和vector，用于记录空节点，以及vector类型，用于存储数据本身）
 ```
 
-在**用户层面**是通过GetNewSamples方法获取数据的
+在**用户层面**是通过`GetNewSamples`方法获取数据的
 ```cpp
 m_proxy->brakeEvent.GetNewSamples(callback);
 ```
@@ -1744,27 +2004,27 @@ m_proxy->brakeEvent.GetNewSamples(callback);
     }
 ```
 
-
 ## 2 method
-事先在初始化时通过MethodImpl构造了所需的东西（MethodDataReader）
+事先在初始化时通过MethodImpl构造了所需的对象（MethodDataReader）
 
-### 关于如何发送请求
-在用户层代码（即`act()`中）中，调用m_proxy(radarProxy类型)的Adjust对象
+### 关于method如何发送请求
+在用户层代码（即`act()`中）中，调用m_proxy(`radarProxy`类型)的`Adjust`对象提供的`operator()`
 ```cpp
     auto adjust_future = m_proxy->Adjust(tmp);  // 如同这样的调用
 ```
-其中的tmp是建模时定义，本文举例的工程中service interface定义了Adust方法中：
+其中的tmp是用户层传入，本文举例的工程中service interface定义了Adust方法中：
 1. `ara::com::sample::Position`类型的target_position参数 in
 2. bool类型的success参数 out
 3. `ara::com::sample::Position`类型的effective_position参数 out
-`FIRE_AND_FORGET`设置为false  --> `FIRE_AND_FORGET`即无需等待该调用的完成或获取其返回结果。这意味着调用者不关心该调用的结果和执行状态，而是只关注调用操作的触发。
+`FIRE_AND_FORGET`设置为false
+    PS：`FIRE_AND_FORGET`即无需等待该调用的完成或获取其返回结果。这意味着调用者不关心该调用的结果和执行状态，而是只关注调用操作的触发。
 
 注意此处的`Adjust`是起了别名：
 ```cpp
 using Adjust = ara::com::internal::proxy::Method<ara::com::sample::radar::AdjustOutput(const ::ara::com::sample::APString&)>;
-实际上是`Method`对象的派生类`MethodImpl`重载了operator()
-由于radarProxy类型的对象在初始化时为成员变量赋值的是派生类对象，因此实现了多态，调用到以下的代码：
 ```
+实际上是`Method`对象的派生类`MethodImpl`重载了`operator()`
+由于radarProxy类型的对象在初始化时为成员变量赋值的是派生类对象，因此实现了多态，调用到以下的代码：
 
 发送请求的函数：
 `MethodImpl`对象对外提供**函数调用**
@@ -1822,13 +2082,15 @@ using Adjust = ara::com::internal::proxy::Method<ara::com::sample::radar::Adjust
 ```
 
 
-
 ## 3 field
 ### 概览
 #### skeleton侧
 1. 更新、通知一个field的值的改变
 2. 为接收到的Get()调用提供服务
 2. 为接收到的Set()调用提供服务
+field的特点在于：
+在skeleton端初始化时，需要一并设置初值（毕竟field是用于表示温度这种持续存在的变量的）。
+
 ```cpp
 // 代码如下：
 class UpdateRate {
@@ -1861,7 +2123,7 @@ public:
 可以通过调用`Get()`方法查询当前字段值，也可以通过 Set() 方法更新当前字段值。
 
 注意：一个field提供的所有特征都是可选的：
-“on change notification”、Get()、Set()
+“on change notification”、`Get()`、`Set()`
 
 proxy端field被用来：
 调用`Get()`或`Set()`方法
@@ -1897,6 +2159,9 @@ ara::core::Future<FieldType> Set(const FieldType& value);
 当然，用户也可以选择周期发送Notification消息。
 
 **Field和Event的区别是：Field是一个持续存在的变量，比如多媒体音量、车速、环境温度等，这些可以在任何时刻获取；而Event指的是一个事件，事件没有发生就不存在，比如发生碰撞，出现故障等。**
+
+
+
 
 
 
