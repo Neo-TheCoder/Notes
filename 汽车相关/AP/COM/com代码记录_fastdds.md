@@ -391,7 +391,7 @@ private:
 
 
 ## proxy
-1. 调用`init()`
+1. 调用`RadarActivity::init()`
 ```cpp
 void RadarActivity::init()
 {
@@ -400,7 +400,7 @@ void RadarActivity::init()
     ara::core::InstanceSpecifier portSpecifier{"fusion/fusion/radar_RPort"};
     m_logger.LogInfo() << "Port In Executable Ref:" << portSpecifier.ToString();
 
-    auto instanceIDs = ara::com::runtime::ResolveInstanceIDs(portSpecifier);    // 搜索<portSpecifier, instance_id>，此处是：<fusion/fusion/radar_RPort, DDS:19>
+    auto instanceIDs = ara::com::runtime::ResolveInstanceIDs(portSpecifier);    // 调用rapidjson接口，解析Json，搜索<portSpecifier, instance_id>，此处是：<fusion/fusion/radar_RPort, DDS:19>
     if (instanceIDs.empty()) {
         throw std::runtime_error{"No InstanceIdentifiers resolved from provided InstanceSpecifier"};
     }
@@ -421,8 +421,7 @@ void RadarActivity::init()
 ```
 ！！！注意此处，proxy侧的`RadarActivity`类，持有的`radarProxy`指针，是在`FindService`过程中构造出来的
 
-
-## proxy侧的`RadarActivity`
+## proxy侧的`RadarActivity`类
 ```cpp
 /*!
  *  \brief Class implementing radar activity.
@@ -618,7 +617,6 @@ void RadarActivity::act()
 }
 
 ```
-
 ## `radarProxy`
 持有对proxy端的event、method、field对象的引用
 构造时，调用了基类`ProxyBase<radarProxyBase>`对象的成员`proxy_base_`的各种方法来将自己持有的各种引用初始化
@@ -1404,15 +1402,20 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
 
 # 2 proxy端初始化
 先看用户层面的部分，线程函数中调用了`radar_activity.cpp`中定义的`init()`函数，
-关键调用：`StartFindService`：
+## 关键调用：`StartFindService`：
+参数1：lambda函数：接收1个handles，1个handler，函数体是用户层实现的`serviceAvailabilityCallback`，接收两个入参
+参数2：portSpecifier：`"fusion/fusion/radar_RPort"`
+此处调用了`ara::com::sample::proxy::radarProxy`类所继承的`ara::com::internal::proxy::ProxyBase<radarProxyBase>`的`static`的`StartFindService`函数
 ```cpp
     auto res = Proxy::StartFindService(
         [this](ara::com::ServiceHandleContainer<Proxy::HandleType> handles, ara::com::FindServiceHandle handler) {
             RadarActivity::serviceAvailabilityCallback(std::move(handles), handler);
         },
         portSpecifier); // 参数1：callback  参数2：portSpecifier
+```
 
-其中的callback函数：    ？？？这个函数在做什么？
+其中的callback函数：`serviceAvailabilityCallback`
+```cpp
     // Callback to change to radar service offer changes.
     // Callback executed whenever a change for radar service offers happen.
     void serviceAvailabilityCallback(ara::com::ServiceHandleContainer<Proxy::HandleType> handles,
@@ -1444,7 +1447,38 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
         }
     }
 
-其中关键调用StartFindService是基类ProxyBase的方法：
+```
+
+其中关键调用`Proxy::StartFindService`是基类`ara::com::internal::proxy::ProxyBase<radarProxyBase>`的方法：
+```cpp
+template <typename ProxyBinding>
+inline ara::core::Result<FindServiceHandle> ProxyBase<ProxyBinding>::StartFindService(
+    FindServiceHandler<HandleType> handler,
+    ara::core::InstanceSpecifier instance)
+{
+    auto instanceIDs = ::ara::com::runtime::ResolveInstanceIDs(instance);
+
+    // According to SWS_CM_00623 InstanceSpecifier validation errors are treated as Violations
+    if (instanceIDs.empty()) {
+        throw std::invalid_argument("Unable to find service, instance identifier container is empty");
+    }
+
+    // Currently it's assumed that only one Service Instance mapped to the Port:
+    // InstanceIdentifier Container contains only one element
+    if (instanceIDs.size() != 1) {
+        throw std::invalid_argument(
+            "Implementation constraints: not able to handle multiple service instances mapped to r-port-prototype");
+    }
+    return StartFindService(std::move(handler), instanceIDs.front());
+}
+```
+以上函数的重点就是拿到`instance id`
+更深层调用是：当前所在类`ara::com::internal::proxy::ProxyBase<radarProxyBase>`的另一个重载函数（区别是第二个参数是`InstanceIdentifier`）
+其重点是调用`Runtime`层的`StartFindServiceById`，拿到当前类的模板类型参数`ProxyBinding::service_id`，传入，然后拿到结果返回出去
+PS: 当前的调用栈都是static函数，但是由于using的过程中，模板类的模板类型参数已经确定了
+在`RadarActivity`中`using Proxy = ara::com::sample::proxy::radarProxy;`，而`ara::com::sample::proxy::radarProxy`继承自`ara::com::internal::proxy::ProxyBase<radarProxyBase>`，那么此处的`ProxyBinding`就是`radarProxyBase`，继承了`ara::com::sample::radar`，自然能拿到static的`ServiceId`（jinja模板生成）
+
+```cpp
 template <typename ProxyBinding>
 inline ara::core::Result<FindServiceHandle> ProxyBase<ProxyBinding>::StartFindService(
     FindServiceHandler<HandleType> handler,
@@ -1462,8 +1496,21 @@ inline ara::core::Result<FindServiceHandle> ProxyBase<ProxyBinding>::StartFindSe
         });
     return ResultType::FromValue(std::move(result));
 }
+```
 
-其中调用了Runtime层的接口：
+### `Runtime`层的`StartFindServiceById`：
+参数：
+1. service_id
+2. instance id
+3. lambda函数，入参为：
+    1. `ServiceHandleContainer<std::shared_ptr<ProxyFactory>>`
+    2. `FindServiceHandle`
+    函数体为：
+    遍历通过入参拿到的`ServiceHandleContainer`，将其一个个地`push_back`进临时创建的handles，再传入`handler`回调
+    PS：此处的handler回调，即最上层用户层传入的函数体中含有`serviceAvailabilityCallback`的lambda，该lmabda什么时候调用要看`StartFindServiceById`的后续调用
+
+Runtime层的`StartFindServiceById`：
+```cpp
     inline static FindServiceHandle StartFindServiceById(internal::ServiceId service_id,
         ara::com::InstanceIdentifier instance_id,
         std::function<void(ServiceHandleContainer<std::shared_ptr<internal::proxy::ProxyFactory>>, FindServiceHandle)>
@@ -1472,22 +1519,129 @@ inline ara::core::Result<FindServiceHandle> ProxyBase<ProxyBinding>::StartFindSe
         Init(); // Runtime中的初始化，Initialize()，根据绑定的协议调用Register！！！这里开始的后续调用就确定了哪一种协议的调用栈
         return DoStartFindServiceById(service_id, instance_id, handler);
     }
+```
 
-DoStartFindServiceById：
+#### `Init()`:
+```cpp
+void Runtime::Init()
+{
+    static std::once_flag initialized;
+    std::call_once(initialized, internal::runtime::Initialize);
+}
+```
+
+`internal::runtime::Initialize`
+编译时传入宏定义`HAS_FASTDDS_BINDING`
+```cpp
+void Initialize()
+{
+#ifdef HAS_VSOMEIP_BINDING
+    vsomeip::runtime::Register();
+#endif  // HAS_VSOMEIP_BINDING
+
+#ifdef HAS_WRSOMEIP_BINDING
+    ara::com::internal::wrsomeip::runtime::Register();
+#endif  // HAS_WRSOMEIP_BINDING
+
+#ifdef HAS_OPENDDS_BINDING
+    dds::runtime::Register();
+#endif  // HAS_OPENDDS_BINDING
+
+#ifdef HAS_FASTDDS_BINDING
+    dds::runtime::Register();
+#endif  // HAS_FASTDDS_BINDING
+
+#ifdef HAS_RTESHM_BINDING
+    rte::runtime::Register();
+#endif 
+}
+```
+
+`dds::runtime::Register();`
+初始化全局的``ProxyFactoryBuilderList`，`ServiceRegistryList`
+```cpp
+void Register()
+{
+    static runtime::ServiceInstanceManifest manifest;
+
+    if (!manifest.parseJsonFile("./etc/service_instance_manifest.json")) {
+        common::logger().LogError() << "runtime::Register(): Failed service instance manifest:";
+    }
+
+    static runtime::DdsProxyFactoryImpl proxyFactory(manifest);
+    internal::runtime::ProxyFactoryBuilderList& proxyFactoryBuilderList
+        = internal::runtime::ProxyFactoryBuilderList::GetInstance();
+    proxyFactoryBuilderList.push_back(proxyFactory);
+
+    static runtime::DdsServiceRegistryImpl serviceRegistry(manifest);
+    internal::runtime::ServiceRegistryList& serviceRegistryList = internal::runtime::ServiceRegistryList::GetInstance();
+    serviceRegistryList.push_back(serviceRegistry);
+}
+```
+
+
+#### `DoStartFindServiceById`：
+遍历`Runtime::Init`时初始化的`ProxyFactoryBuilderList`对象
+为其中每一个元素调用`RegisterFindServiceHandle(handle, handler)`
+```cpp
 FindServiceHandle Runtime::DoStartFindServiceById(internal::ServiceId service_id,
     ara::com::InstanceIdentifier instance_id,
     std::function<void(ServiceHandleContainer<std::shared_ptr<ara::com::internal::proxy::ProxyFactory>>,
         FindServiceHandle)> handler)
 {
-    static std::atomic<std::uint32_t> uid;
+    static std::atomic<std::uint32_t> uid;  // 表示什么的原子变量？？？
     FindServiceHandle handle{service_id, instance_id, uid.fetch_add(1)};
     for (internal::runtime::ProxyFactoryBuilder& factory : internal::runtime::ProxyFactoryBuilderList::GetInstance()) {
         factory.RegisterFindServiceHandle(handle, handler);
     }
     return handle;
 }
+```
 
-关键调用：RegisterFindServiceHandle()
+`FindServiceHandle`
+标识一个被触发的`FindService请求`，只是个标识：记录`service_id`、`instance_id`
+```cpp
+/**
+ * @brief Identifier for a triggered FindService request.
+ *
+ * This identifier is needed to later cancel the FindService request.
+ *
+ * @uptrace{SWS_CM_00303, 74731364104a5921eb782e7e2f78c97f58f6d07f}
+ */
+struct FindServiceHandle
+{
+    FindServiceHandle()
+        : instance_id{InstanceIdentifier::MakeAny()}
+    { }
+
+    FindServiceHandle(internal::ServiceId srvc_id, ara::com::InstanceIdentifier instnc_id, std::uint32_t id)
+        : service_id{srvc_id}
+        , instance_id{instnc_id}
+        , uid{id}
+    { }
+
+    internal::ServiceId service_id;
+    ara::com::InstanceIdentifier instance_id;
+    std::uint32_t uid;
+};
+```
+
+
+关键调用：`RegisterFindServiceHandle()`
+调用`GetMappingForServiceId`，根据`service_id`，拿到`ServiceMappingImpl`全局对象
+```cpp
+ServiceMappingImpl<ara::com::sample::radar::service_id, ara::com::sample::radar_binding::dds::radarImpl, NoAdapter>
+```
+关键：和`radarImpl`联系起来了
+拿到`dds service配置：domain、qos、service id、instance_id`，调用`SubscribeOnParticipantUpdates`，拿到participant
+然后调用`GenerateAvailableInstanceFactory`，得到`availableFactory`  ？？？有待深挖
+
+！！！其中调用`OnServiceAvailabilityChanged`时，把service信息（包括回调函数）组织成`ServiceInfo`，会真正调用最外层用户层传入的函数体中含有`serviceAvailabilityCallback`的lambda
+
+再把`availableFactory`存入`availableInstances`
+调用`callback(availableInstances, handle);`
+
+```cpp
 void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, ProxyFactoryCallback callback)
 {
     std::lock_guard<Mutex> guard(mutex_);
@@ -1500,7 +1654,7 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
         return;
     }
 
-    if (handle.instance_id.IsAny()) {//instance_id   is "any"   ！！！any则
+    if (handle.instance_id.IsAny()) {//instance_id   is "any"，表示需要接收所有service instance id的消息
         auto instances = manifest_.getRequiredServiceProperties(handle.service_id); // 遍历domainReqiredServiceProperties_得到的ara::core::Vector<DdsServiceInstanceProperties>
         if (instances.empty()) {
             common::logger().LogWarn()
@@ -1519,7 +1673,7 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
         // 创建participant、proxy factory
     } else {    // instance id 不为any，为某具体值
 
-        auto instanceProperties = manifest_.getRequiredInstanceProperties(handle.instance_id);  // 返回const DdsServiceInstanceProperties*类型，涉及一些建模时的配置
+        auto instanceProperties = manifest_.getRequiredInstanceProperties(handle.instance_id);  // 返回const DdsServiceInstanceProperties*类型，涉及一些建模时的dds service配置：domain、qos、service id、instance_id
         if (!instanceProperties) {
             common::logger().LogError()
                 << "DdsProxyFactoryImpl::RegisterFindServiceHandle(): there is no manifest for instance with id "
@@ -1534,7 +1688,7 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
         }
 
         const auto& emplaceResult
-            = findHandles_.emplace(handle.uid, common::FindServiceInfo{handle, callback, participant}); // Id,FindServiceInfo类型的map
+            = findHandles_.emplace(handle.uid, common::FindServiceInfo{handle, callback, participant}); // Id, FindServiceInfo类型的map
         if (emplaceResult.second != true) {
             common::logger().LogWarn() << "DdsProxyFactoryImpl::RegisterFindServiceHandle(): a handle with uid "
                                        << handle.uid << " was already been added";
@@ -1590,8 +1744,54 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
                 }
     }
 }
-
 ```
+
+`OnServiceAvailabilityChanged()`
+```cpp
+void DdsProxyFactoryImpl::OnServiceAvailabilityChanged(std::set<common::ServiceInfo> const& availableServices,
+    common::ServiceInfo service,
+    bool available)
+{
+    common::logger().LogInfo() << "Service {" << service.serviceId << "}, instance {" << service.instanceId.ToString()
+                               << "} become " << (available ? "available." : "unavailable.");
+
+    DdsServiceMapping::MultiMapping mappings = DdsServiceMapping::GetMappingForFastDDSServiceId(service.serviceId);
+
+    for (const DdsServiceMapping::MultiMapping::value_type& mappingKeyval : mappings) {
+        ServiceId mappingId = mappingKeyval.first;
+        const DdsServiceMapping::Mapping& mapping = mappingKeyval.second;
+        // This is the loop that calls any handlers that registered for just one instance of a service
+        for (auto const& info : findHandles_) {
+            auto const& handle = info.second;
+            if (handle.findHandle.service_id == mappingId && handle.findHandle.instance_id == service.instanceId) {
+                const types::ServiceId deploymentId = mapping.GetDeploymentId();
+                if (available) {
+                    auto factory = GetProxy(mapping, deploymentId, service.instanceId, handle.participant);
+                    if (factory) {
+                        handle.callback({factory}, handle.findHandle);
+                    } else {
+                        common::logger().LogError()
+                            << "DdsProxyFactoryImpl::OnServiceAvailabilityChanged(): proxy factory is nil";
+                    }
+                } else {
+                    handle.callback({}, handle.findHandle);
+                }
+            }
+        }
+
+        // This loop calls handlers that registered for any instance of a given service.
+        ServiceHandleContainer<std::shared_ptr<internal::proxy::ProxyFactory>> allInstances
+            = GenerateAnyFactoryList(availableServices, mapping);
+        for (auto const& info : findHandles_) {
+            auto const& handle = info.second;
+            if (handle.findHandle.service_id == mappingId && handle.findHandle.instance_id.IsAny()) {
+                handle.callback(allInstances, handle.findHandle);
+            }
+        }
+    }
+}
+```
+
 
 有待深挖：
 `ProxyBase`
@@ -1748,7 +1948,7 @@ protected:
 ！！！关键类`ara::com::sample::radar_binding::dds`的`radarImpl`，继承自`radarProxyBase`
 `radarProxy`继承自`ProxyBase<radarProxyBase>`，而`radarImpl`是继承自`radarProxyBase`
 
-
+`radarImpl`类
 ```cpp
 class radarImpl
     : public proxy::radarProxyBase
@@ -1810,6 +2010,9 @@ private:
       UpdateRate;
 };
 ```
+
+
+
 
 
 
@@ -2164,312 +2367,5 @@ ara::core::Future<FieldType> Set(const FieldType& value);
 
 
 
-
-
-# SOME/IP版本实现
-## skeleton
-### field
-重要类：
-`FieldDispatcher`，继承自`EventDispatcher`
-
-#### Notify
-```cpp
-    /**
-     * \brief Sends the referenced data.
-     *
-     * This version of Update is memory intensive if the event data is large and sending occurs quite
-     * frequent due to the time needed to copy the data to the output buffers. However, it does not require a call to
-     * \ref Allocate and it can send arbitrary data buffers allocated by the user.
-     * \param data Data to send
-     *
-     * \uptrace{SWS_CM_00116, 5b26bfe8313d5929411ca99e5749075c50a276cc}
-     */
-    ara::core::Result<void> Update(const_reference data)
-    {
-        typename LastValueType::LockedPtr last_value{last_value_sent_->Get()};  // ！！！返回一个<std::tuple<T, bool>, unique_lock对象>构造的LockedPtrWrapper对象
-        std::get<0>(*last_value) = data;    // 解引用以取得元组对象，更新数据
-        std::get<1>(*last_value) = true;    // 这个bool的意义是在FieldDispatcher内部的其他函数里做判断，比如是否初始化
-        return Base::Send(data);    // Base即EventDispatcher
-    }
-
-// 其中：LastValueType：
-    using LastValueType = internal::common::MutexWrapper<std::tuple<T, bool>, std::mutex>;
-    /*
-        MutexWrapper封装了一个数据结构，从而实现线程安全的访问
-        提供Get()，返回LockedPtrWrapper类型的对象
-    */
-
-// LockedPtr：
-    using LockedPtr = LockedPtrWrapper<T, M>;  ///< Proxy type that manages the associated lock.
-    /*
-        LockedPtrWrapper将互斥锁（mutex）的guard对象和对同步内部数据结构的引用进行封装，可以理解为线程安全的指针
-        如寻常指针，可以调用->，使用assert判断guard_拥有锁的所有权，然后返回&inner_.get()，get()会返回实际对象
-        解引用同理
-    */
-```
-该函数用于判断field数据是否有更新。
-如果事件数据很大并且发送频率很高，这个版本的Update函数可能会占用较多的内存，因为需要将数据复制到输出缓冲区。但是，它不需要调用`Allocate`函数，并且可以发送用户分配的任意数据缓冲区。
-`FieldDispatcher`在初始化的时候，`last_value_sent_`赋值为false
-
-
-#### Get
-`MutableFieldImpl`对象提供`Get()`方法，其他线程会去取得值，当前线程取得future对象
-`MutableFieldImpl`继承自`FieldImpl<FieldDescriptor, T>`、`proxy::MutableField<T>`
-
-include/ara/com/internal/vsomeip/proxy/vsomeip_mutable_field_impl.h
-```cpp
-/*
-    MutableField虚继承了Field
-    特点是持有一个MethodSet
-*/
-template <typename FieldDescriptor, typename T>
-/**
- * \brief Implementation for mutable field interface for proxy side
- */
-class MutableFieldImpl
-    : public FieldImpl<FieldDescriptor, T>
-    , public internal::proxy::MutableField<T>
-{
-public:
-    MutableFieldImpl(types::InstanceId instance_id)
-        : internal::proxy::Field<T>(FieldImpl<FieldDescriptor, T>::get_method_)
-        , FieldImpl<FieldDescriptor, T>(instance_id)
-        , internal::proxy::MutableField<T>(FieldImpl<FieldDescriptor, T>::get_method_, set_method_)
-        , set_method_(instance_id)
-    { }
-
-private:
-    MethodImpl<MakeSetMethodDescriptorFrom<FieldDescriptor>,
-        typename internal::proxy::MutableField<T>::MethodSet::signature_type>
-        set_method_;
-};
-```
-
-
-include/ara/com/internal/vsomeip/proxy/vsomeip_field_impl.h
-```cpp
-/**
- * \brief Field implementation for Proxy Interface
- */
-/*
-    其中的Field基类虚继承了Event，还继承了bits::FieldBase（只有一个虚析构函数，这样设计意义何在？）
-    持有一个Method<T()>类型的引用，！！！Method<T()> 表示一个无参数、返回类型为 T 的函数指针类型，即函数类型为 T()
-*/
-template <typename FieldDescriptor, typename T>
-class FieldImpl
-    : public virtual internal::proxy::Field<T>
-    , public EventImpl<FieldDescriptor, T>
-{
-public:
-    using MethodGet = typename internal::proxy::Field<T>::MethodGet;
-    /**
-     * \param instance_id InstanceId to create the FieldImpl object
-     */
-    explicit FieldImpl(types::InstanceId instance_id)
-        : internal::proxy::Field<T>(get_method_)
-        , EventImpl<FieldDescriptor, T>(instance_id)
-        , get_method_(instance_id)
-    { }
-
-    virtual ~FieldImpl()
-    { }
-
-    virtual ara::core::Result<void> Subscribe(std::size_t maxSampleCount) override
-    {
-        return EventImpl<FieldDescriptor, T>::DoSubscribe(maxSampleCount, true);
-    }
-
-protected:
-    /**
-     * \brief This is the get method proxy instance that is used if someone calls Get() on this field.
-     */
-    MethodImpl<MakeGetMethodDescriptorFrom<FieldDescriptor>,
-        typename internal::proxy::Field<T>::MethodGet::signature_type>
-        get_method_;
-};
-```
-
-在skeleton端，`get`和`set`，都是用户自定义函数，注册到`MutableFieldImpl`对象
-`FieldImpl`构造时，调用`registerMethodHandler`，把get回调封装到`handleGet`中调用，把`handleGet`传到vsomeip的接口，设置收到消息时触发的回调
-```cpp
-runtime::VSomeIPConnection::getInstance().getApplication().register_message_handler(
-    service_id, instance_id, method_id, callback);
-```
-
-skeleton端监听到method request时，触发以下函数，调用用户层传入的field::`get()`函数，取得返回值：future对象
-
-
-然后调用`SendReply(reply, msg)`，将应答数据发往proxy端
-```cpp
-    /// \brief This function handles a Get() call from the client to the server.
-    /// \param msg Get message sent by the client.
-    /// \uptrace{SWS_CM_10302, 8adc98396e0c955435c6d6db492f85f8353c76ea}
-    /// \uptrace{SWS_CM_10334, 8d2ec3a6b5530c143de24a8984afc8c226644a32}
-    void handleGet(const std::shared_ptr<::vsomeip::message>& msg) const
-    {
-        bool isValidMessage = common::checkMessageMetaData(*msg,
-            FieldDescriptor::service_id,
-            FieldDescriptor::get_method_id,
-            FieldDescriptor::service_version_major,
-            ::ara::com::internal::vsomeip::types::MessageTypeRequest,
-            ::ara::com::internal::vsomeip::types::MessageTypeRequestNoReturn,
-            true,
-            true);
-
-        if (isValidMessage) {
-            std::function<ara::core::Future<T>()> get_handler = RetrieveHandler(get_handler_);
-            if (get_handler) {
-                auto reply = get_handler().GetResult();
-                ServiceImplBase::SendReply(reply, msg);
-            } else {
-                throw IllegalStateException("No Get handler registered!");
-            }
-        } else {
-            common::logger().LogWarn() << "Discarding invalid message";
-        }
-    }
-```
-
-
-同样地，对于set函数：
-因为有了入参，所以稍微复杂一些
-解包时要解出要set的数据
-```cpp
-    /// \brief  This function handles a Set() call from the client.
-    /// \param msg The message contains the data the value of the field shall be set to.
-    /// \uptrace{SWS_CM_10302, 8adc98396e0c955435c6d6db492f85f8353c76ea}
-    /// \uptrace{SWS_CM_10334, 8d2ec3a6b5530c143de24a8984afc8c226644a32}
-    void handleSet(const std::shared_ptr<::vsomeip::message>& msg)
-    {
-        bool isValidMessage = common::checkMessageMetaData(*msg,
-            FieldDescriptor::service_id,
-            FieldDescriptor::set_method_id,
-            FieldDescriptor::service_version_major,
-            ::ara::com::internal::vsomeip::types::MessageTypeRequest,
-            ::ara::com::internal::vsomeip::types::MessageTypeRequestNoReturn,
-            true,
-            true);
-
-        if (isValidMessage) {
-            std::function<SetMethodSignature> set_handler = Base::RetrieveHandler(set_handler_);
-            if (set_handler) {
-                common::Unmarshaller<T> unmarshaller(*msg);
-                T value_to_set = unmarshaller.template unmarshal<0>();
-                auto reply = set_handler(value_to_set).GetResult();
-                ServiceImplBase::SendReply(reply, msg);
-            } else {
-                throw IllegalStateException("No Set handler registered!");
-            }
-        } else {
-            common::logger().LogWarn() << "Discarding invalid message";
-        }
-    }
-```
-
-
-##### 关于field的值
-在skeleton端，一直存在一个`m_update_rate`，代表field的变量，在skeleton端的get()中，为其设置新的值，然后将其`std::move`到promise的`set_value()`，除非被再次赋值，否则就没法使用`m_update_rate`了
-
-
-
-
-
-## proxy
-
-### field
-
-#### 接收notify
-把接收notify消息放在`receive handler`里，在其他线程（vsomeip开的线程）中执行
-```cpp
-// 在proxy端，DoSubscribe时设置message_handler，收到消息才触发
-    app.register_message_handler(EventDescriptor::service_id,
-        instance_id_,
-        EventDescriptor::event_id,
-        [this](const std::shared_ptr<::vsomeip::message>& msg) { onMessage(msg); });
-```
-
-
-#### get
-proxy端调用field的get()，最深层调用的是Field初始化时传进来的`MethodGet`（是一个`MethodImpl`类型的对象）。
-这个初始化操作是在最外层的`radarImpl`初始化时完成的，
-`MutableFieldImpl`的实例化需要两个类型参数：
-1. `FieldDescriptor`是一个struct，存储模型中该service中field的相关id，
-2. 实际数据类型
-
-`MutableFieldImpl`是field相关类的最外层派生类，继承FieldImpl<FieldDescriptor, T>、MutableField<T>
-构造时，同时构造给自己的一个个基类
-
-`MethodImpl`的构造需要一个instance_id，该对象由`FieldImpl`对象持有，传递给`Field`
-```cpp
-class MutableFieldImpl
-    : public FieldImpl<FieldDescriptor, T>
-    , public internal::proxy::MutableField<T>
-{
-public:
-    MutableFieldImpl(types::InstanceId instance_id)
-        : internal::proxy::Field<T>(FieldImpl<FieldDescriptor, T>::get_method_)
-        , FieldImpl<FieldDescriptor, T>(instance_id)
-        , internal::proxy::MutableField<T>(FieldImpl<FieldDescriptor, T>::get_method_, set_method_)
-        , set_method_(instance_id)
-    { }
-// ......
-}
-```
-
-```cpp
-// Field的接口
-ara::core::Future<T> Get()
-{
-    return m_get_method_body_ref(); // ！！！
-}
-```
-`MethodGet`重载了`operator()`，持有一个`MethodImplDelegate<MethodDescriptor, result_type>`类型的指针，调用了`startCall(std::forward<Args>(args)...)`：
-
-```cpp
-// proxy端，调用field的method接口：get()，最后调用到此处
-    template <typename... Args>
-    ara::core::Future<ResultType> startCall(Args&&... args)
-    {
-        using internal::vsomeip::runtime::VSomeIPConnection;
-
-        VSomeIPConnection& connection = VSomeIPConnection::getInstance();
-        std::shared_ptr<::vsomeip::message> request = CreateRequest(connection, instance_, std::forward<Args>(args)...);    // ！！！创建了someip request message
-
-        ara::core::Promise<ResultType> promise;
-        auto future = promise.get_future();
-
-        std::lock_guard<std::mutex> lock_guard(pending_requests_lock_);
-        connection.getApplication().send(request, true);    // 调用vsomeip接口发送请求
-        Request r = std::make_pair(request, std::move(promise));
-        addPendingRequest(std::move(r));    // ！！！pending_requests_由MethodImplDelegate持有
-
-        return future;
-    }
-```
-
-
-当接收到skeleton端发来的vsomeip response应答数据，`onMessage`回调触发，判断当前request id是否存在于自己维护的`std::unordered_map<types::RequestId, Request>`类型的`pending_requests_ map`中，如果是，则解包并set promise
-```cpp
-    /// \brief This is a callback function
-    ///
-    /// On message arrival checks if the message already in the map and remove
-    /// if match. Also process the response.
-    /// \param response Message received as response from vsomeip
-    /// \uptrace{SWS_CM_10358, bfb7a30fdb76d2ee20bafd00dcd075403e132147}
-    void onMessage(const std::shared_ptr<::vsomeip::message>& response)
-    {
-        types::RequestId request_id = response->get_request();
-        typename PendingRequestMap::iterator it = pending_requests_.find(request_id);
-        if (it != pending_requests_.end()) {
-            if (validateMessage(*it->second.first, *response)) {
-                detail::DeserializeAndSetPromise(std::move(it->second.second), response);
-            } else {
-                common::logger().LogWarn() << "Discarding invalid message";
-                it->second.second.SetError(ara::core::ErrorCode{ara::com::ComErrorDomainErrc::kNetworkBindingFailure});
-            }
-            pending_requests_.erase(it);
-        }
-    }
-```
 
 
