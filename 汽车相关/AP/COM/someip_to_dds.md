@@ -301,14 +301,7 @@ PS：
 `ara::com`中`SOMEIP_TO_DDS`视作Server端。持续监听Client端发来的数据，调用`Dispatch()`。
 自己维护一个`Map<MethodId, Handler>`类型的handlers_（在`OfferService`中的`OfferMethod`中调用`AddMethodHandler`传入一个`<kMethodHash, EnqueueRequest(sample)>`，`EnqueueRequest`中会执行`pendingRequests_`，然后是一个`onRequest_`回调，去根据`MethodCallProcessingMode`判断处理方式，最终会执行用户层代码中的Method实现），根据数据中的标识符，判断使用哪个handler，执行`EnqueueRequest(sample)`，最终会执行用户层代码中的Method实现，包装dds的reply数据并发送
 
-
-
-
-
-
-
 维护一个请求map：`<request_id, handler>`，开辟线程`thread_process_request`专门（同步地）处理request（一个线程，就够了），`SOMEIP_TO_DDS`的method调用中，使用条件变量阻塞住，等待`thread_process_request`处理：向**ROS2的server节点**发送封装的`ROS2 request`，（线程中）等待**ROS2的server节点**处理，处理完后收到**ROS2的server节点**发来的`ROS2 response`，处理完之后使用条件变量来通知，数据类型是一样的，封装成future对象，直接返回
-
 
 ## server端的method定义
 ```cpp
@@ -342,18 +335,5 @@ StartApplicationCmServerService1::StartApplicationMethod1(const std::uint8_t& in
     return promise.get_future();  // !!!由on_data_available给future对象对应的promise对象set_value，在ara::com实现的内部，调用当前函数时，如果promise没准备好，会阻塞，如果是单线程，如果client端想要对其他的method发送request，那就会忽略其他的request
 }   // start_application_method1_promise对象是全局的
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

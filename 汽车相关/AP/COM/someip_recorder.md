@@ -1,12 +1,7 @@
-
-
 # mcap接口
 
 
 ## 数据格式
-
-
-
 
 
 ## 初始化
@@ -173,12 +168,113 @@ void SomeipToDds::WriteMcapMsgToDisk() {
 
 
 
+# 线程安全队列
+```cpp
+#pragma once
 
+#include <atomic>
+#include <cassert>
+#include <cstddef>
+#include <condition_variable>
+#include <cstddef>
+#include <functional>
+#include <mutex>
+#include <queue>
 
+namespace linearx {
+namespace dq {
+template <typename T>
+  class DataQueue {
+      std::mutex mutex_;
+      std::condition_variable readerCv_;
+      std::condition_variable writerCv_;
+      std::condition_variable finishCv_;
 
+      std::queue<T> queue_;
+      bool done_;
+      std::size_t maxSize_;
 
+      // Must have lock to call this function
+      bool Full() const {
+        if (maxSize_ == 0) {
+          return false;
+        }
+        return queue_.size() >= maxSize_;
+      }
 
+    public:
+      DataQueue(std::size_t maxSize = 0) : done_(false), maxSize_(maxSize) {}
 
+      bool Push(const T& item) {
+        {
+          std::unique_lock<std::mutex> lock(mutex_);
+          while (Full() && !done_) {
+            writerCv_.wait(lock); // 队列满，阻塞等待Pop中能够notify
+          }
+          if (done_) {
+            return false;
+          }
+          queue_.push(std::move(item)); // 将数据存入队列
+        }
+        readerCv_.notify_one(); // 初始情况下，队列空，写完第一个数据的那一刻就可以读了
+        return true;
+      }
+
+      bool Pop(T& item) {
+        {
+          std::unique_lock<std::mutex> lock(mutex_);
+          while (queue_.empty() && !done_) {  // 队列空则无法读取
+            readerCv_.wait(lock);
+          }
+          if (queue_.empty()) {
+            assert(done_);
+            return false;
+          }
+          item = std::move(queue_.front()); // 成功取出数据，是std::move
+          queue_.pop();
+        } // 线程自从调用wait被唤醒后，重新获取互斥量
+        writerCv_.notify_one();
+        return true;
+      }
+
+      void SetMaxSize(std::size_t maxSize) {  // 不SetMaxSize的话，队列容量最大为1
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          maxSize_ = maxSize;
+        }
+        writerCv_.notify_all();
+      }
+
+      void Finish() {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          assert(!done_);
+          done_ = true; // done_表示的是 这个队列是否可以关闭了
+        }
+        readerCv_.notify_all();
+        writerCv_.notify_all();
+        finishCv_.notify_all();
+      }
+
+      void WaitUntilFinished() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        while (!done_) {
+          finishCv_.wait(lock);
+        }
+      }
+      bool TryPop(T& item) {  // TryPop：队列空就直接退出
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queue_.empty()){
+          return false;
+        }  
+        item = std::move(queue_.front());
+        queue_.pop();
+        return true;
+      }
+  };
+}
+}
+```
 
 
 

@@ -1401,6 +1401,8 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
 
 
 # 2 proxy端初始化
+PS：以下回调函数的传入看似很复杂，核心就是延迟调用，`serviceAvailabilityCallback`一直要到服务发现完成才调用
+
 先看用户层面的部分，线程函数中调用了`radar_activity.cpp`中定义的`init()`函数，
 ## 关键调用：`StartFindService`：
 参数1：lambda函数：接收1个handles，1个handler，函数体是用户层实现的`serviceAvailabilityCallback`，接收两个入参
@@ -1427,7 +1429,7 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
         if (handles.size() > 0) {
             std::lock_guard<std::mutex> lock(m_proxy_mutex);
             if (nullptr == m_proxy) {
-                m_proxy = std::make_shared<Proxy>(handles[0]);  // 实例化radarProxy对象
+                m_proxy = std::make_shared<Proxy>(handles[0]);  // 实例化radarProxy对象！！！
                 m_logger.LogInfo() << "Created proxy from handle with instance: "
                                    << m_proxy->GetHandle().GetInstanceId().ToString();
                 // Construct some handles (implementation-specific).
@@ -1446,7 +1448,6 @@ void ServiceImpl::OfferService(const types::ServiceId serviceId,
             }
         }
     }
-
 ```
 
 其中关键调用`Proxy::StartFindService`是基类`ara::com::internal::proxy::ProxyBase<radarProxyBase>`的方法：
@@ -1641,6 +1642,7 @@ ServiceMappingImpl<ara::com::sample::radar::service_id, ara::com::sample::radar_
 再把`availableFactory`存入`availableInstances`
 调用`callback(availableInstances, handle);`
 
+`RegisterFindServiceHandle`
 ```cpp
 void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, ProxyFactoryCallback callback)
 {
