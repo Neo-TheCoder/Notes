@@ -988,7 +988,7 @@ using ServiceInterface = skeleton::radarSkeleton;
 可以看出，`radarSkeleton`类就是代码层面的`service interface`（持有几个event、method、field）
 Adapter其实也体现了`适配器模式`，接口之间做转换，形如另一种接口
 `radarSkeleton`继承自ara::com::sample::radar和ara::com::internal::skeleton::TypedServiceImplBase<radarSkeleton>类
-其中的TypedServiceImplBase<radarSkeleton>继承自ServiceImplBase类
+其中的TypedServiceImplBase<radarSkeleton>继承自`ServiceImplBase`类
 
 ```cpp
 // ServiceMappingImpl模板类实例化所需的第三个模板参数
@@ -1580,10 +1580,17 @@ void Register()
 }
 ```
 
+！！！此处`Runtime`层的对象是如何和具体协议相关的对象产生联系的呢？是因为在`Runtime`的`Init()`中，有一串宏定义，决定执行：
+```cpp
+dds::runtime::Register();
+```
+而这个`Register()`是ara-api中的。
 
 #### `DoStartFindServiceById`：
 遍历`Runtime::Init`时初始化的`ProxyFactoryBuilderList`对象
 为其中每一个元素调用`RegisterFindServiceHandle(handle, handler)`
+
+
 ```cpp
 FindServiceHandle Runtime::DoStartFindServiceById(internal::ServiceId service_id,
     ara::com::InstanceIdentifier instance_id,

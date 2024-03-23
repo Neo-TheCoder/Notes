@@ -164,7 +164,6 @@ Aborted (core dumped)
 
 
 
-
 # 关于someip_config.json的解析
 ```cpp
 /*!
@@ -296,26 +295,17 @@ network endpoint   **IpAddress（实际是string类型）**  、  **TCP Port**  
 
 
 # 调用顺序 SOME/IP daemon
-
 **PS：Run()函数做了什么？**
-
 ![image.png](https://atlas.pingcode.com/files/public/65460c103a27284c5ca127f4/origin-url)
-
 **解析并验证配置（若无效，则直接终止）、启动signal handling（为了恰当地终止）、启动reactor线程（用于通信和时间处理）、创建用于APP在运行时来进行的BasicIPC通信连接、启动服务发现（多播通信）**
 
-
-
-***PS：个别应用程序使用Basic IPC 通信通道与 SOME/IP 守护进程进行交互。通过这个基本 IPC 通道，应用程序可以提供、查找服务接口。***
-
+***PS：个别应用程序使用Basic IPC 通信通道与 SOME/IP 守护进程进行交互。通过这个Basic IPC 通信通道，应用程序可以提供、查找服务接口。***
 ***SOME/IP 数据包的发送和接收也通过该通信通道完成。***
 
 
-
 ## **Initialize**  ()
-
 ### SomeIpDaemonClass的Initialize()
-
-```
+```cpp
  /*!
    * \brief      Initializes the SOME/IP daemon.
    * \param[in]  args The command line arguments.
@@ -849,10 +839,8 @@ void Reactor1::HandleOneEvent(CallbackHandle callback_handle, struct epoll_event
 ## APP如何发送数据
 
 ![image.png](https://atlas.pingcode.com/files/public/65462c693a27284c5ca12872/origin-url)
-
 发送数据前，计算header size、payload size，
-
-```
+```cpp
   /*!
    * \brief Calculate the size of the required packet header in case E2E protection is used for for a Pdu event.
    * \tparam E2eProfileConfig E2E profile configuration used to enable this API in case the event is E2E
@@ -880,15 +868,12 @@ void Reactor1::HandleOneEvent(CallbackHandle callback_handle, struct epoll_event
 总体  **header**  为两部分：
 
 **kPduHeaderSize（ServiceId(2) **  +   **MethodId(2) **  +   **LengthField(4)）= 8**
-
 **e2e_header_size **  =   **8（Profile和另一个值与运算）**
-
 
 
 PayloadSerializer::  **GetRequiredBufferSize**  (data)
 
 得到  **payload**  的长度
-
 
 
 而  **alloc_size**  就是二者之和
@@ -898,8 +883,7 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
 此处填充SOME/IP头部
 
 
-
-```
+```cpp
   /*!
    * \brief     Send event sample.
    * \param[in] data The event sample value to be transmitted.
@@ -948,9 +932,8 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
 
 其中调用了  **SomeIpDaemonClient**  类对象的  **Send**  (instance_id_, std::move(packet))
 
-内部实现：
-
-```
+`Send`内部实现：
+```cpp
   /* ---- Routing channel API -------------------------------------------------------------------------------------- */
 
   /*!
@@ -1016,7 +999,6 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
 ```
 
 将SOME/IP消息入队，
-
 ```cpp
   /*!
    * \brief Enqueues a routing message for transmission.
@@ -1044,8 +1026,6 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
 根据入参创建  **TransmitQueueEntry**  对象，然后入队，
 
 如果传输队列只有一个元素（说明之前传输队列为空），就调用  **TransmitNextMessage**  ()进行下一次传输
-
-
 
 **TransmitNextMessage()**
 ```cpp
@@ -1373,11 +1353,9 @@ auto Send(NativeHandle native_handle, ara::core::Span<ConstIOBuffer> buffer) noe
 
 
 # 调用顺序    parameter server（skeleton）
-
 skeleton侧会调用
 **SomeIpDaemonClient**  类型的成员的方法：  **Connect**  ()、  **Start**  () 以及
 **ClientManager**  类型的成员的方法  **StartServiceDiscovery**  ()
-
 
 ## InitializeCommunication(config)
 
@@ -1391,11 +1369,7 @@ skeleton侧会调用
 
 入参是“reactor要处理的最大callback数量”。
 
-
-
 **InitializeReactorThread**  (GetReactorThreadConfig());
-
-
 
 **InitializeBindings**  ();
 
@@ -3594,12 +3568,61 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 
 
 
+# Skeleton端发送数据
 
+## Event
+
+
+## Method
+
+当Proxy端发起method request时，
+触发一系列回调：
+`OnReceiveCompletion()`、`ProcessReceivedMessage()`
+
+往线程池增加`AsyncRequest`类型的任务：
+即`SkeletonStartApplicationMethod1AsyncRequest`类型
+
+最终触发以下函数：
+（PS：显然是src-gen中生成的）
+`SkeletonStartApplicationMethod1AsyncRequest`对象的`operator()`被调用
+```cpp
+  /*!
+   * \brief   Operator gets called when method invocation is planned in the frontend.
+   * \details It shall be called only once for each instance.
+   * \pre -
+   * \context     Callback
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   *
+   */
+  void operator()() override {
+    // VECTOR Next Line AutosarC++17_10-A18.5.8: MD_SOMEIPBINDING_AutosarC++17_10-A18.5.8_Local_object_allocated_in_the_heap
+    std::unique_ptr<Input> const input{std::make_unique<Input>()};
+    bool const deserialization_ok{DeserializeInput(packet_.get(), *input)};
+    if (deserialization_ok) {
+    std::uint8_t const& arg_input_argument{input->input_argument};
+
+    ara::core::Result<::startapplication::cm::service1::internal::methods::StartApplicationMethod1::Output> result{skeleton_->StartApplicationMethod1(arg_input_argument).GetResult()};
+    if (result.HasValue()) {
+      response_handler_.SerializeAndSendMethodResponse<Serializer>(header_, result.Value());
+    } else {
+      response_handler_.SerializeAndSendApplicationErrorMethodResponse(header_, result.Error());
+    }
+    } else { // Deserialization failed
+      response_handler_.SendErrorResponse(header_,
+                                          ::amsr::someip_protocol::internal::SomeIpReturnCode::kMalformedMessage);
+    }
+  }
+```
+首先进行反序列化，解出数据后，直接通过`::startapplication::cm::service1::skeleton::StartApplicationCmService1_ServiceInterfaceSkeleton`类型的指针，调用用户层传入的`method回调`，调用`GetResult`进行阻塞等待，得到结果后，直接调用`response_handler_.SerializeAndSendMethodResponse<Serializer>(header_, result.Value());`，将结果返回
+
+所以，可以认为：当proxy端连续发来多个相同类型的method request时，skeleton端每收到一个，就创建一个相应的任务
 
 
 # Proxy端接收数据
 
-*通过Unix Domain Socket和Someipd通信，接收来自skeleton的消息*
+通过`Unix Domain Socket`和Someipd通信，接收来自skeleton的消息
 
 **调用顺序：**
 

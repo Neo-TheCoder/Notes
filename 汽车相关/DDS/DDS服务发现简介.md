@@ -77,4 +77,60 @@ DDS 中最基础的通信单元，表示在Topic下写入的数据的更新。
 2. `SEDP`（Simple Endpoint Discovery Protocol）：定义了已经互相发现的参与者交换信息的协议。
 
 
+# 一些关键接口
+```cpp
+  class PubListener : public eprosima::fastdds::dds::DataWriterListener {
+    public:
+        PubListener(SomeipToDdsParticipant& sp) : sp_(sp)
+        {}
+
+        ~PubListener() override {}
+
+        void allow_send(SomeipToDdsParticipant& sp){
+          std::unique_lock<std::mutex> lock{sp.lock_for_service1_method1_send};
+          sp.if_service1_method1_matched = true;
+          sp.cv_service1_method1_send.notify_all();
+        }
+
+        void on_publication_matched(
+                eprosima::fastdds::dds::DataWriter* writer,
+                const eprosima::fastdds::dds::PublicationMatchedStatus& info) override {
+                  static_cast<void>(writer);
+                  // static_cast<void>(info);
+                  if (info.current_count_change == 1 && info.current_count == 1)
+                  {
+                    // 服务发现完成，可以开始发送和接收数据
+                    allow_send(sp_);
+                  }
+              }
+
+    private:
+      SomeipToDdsParticipant& sp_;
+
+  }wlistener_{*this};
+```
+
+若干`data_writer`在创建时，都会绑定到该`wlistener_`对象
+```cpp
+    DataWriterQos wqos_routinglocalroadoutputdebugtopic = DATAWRITER_QOS_DEFAULT;
+    wqos_routinglocalroadoutputdebugtopic.reliability().kind = RELIABLE_RELIABILITY_QOS;
+    wqos_routinglocalroadoutputdebugtopic.history().kind = KEEP_LAST_HISTORY_QOS;
+    wqos_routinglocalroadoutputdebugtopic.history().depth = 10;
+    // CREATE THE WRITER OF service : planning_routing_debug_service_interface event: RoutingLocalRoadOutputDebugTopic
+    writer_routinglocalroadoutputdebugtopic_ = publisher_->create_datawriter(
+        wtopic_routinglocalroadoutputdebugtopic_, wqos_routinglocalroadoutputdebugtopic, &wlistener_);
+```
+
+`on_publication_matched()`是在`DataWriter`和`DataReader`匹配状态发生变化时触发
+***This method is called when the DataWriter is matched (or unmatched) against an endpoint.***
+判断当前匹配状态变化的次数是否为1，并且当前匹配状态的数量是否为1。
+
+
+
+
+
+
+
+
+
 
