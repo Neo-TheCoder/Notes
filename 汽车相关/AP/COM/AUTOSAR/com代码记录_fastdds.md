@@ -618,7 +618,7 @@ void RadarActivity::act()
 
 ```
 ## `radarProxy`
-持有对proxy端的event、method、field对象的引用
+持有对proxy端的`event、method、field`对象的引用
 构造时，调用了基类`ProxyBase<radarProxyBase>`对象的成员`proxy_base_`的各种方法来将自己持有的各种引用初始化
 
 
