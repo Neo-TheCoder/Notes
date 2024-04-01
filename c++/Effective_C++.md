@@ -2301,10 +2301,12 @@ if(size != sizeof(Base))
 
 
 # 52 写了placement new也要写placement delete
-new一个对象，会调用operator new和类的构造函数。如果new成功，而构造函数抛出异常，那new操作分配的内存必须取消，要不然就内存泄漏了。
+new一个对象，会调用`operator new`和`类的构造函数`。如果new成功，而构造函数抛出异常，那么**new操作分配的内存必须取消**，要不然就内存泄漏了。
+
 如果new带参数，delete也要对应，
-常规的new：size_t为入参
-如果operator new有额外的入参重载（所谓的placement new），
+常规的new，以`size_t`类型为入参
+如果`operator new`有额外的入参重载（即所谓的placement new，指将构造的对象分配在指定的内存空间上），
+
 ```cpp
 #include<new>
 void operator new(std::size_t, void* pMemory) throw();  // 特殊入参：指向构造出来的对象的内存，可以指定对象构造在某块内存
@@ -2312,17 +2314,16 @@ void operator new(std::size_t, void* pMemory) throw();  // 特殊入参：指向
 
 // 考虑以下情况
 Widget* pw = new (std::cerr) Widget;    // cerr为其ostream实参
-// 想要让系统在new成功而构造失败时，把内存回收，只能通过调用相同参数（类型、个数都相同）的delete
+// 想要让系统在new成功，而构造失败时，把内存回收，只能通过调用相同参数（类型、个数都相同）的delete
 
 // 如果这样调用
-delete pw;  // 调用的是正常的，而非placement版本，因为其只有在调用到placement new的构造函数发生异常时才调用
-// 对一个指针调用delete，是不会调用placement版本delete
-
+delete pw;  // 调用的是普通版本的new，而非placement版本，因为其只有在调用到placement new的构造函数发生异常时才调用
+// 显然，对一个指针调用delete，是不会调用placement版本delete
 ```
 
-还需要注意：由于成员函数的名字会掩盖外围作用域中的同名函数
-比如Base类中定义了operator new(std::size_t, std::ostream& logStream)，调用new的时候就只能调用这个版本而不能调用普通版本了。
-同样地，派生类中的new还会掩盖继承而得的new。
+还需要注意：由于成员函数的名字会掩盖**外围作用域**中的同名函数
+比如Base类中定义了`operator new(std::size_t, std::ostream& logStream)`，派生类调用new的时候，就只能调用这个基类的版本，而不能调用普通版本了。
+同样地，`派生类中的new`还会掩盖继承而得的new。
 如果还想要调用普通的new：可以在类内部再封装。
 
 

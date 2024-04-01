@@ -34,6 +34,3 @@ ServiceType是service的类型。
 ros2 service list
 
 
-
-ros2 service call /Method2 service_interface2/srv/Method2 "{'method2_input_argument': '1'}"
-"{'key': 'value'}"

@@ -618,9 +618,10 @@ void RadarActivity::act()
 
 ```
 ## `radarProxy`
-持有对proxy端的`event、method、field`对象的引用
-构造时，调用了基类`ProxyBase<radarProxyBase>`对象的成员`proxy_base_`的各种方法来将自己持有的各种引用初始化
-
+持有对proxy端的`event、method、field`对象的引用（属于基类引用指向派生类对象，派生类对象实际是`MethodImpl`等类型）
+构造函数中，得到`ProxyFactoryWrapper<ProxyBinding>`类型的对象，从而构造基类`ProxyBase`
+调用了基类`ProxyBase<radarProxyBase>`对象的成员指针`proxy_base_`提供的各种方法来将自己持有的各种引用初始化
+而`proxy_base_`实际指向的对象是`ara::com::sample::radar_binding::dds::radarImpl`类型
 
 ```cpp
 /// @uptrace{SWS_CM_00004, bedfd6edb7e40a5e31639e01621800cfc077b498}
@@ -2019,9 +2020,6 @@ private:
       UpdateRate;
 };
 ```
-
-
-
 
 
 
