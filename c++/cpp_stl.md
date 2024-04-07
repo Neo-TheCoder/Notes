@@ -301,7 +301,6 @@ protected:
             data_allocator::deallocate(start, end_of_storage - start);
     }
 }
-
 ```
 
 ```cpp
@@ -317,7 +316,6 @@ protected:
 ```
 
 
-
 # 一、二级配置器对比
 ## SGI STL第一级配置器
 ```cpp
@@ -326,22 +324,387 @@ class __malloc_alloc_template{...};
 ```
 1. `allocate()`直接使用`malloc()`
    `deallocate()`直接使用`free()`
-2. 模拟C++的`set_new_handler()`以处理内存不足的状况
+2. 模拟C++的`set_new_handler()`以处理内存不足的状况（在内存分配失败时调用）
 
 ## SGI STL第二级配置器
 ```cpp
 template<bool threads, int inst>
 class __default_alloc_template{...};
 ```
+
 1. 维护`16个自由链表`(free lists)，负责16个小型区块的次配置能力
 内存池以`malloc()`配置而得
 如果内存不足，则转调用第一级配置器（有对内存不足的处理程序）
-2. 如果需求区块大于128bytes，则转而调用第一级配置器
+（小内存容易产生碎片）
 
-### 2.2.5 第一级配置器__malloc_alloc_template剖析
+2. 如果需求区块大于`128bytes`，则转而调用第一级配置器
+
+### 2.2.5 第一级配置器`__malloc_alloc_template`剖析
+```cpp
+#ifndef __THROW_BAD_ALLOC
+#  if defined(__STL_NO_BAD_ALLOC) || !defined(__STL_USE_EXCEPTIONS)
+#    include <stdio.h>
+#    include <stdlib.h>
+#    define __THROW_BAD_ALLOC fprintf(stderr, "out of memory\n"); exit(1)
+#  else /* Standard conforming out-of-memory handling */
+#    include <new>
+#    define __THROW_BAD_ALLOC throw std::bad_alloc()
+#  endif
+#endif
+// 编译器会根据自身情况，选择alloc失败时相应的处理异常（有的编译器没法抛出异常）
+
+// Malloc-based allocator.  Typically slower than default alloc below.
+// Typically thread-safe and more storage efficient.
+#ifdef __STL_STATIC_TEMPLATE_MEMBER_BUG
+# ifdef __DECLARE_GLOBALS_HERE
+    void (* __malloc_alloc_oom_handler)() = 0;  // 即nullptr
+    // g++ 2.7.2 does not handle static template data members.
+# else
+    extern void (* __malloc_alloc_oom_handler)();
+# endif
+#endif
+// 不同编译器对模板中的静态成员函数处理不同
+
+template <int __inst>       // 注意：这是一种非类型模板，模板参数不是常规的类，而是个int类型
+class __malloc_alloc_template {
+
+private:
+
+  static void* _S_oom_malloc(size_t);   // 内存不足时的处理函数
+  static void* _S_oom_realloc(void*, size_t);
+
+#ifndef __STL_STATIC_TEMPLATE_MEMBER_BUG
+  static void (* __malloc_alloc_oom_handler)();
+#endif
+
+public:
+
+  static void* allocate(size_t __n)
+  {
+    void* __result = malloc(__n);   // 直接调用malloc
+    if (0 == __result) __result = _S_oom_malloc(__n);   // 分配失败，则直接调用malloc对应的处理函数
+    return __result;
+  }
+
+  static void deallocate(void* __p, size_t /* __n */)
+  {
+    free(__p);  // 直接使用free
+  }
+
+  static void* reallocate(void* __p, size_t /* old_sz */, size_t __new_sz)
+  {
+    void* __result = realloc(__p, __new_sz);    // 直接使用realloc
+    if (0 == __result) __result = _S_oom_realloc(__p, __new_sz);
+    return __result;
+  }
+
+// 入参是一个函数指针，出参还是一个函数指针
+  static void (* __set_malloc_handler(void  (*__f)() )) () // 模拟new失败时的回调函数，由于不是使用operator new来配置内存的，所以算是模拟
+  {
+    void (* __old)() = __malloc_alloc_oom_handler;  // 创建函数指针，保存当前的 new失败时 回调
+    __malloc_alloc_oom_handler = __f;
+    return(__old);  // 把旧的函数作为返回值返回出去，用户可能使用
+  }
+
+};  // class __malloc_alloc_template
 
 
 
+// malloc_alloc out-of-memory handling
+#ifndef __STL_STATIC_TEMPLATE_MEMBER_BUG
+template <int __inst>
+void (* __malloc_alloc_template<__inst>::__malloc_alloc_oom_handler)() = 0;
+#endif
+
+template <int __inst>
+void*
+__malloc_alloc_template<__inst>::_S_oom_malloc(size_t __n)  // malloc失败时的处理函数
+{
+    void (* __my_malloc_handler)();
+    void* __result;
+
+    for (;;) {  // 反复尝试：“释放、配置” 的过程，死循环
+        __my_malloc_handler = __malloc_alloc_oom_handler;
+        if (0 == __my_malloc_handler) { __THROW_BAD_ALLOC; }
+        (*__my_malloc_handler)();
+        __result = malloc(__n);
+        if (__result) return(__result);
+    }
+}
+
+template <int __inst>
+void* __malloc_alloc_template<__inst>::_S_oom_realloc(void* __p, size_t __n)
+{
+    void (* __my_malloc_handler)();
+    void* __result;
+
+    for (;;) {
+        __my_malloc_handler = __malloc_alloc_oom_handler;
+        if (0 == __my_malloc_handler) { __THROW_BAD_ALLOC; }
+        (*__my_malloc_handler)();
+        __result = realloc(__p, __n);
+        if (__result) return(__result);
+    }
+}
+
+
+typedef __malloc_alloc_template<0> malloc_alloc;    // 直接将inst指定为0
+```
+所谓 C++ new handler机制是，你可以要求系统在内存配置需求无法被满足时，调用一个你所指定的函数。
+换句话说，一旦`operator new`无法完成任务在丢出`std::bad_alloc`异常状态之前，会先调用由客端指定的处理例程。该处理函数即`new-handler`。
+
+
+### 2.2.6 第二级配置器
+针对内存碎片问题、配置问题，对于每一块内存，还需要相应的内存管理它，那么碎片越多，管理内存越多
+1. 当区块小于128字节
+    使用内存池管理（以链表形式维护多个小区块：`配置`和`回收`）
+
+    区块大小是不等的：8, 16, 24, 32, 40, 48 .. 128字节
+```cpp
+union obj{
+    union obj* free_list_link;
+    char client_data[1];
+};
+```
+
+2. 大于128字节
+    转交第一级配置器
+
+
+```cpp
+// Default node allocator.
+// With a reasonable compiler, this should be roughly as fast as the
+// original STL class-specific allocators, but with less fragmentation.
+// Default_alloc_template parameters are experimental and MAY
+// DISAPPEAR in the future.  Clients should just use alloc for now.
+//
+// Important implementation properties:
+// 1. If the client request an object of size > _MAX_BYTES, the resulting
+//    object will be obtained directly from malloc.
+// 2. In all other cases, we allocate an object of size exactly
+//    _S_round_up(requested_size).  Thus the client has enough size
+//    information that we can return the object to the proper free list
+//    without permanently losing part of the object.
+//
+
+// The first template parameter specifies whether more than one thread
+// may use this allocator.  It is safe to allocate an object from
+// one instance of a default_alloc and deallocate it with another
+// one.  This effectively transfers its ownership to the second one.
+// This may have undesirable effects on reference locality.
+// The second parameter is unreferenced and serves only to allow the
+// creation of multiple default_alloc instances.
+// Node that containers built on different allocator instances have
+// different types, limiting the utility of this approach.
+
+#if defined(__SUNPRO_CC) || defined(__GNUC__)
+// breaks if we make these template class members:
+  enum {_ALIGN = 8};
+  enum {_MAX_BYTES = 128};
+  enum {_NFREELISTS = 16}; // _MAX_BYTES/_ALIGN
+#endif
+
+template <bool threads, int inst>
+class __default_alloc_template {
+
+private:
+  // Really we should use static const int x = N
+  // instead of enum { x = N }, but few compilers accept the former.
+#if ! (defined(__SUNPRO_CC) || defined(__GNUC__))
+    enum {_ALIGN = 8};
+    enum {_MAX_BYTES = 128};
+    enum {_NFREELISTS = 16}; // _MAX_BYTES/_ALIGN
+# endif
+  static size_t
+  _S_round_up(size_t __bytes)   // 按照8的整数倍分配
+    { return (((__bytes) + (size_t) _ALIGN-1) & ~((size_t) _ALIGN - 1)); }
+
+__PRIVATE:
+  union _Obj {
+        union _Obj* _M_free_list_link;
+        char _M_client_data[1];    /* The client sees this.        */
+  };
+private:
+# if defined(__SUNPRO_CC) || defined(__GNUC__) || defined(__HP_aCC)
+    static _Obj* __STL_VOLATILE _S_free_list[]; 
+        // Specifying a size results in duplicate def for 4.1
+# else
+    static _Obj* __STL_VOLATILE _S_free_list[_NFREELISTS]; 
+# endif
+  static  size_t _S_freelist_index(size_t __bytes) {
+        return (((__bytes) + (size_t)_ALIGN-1)/(size_t)_ALIGN - 1);
+  }
+
+  // Returns an object of size __n, and optionally adds to size __n free list.
+  static void* _S_refill(size_t __n);
+  // Allocates a chunk for nobjs of size size.  nobjs may be reduced
+  // if it is inconvenient to allocate the requested number.
+  static char* _S_chunk_alloc(size_t __size, int& __nobjs);
+
+  // Chunk allocation state.
+  static char* _S_start_free;
+  static char* _S_end_free;
+  static size_t _S_heap_size;
+
+# ifdef __STL_THREADS
+    static _STL_mutex_lock _S_node_allocator_lock;
+# endif
+
+    // It would be nice to use _STL_auto_lock here.  But we
+    // don't need the NULL check.  And we do need a test whether
+    // threads have actually been started.
+    class _Lock;
+    friend class _Lock;
+    class _Lock {
+        public:
+            _Lock() { __NODE_ALLOCATOR_LOCK; }
+            ~_Lock() { __NODE_ALLOCATOR_UNLOCK; }
+    };
+
+public:
+
+  /* __n must be > 0      */
+  static void* allocate(size_t __n)
+  {
+    void* __ret = 0;
+
+    if (__n > (size_t) _MAX_BYTES) {
+      __ret = malloc_alloc::allocate(__n);
+    }
+    else {
+      _Obj* __STL_VOLATILE* __my_free_list
+          = _S_free_list + _S_freelist_index(__n);
+      // Acquire the lock here with a constructor call.
+      // This ensures that it is released in exit or during stack
+      // unwinding.
+#     ifndef _NOTHREADS
+      /*REFERENCED*/
+      _Lock __lock_instance;
+#     endif
+      _Obj* __RESTRICT __result = *__my_free_list;
+      if (__result == 0)
+        __ret = _S_refill(_S_round_up(__n));
+      else {
+        *__my_free_list = __result -> _M_free_list_link;
+        __ret = __result;
+      }
+    }
+
+    return __ret;
+  };
+
+  /* __p may not be 0 */
+  static void deallocate(void* __p, size_t __n)
+  {
+    if (__n > (size_t) _MAX_BYTES)
+      malloc_alloc::deallocate(__p, __n);
+    else {
+      _Obj* __STL_VOLATILE*  __my_free_list
+          = _S_free_list + _S_freelist_index(__n);
+      _Obj* __q = (_Obj*)__p;
+
+      // acquire lock
+#       ifndef _NOTHREADS
+      /*REFERENCED*/
+      _Lock __lock_instance;
+#       endif /* _NOTHREADS */
+      __q -> _M_free_list_link = *__my_free_list;
+      *__my_free_list = __q;
+      // lock is released here
+    }
+  }
+
+  static void* reallocate(void* __p, size_t __old_sz, size_t __new_sz);
+
+} ;
+```
+
+
+
+
+
+
+
+
+
+
+### 2.2.10 内存池
+`chunk_alloc()`负责：从内存池中取空间给free list
+```cpp
+/* We allocate memory in large chunks in order to avoid fragmenting     */
+/* the malloc heap too much.                                            */
+/* We assume that size is properly aligned.                             */
+/* We hold the allocation lock.                                         */
+template <bool __threads, int __inst>
+char*
+__default_alloc_template<__threads, __inst>::_S_chunk_alloc(size_t __size, int& __nobjs)    // 注意：__nobjs是引用类型！！！
+{
+    char* __result;
+    size_t __total_bytes = __size * __nobjs;  // 需要几个__nobjs字节的内存块
+    size_t __bytes_left = _S_end_free - _S_start_free;  // 内存池剩余空间
+
+    if (__bytes_left >= __total_bytes) {  // 内存池剩余空间满足需求
+        __result = _S_start_free;
+        _S_start_free += __total_bytes;
+        return(__result);
+    } else if (__bytes_left >= __size) {  // 内存池剩余空间无法完全满足需求
+        __nobjs = (int)(__bytes_left/__size); // 尽力满足
+        __total_bytes = __size * __nobjs;
+        __result = _S_start_free;
+        _S_start_free += __total_bytes;
+        return(__result);   // __nobjs重新设定为当前足够的数量，而不是预定的20个
+    } else {  // 内存池剩余空间连一个区块都不足
+        size_t __bytes_to_get = 
+	  2 * __total_bytes + _S_round_up(_S_heap_size >> 4); // 调用malloc向操作系统申请空间，要预申请更多的，避免频繁地申请
+        // Try to make use of the left-over piece.
+        if (__bytes_left > 0) { // 充分利用内存池剩余空间
+            _Obj* __STL_VOLATILE* __my_free_list =
+                        _S_free_list + _S_freelist_index(__bytes_left); // 将剩余空间分配给适当的free list，即便可能是更小区快，也就是利用碎片。注意：如果执行了下面的malloc，allocator无法再通过一对指针来管理线性空间，因为原来的指针指向的位置失效了
+
+            ((_Obj*)_S_start_free) -> _M_free_list_link = *__my_free_list;  // 头插法
+            *__my_free_list = (_Obj*)_S_start_free; // 头节点重置
+        }
+        _S_start_free = (char*)malloc(__bytes_to_get);  // 内存池几乎耗尽，重新调用malloc，补充内存池
+        if (0 == _S_start_free) { // heap空间一点都不剩了
+            size_t __i;
+            _Obj* __STL_VOLATILE* __my_free_list;
+	    _Obj* __p;
+            // Try to make do with what we have.  That can't
+            // hurt.  We do not try smaller requests, since that tends
+            // to result in disaster on multi-process machines.
+            for (__i = __size;                // 遍历更大的内存块，先把更大的内存块拿过来救急：先交给内存池管理，理论上刚好满足一个区块
+                 __i <= (size_t) _MAX_BYTES;  // _MAX_BYTES是最大的内存块，当前为128字节
+                 __i += (size_t) _ALIGN) {  // _ALIGN是8字节
+                __my_free_list = _S_free_list + _S_freelist_index(__i); // 遍历每一个free list，利用那些空闲区块
+                __p = *__my_free_list;
+                if (0 != __p) {
+                    *__my_free_list = __p -> _M_free_list_link;
+                    _S_start_free = (char*)__p;   // _S_start_free - _S_end_free 是一块连续的空闲内存：执行 if-else 中的第二个分支
+                    _S_end_free = _S_start_free + __i;
+                    return(_S_chunk_alloc(__size, __nobjs));  // 修正实际能提供的__nobjs数量，返回值是地址，递归调用得到地址
+                    // Any leftover piece will eventually make it to the
+                    // right free list.
+                }
+            }
+	    _S_end_free = 0;	// In case of exception.  真的一点都没了
+            _S_start_free = (char*)malloc_alloc::allocate(__bytes_to_get);  // 调用第一级配置器，启动out-of-memory机制：先调用用户回调（假设这个回调能够回收一些内存），然后抛出std::bad_alloc异常
+            // This should either throw an
+            // exception or remedy the situation.  Thus we assume it
+            // succeeded.
+        }
+        _S_heap_size += __bytes_to_get;   // malloc成功，更新边界信息
+        _S_end_free = _S_start_free + __bytes_to_get;
+        return(_S_chunk_alloc(__size, __nobjs));
+    }
+}
+```
+SGI的容器通常默认使用第二级配置器：
+```cpp
+template<class T, class Alloc = alloc>
+class vector{
+  // ...
+}
+```
 
 
 
@@ -355,7 +718,7 @@ STL定义了**五个全局函数，用于未初始化空间上**，有利于容�
 
 ### 2.3.1 uninitialzied_copy
 ```cpp
-    template<class InputIt/*  */erator, class ForwardIterator>
+    template<class InputIterator, class ForwardIterator>
     ForwardIterator
     uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result);
 ```

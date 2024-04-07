@@ -1,169 +1,3 @@
-![undefined](https://atlas.pingcode.com/files/public/653114634a07e07485d25070/origin-url)
-
-
-# 调试
-![image.png](https://atlas.pingcode.com/files/public/6530c7ca4a07e07485d242d0/origin-url)
-
-参数如图
-先手动启动someip-daemon，必须得加参数-c，指定someip json，再手动启动server程序，可以不加参数。
-
-![undefined](https://atlas.pingcode.com/files/public/6530cc5db3a56a8dd49b03c6/origin-url)
-
-## parameter server端：
-```sh
-linearx@linearx-VirtualBox:~/eclipse/vector/SIP/BuildStartApplication/install/opt/parameter_server$ ./bin/parameter_server 
-[1698060585958940][PARA vcso][INFO] [2777: AraComSomeIpBinding]Start:144: Starting SOME/IP binding.
-[1698060585959128][PARA vcso][INFO] [2777: AraComSomeIpBinding]Start:151: Connection to SOME/IP Daemon has been established.
-[1698060585959145][PARA vcso][INFO] [2777: AraComSomeIpBinding]Start:154: SOME/IP Service Discovery started.
-Your parameter server executable says: Hello World
-[1698060585959240][PARA vexe][ERROR] ApplicationClient of process with PID 2777 failed to connect to the Execution Management. Error: A communication partner could not be reached. Support data: 111 Detailed error: Peer refused connection attempt.
-[1698060585959253][PARA CTX1][INFO] ParameterServiceApplication is initializing...
-[1698060585959328][PARA vexe][ERROR] ApplicationClient: Failed to send application state from pid: 2777. Error: One of the given parameters is invalid. Support data: 0 Detailed error: 
-[1698060585959361][PARA CTX1][ERROR] ParameterServiceApplication could not report the Application state kRunning.
-[1698060585959372][PARA CTX1][INFO] ParameterServiceApplication is running...
-[1698060585959387][PARA CTX1][INFO] PeriodicThread is being execute...
-[1698060585959418][PARA CSS1][INFO] [Service1] Offer parameter service's parameter service interface.
-[1698060588959722][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060588959764][PARA CTX1][INFO] next work item: 1
-[1698060588959771][PARA CTX1][INFO] [Service1] [Event1] Send event with value 100.
-[1698060591959568][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060591959620][PARA CTX1][INFO] next work item: 1
-[1698060591959629][PARA CTX1][INFO] [Service1] [Event1] Send event with value 101.
-[1698060594959985][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060594960032][PARA CTX1][INFO] next work item: 1
-[1698060594960044][PARA CTX1][INFO] [Service1] [Event1] Send event with value 102.
-[1698060597959504][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060597959568][PARA CTX1][INFO] next work item: 1
-[1698060597959577][PARA CTX1][INFO] [Service1] [Event1] Send event with value 103.
-[1698060600959467][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060600959522][PARA CTX1][INFO] next work item: 1
-[1698060600959532][PARA CTX1][INFO] [Service1] [Event1] Send event with value 104.
-[1698060603959492][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060603959565][PARA CTX1][INFO] next work item: 1
-[1698060603959582][PARA CTX1][INFO] [Service1] [Event1] Send event with value 105.
-[1698060606959470][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060606959507][PARA CTX1][INFO] next work item: 1
-[1698060606959515][PARA CTX1][INFO] [Service1] [Event1] Send event with value 106.
-[1698060609959505][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060609959549][PARA CTX1][INFO] next work item: 1
-[1698060609959562][PARA CTX1][INFO] [Service1] [Event1] Send event with value 107.
-[1698060612960339][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060612960393][PARA CTX1][INFO] next work item: 1
-[1698060612960401][PARA CTX1][INFO] [Service1] [Event1] Send event with value 108.
-[1698060615959385][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060615959433][PARA CTX1][INFO] next work item: 1
-[1698060615959456][PARA CTX1][INFO] [Service1] [Event1] Send event with value 109.
-[1698060618959506][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060618959546][PARA CTX1][INFO] next work item: 1
-[1698060618959554][PARA CTX1][INFO] [Service1] [Event1] Send event with value 110.
-[1698060621960004][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060621960044][PARA CTX1][INFO] next work item: 1
-[1698060621960055][PARA CTX1][INFO] [Service1] [Event1] Send event with value 111.
-[1698060624962999][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060624963043][PARA CTX1][INFO] next work item: 1
-[1698060624963064][PARA CTX1][INFO] [Service1] [Event1] Send event with value 112.
-[1698060627959732][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060627959789][PARA CTX1][INFO] next work item: 1
-[1698060627959802][PARA CTX1][INFO] [Service1] [Event1] Send event with value 113.
-[1698060630959432][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060630959490][PARA CTX1][INFO] next work item: 1
-[1698060630959500][PARA CTX1][INFO] [Service1] [Event1] Send event with value 114.
-[1698060633959756][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060633959793][PARA CTX1][INFO] next work item: 1
-[1698060633959801][PARA CTX1][INFO] [Service1] [Event1] Send event with value 115.
-[1698060636960331][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060636960369][PARA CTX1][INFO] next work item: 1
-[1698060636960377][PARA CTX1][INFO] [Service1] [Event1] Send event with value 116.
-^C[1698060639783003][PARA CTX1][INFO] ParameterServiceApplication received signal: 2.
-[1698060639783052][PARA CTX1][INFO] ParameterServiceApplication received SIGTERM or SIGINT, requesting application shutdown.
-^C[1698060639959565][PARA CTX1][INFO] ParameterServiceApplication periodic work finished.
-[1698060639959701][PARA vexe][ERROR] ApplicationClient: Failed to send application state from pid: 2777. Error: One of the given parameters is invalid. Support data: 0 Detailed error: 
-[1698060639959714][PARA CTX1][ERROR] ParameterServiceApplication could not report the Application state kTerminating.
-[1698060639960212][PARA vcom][INFO] [2777: Runtime]DeInitializeCommunication:184: Runtime deinitialization finished.
-FATAL: Runtime has not been initialized.
-Aborted (core dumped)
-```
-
-
-
-## sensor data service端：
-```sh
-linearx@linearx-VirtualBox:~/eclipse/vector/SIP/BuildStartApplication/install/opt/parameter_server$ ./bin/parameter_server 
-[1698060585958940][PARA vcso][INFO] [2777: AraComSomeIpBinding]Start:144: Starting SOME/IP binding.
-[1698060585959128][PARA vcso][INFO] [2777: AraComSomeIpBinding]Start:151: Connection to SOME/IP Daemon has been established.
-[1698060585959145][PARA vcso][INFO] [2777: AraComSomeIpBinding]Start:154: SOME/IP Service Discovery started.
-Your parameter server executable says: Hello World
-[1698060585959240][PARA vexe][ERROR] ApplicationClient of process with PID 2777 failed to connect to the Execution Management. Error: A communication partner could not be reached. Support data: 111 Detailed error: Peer refused connection attempt.
-[1698060585959253][PARA CTX1][INFO] ParameterServiceApplication is initializing...
-[1698060585959328][PARA vexe][ERROR] ApplicationClient: Failed to send application state from pid: 2777. Error: One of the given parameters is invalid. Support data: 0 Detailed error: 
-[1698060585959361][PARA CTX1][ERROR] ParameterServiceApplication could not report the Application state kRunning.
-[1698060585959372][PARA CTX1][INFO] ParameterServiceApplication is running...
-[1698060585959387][PARA CTX1][INFO] PeriodicThread is being execute...
-[1698060585959418][PARA CSS1][INFO] [Service1] Offer parameter service's parameter service interface.
-[1698060588959722][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060588959764][PARA CTX1][INFO] next work item: 1
-[1698060588959771][PARA CTX1][INFO] [Service1] [Event1] Send event with value 100.
-[1698060591959568][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060591959620][PARA CTX1][INFO] next work item: 1
-[1698060591959629][PARA CTX1][INFO] [Service1] [Event1] Send event with value 101.
-[1698060594959985][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060594960032][PARA CTX1][INFO] next work item: 1
-[1698060594960044][PARA CTX1][INFO] [Service1] [Event1] Send event with value 102.
-[1698060597959504][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060597959568][PARA CTX1][INFO] next work item: 1
-[1698060597959577][PARA CTX1][INFO] [Service1] [Event1] Send event with value 103.
-[1698060600959467][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060600959522][PARA CTX1][INFO] next work item: 1
-[1698060600959532][PARA CTX1][INFO] [Service1] [Event1] Send event with value 104.
-[1698060603959492][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060603959565][PARA CTX1][INFO] next work item: 1
-[1698060603959582][PARA CTX1][INFO] [Service1] [Event1] Send event with value 105.
-[1698060606959470][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060606959507][PARA CTX1][INFO] next work item: 1
-[1698060606959515][PARA CTX1][INFO] [Service1] [Event1] Send event with value 106.
-[1698060609959505][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060609959549][PARA CTX1][INFO] next work item: 1
-[1698060609959562][PARA CTX1][INFO] [Service1] [Event1] Send event with value 107.
-[1698060612960339][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060612960393][PARA CTX1][INFO] next work item: 1
-[1698060612960401][PARA CTX1][INFO] [Service1] [Event1] Send event with value 108.
-[1698060615959385][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060615959433][PARA CTX1][INFO] next work item: 1
-[1698060615959456][PARA CTX1][INFO] [Service1] [Event1] Send event with value 109.
-[1698060618959506][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060618959546][PARA CTX1][INFO] next work item: 1
-[1698060618959554][PARA CTX1][INFO] [Service1] [Event1] Send event with value 110.
-[1698060621960004][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060621960044][PARA CTX1][INFO] next work item: 1
-[1698060621960055][PARA CTX1][INFO] [Service1] [Event1] Send event with value 111.
-[1698060624962999][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060624963043][PARA CTX1][INFO] next work item: 1
-[1698060624963064][PARA CTX1][INFO] [Service1] [Event1] Send event with value 112.
-[1698060627959732][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060627959789][PARA CTX1][INFO] next work item: 1
-[1698060627959802][PARA CTX1][INFO] [Service1] [Event1] Send event with value 113.
-[1698060630959432][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060630959490][PARA CTX1][INFO] next work item: 1
-[1698060630959500][PARA CTX1][INFO] [Service1] [Event1] Send event with value 114.
-[1698060633959756][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060633959793][PARA CTX1][INFO] next work item: 1
-[1698060633959801][PARA CTX1][INFO] [Service1] [Event1] Send event with value 115.
-[1698060636960331][PARA CTX1][INFO] Periodic Work is being execute..................
-[1698060636960369][PARA CTX1][INFO] next work item: 1
-[1698060636960377][PARA CTX1][INFO] [Service1] [Event1] Send event with value 116.
-^C[1698060639783003][PARA CTX1][INFO] ParameterServiceApplication received signal: 2.
-[1698060639783052][PARA CTX1][INFO] ParameterServiceApplication received SIGTERM or SIGINT, requesting application shutdown.
-^C[1698060639959565][PARA CTX1][INFO] ParameterServiceApplication periodic work finished.
-[1698060639959701][PARA vexe][ERROR] ApplicationClient: Failed to send application state from pid: 2777. Error: One of the given parameters is invalid. Support data: 0 Detailed error: 
-[1698060639959714][PARA CTX1][ERROR] ParameterServiceApplication could not report the Application state kTerminating.
-[1698060639960212][PARA vcom][INFO] [2777: Runtime]DeInitializeCommunication:184: Runtime deinitialization finished.
-FATAL: Runtime has not been initialized.
-Aborted (core dumped)
-```
-
-
-
-
 # 关于someip_config.json的解析
 ```cpp
 /*!
@@ -238,9 +72,9 @@ void JsonConfiguration::ParseApplicationGenConfigJson(std::string const& file_pa
 ```
 
 先使用输入流打开文件，然后把配置信息存入各个配置类对象：
-1、  **Service**  类型的  **vector**
-**Service类的成员包括：**
-**service id、major_version、minor_version、methods、events、eventgroups（包含event group id和event）**
+1、  `std::<Service>vector`类型
+`Service`类的成员包括：
+service id、major_version、minor_version、methods、events、eventgroups（包含event group id和event）
 
 2、  **RequiredServiceInstance**  类型的  **vector**
 **RequiredServiceInstance类的成员包括：**
@@ -285,10 +119,6 @@ network endpoint   **IpAddress（实际是string类型）**  、  **TCP Port**  
 其成员包括：
 
 **IpAddress**  、  **MTU**  、  **NetworkEndpointServiceDiscovery（用于多播SD消息的多播**  IpAddress、Port  **）**  、  **NetworkEndpointPort**  类型的vector（  **Port**  、  **Protocol**  、  **SocketOptions（QoS、TcpKeepAliveOption、EnableSocketOptionLinger）**  、  **ComRequestedType**  （枚举类，用于表示一个endpoint是否被标记为仅使用通信或服务发现。））
-
-
-
-
 
 
 
@@ -609,7 +439,7 @@ PS：此处涉及到  **DynamicServiceDiscovery**  的模板参数  **TemplateCo
 
 ### ReactorThreadClass的StartReactor()
 
-```
+```cpp
 /*!
  * \internal
  * - Construct an object of reactor thread.
@@ -834,10 +664,7 @@ void Reactor1::HandleOneEvent(CallbackHandle callback_handle, struct epoll_event
 
 
 
-
-
 ## APP如何发送数据
-
 ![image.png](https://atlas.pingcode.com/files/public/65462c693a27284c5ca12872/origin-url)
 发送数据前，计算header size、payload size，
 ```cpp
@@ -2573,9 +2400,8 @@ auto Connection::ReceiveAsync(MessageAvailableCallback &&msg_available_callback,
 
 
 
-初始化时调用  **Runtime**  的  **InitializeInternal**  ()，
-
-```
+初始化时调用  **Runtime**  的`InitializeInternal()`，
+```cpp
 /*! \internal
  * - If the Runtime instance is not alive for multi-threaded applications
  *   - Call HandleErrorNotRunning.
@@ -2614,8 +2440,7 @@ void Runtime::InitializeInternal() noexcept {
 }
 ```
 
-**InitializeThreadPools()**
-
+`InitializeThreadPools()`
 ```cpp
 /*! \internal
  * - Initialize default thread-pool.
@@ -2666,16 +2491,12 @@ void Runtime::InitializeThreadPools() noexcept {
 }
 ```
 
-1、  **默认线程池**  的初始化（调用完，线程就启动了）
-
-名字是  **vComDef**  ，默认构造函数是把  **State**  设置为  **kStopped**  ，  **SpawnWorkerThreads()**  中创建该thread pool中的所有  **worker thread**  （默认为1），worker thread的名字是  **pool_prefix **  +   **pool_id **  +   **index**  。
-
+1. `默认线程池`的初始化（调用完，线程就启动了）
+名字是`vComDef`，默认构造函数是把  **State**  设置为  **kStopped**  ，  **SpawnWorkerThreads()**  中创建该thread pool中的所有  **worker thread**  （默认为1），worker thread的名字是  **pool_prefix **  +   **pool_id **  +   **index**  。
 **WorkerThread**  构造的时候，调用  **Create**  ()启动线程
 
 
-
-2、  **user-defined**  线程池  **container**  的创建和初始化，采用的是  **ProxyMethodThreadPool**  的全体线程池Config
-
+2. `user-defined`线程池  **container**  的创建和初始化，采用的是  **ProxyMethodThreadPool**  的全体线程池Config
 （  **Runtime**  类持有一个  **StaticVector**  <  **ThreadPoolMapElement**  >对象  **thread_pools_**  ，其中  **ThreadPoolMapElement**  是<  **ThreadPool**  ,    **ServiceInstanceAssignmentContainer**  >，每有一个  **service instance**  就对应一个  **work thread**  ）
 
 根据这个config的（写死在代码里的）配置，只创建一个线程池，并且只含有一个线程，名字是  **vComResp**  。
@@ -2683,8 +2504,7 @@ void Runtime::InitializeThreadPools() noexcept {
 根据线程池中的配置，实例化线程池，并通过  **Initialize**  启动所有的worker thread，遍历当前线程池config的vector<AssignmentName>，将若干个  **assignment name**  传入当前线程池的  **ThreadPoolMapElement**
 
 其中  **Assignment Config**  的vector只有一个元素，类型是string，"  **ProxyResponseMethod**  "
-
-```
+```cpp
     /* Initialize thread-pool assignments */
     thread_pools_.back().second.reserve(thread_pool.GetAssignmentConfigs().size());
     for (amsr::socal::internal::configuration::AssignmentName const& name : thread_pool.GetAssignmentConfigs()) {
@@ -2713,10 +2533,7 @@ void Runtime::InitializeThreadPools() noexcept {
 
 
 和skeleton相同，会调用到  **Runtime**  的  **StartBindings**  ()函数
-
 ![image.png](https://atlas.pingcode.com/files/public/65363c49b3a56a8dd49b4455/origin-url)
-
-
 
 socal这层提供函数  **StartFindService**  ()，用于接收函数对象
 
@@ -3301,7 +3118,6 @@ ara::core::Result<void> SensorDataService::StartClient() {
 
 
 # Proxy SubscriptionState
-
 **调用顺序：**
 
 **SubscriptionStateUpdateTask**  （嵌套于class   **ProxyEventBase**  中）
@@ -3313,10 +3129,8 @@ ara::core::Result<void> SensorDataService::StartClient() {
 
 
 
-
 # Proxy Subscribe
-
-```
+```cpp
 // 用户层调用：ProxyEvent对象的Subscribe()方法
 service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePolicy::kLastN, 1);
     kLastN: 是EventCacheUpdatePolicy，表示抛弃最近最少使用的，cache为1
@@ -3574,7 +3388,6 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 
 
 ## Method
-
 当Proxy端发起method request时，
 触发一系列回调：
 `OnReceiveCompletion()`、`ProcessReceivedMessage()`
@@ -3639,13 +3452,10 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 调用  **parameter_service_interfaceProxy**  类型的指针指向对象的  **ParameterNotificationEvent**  成员的  **GetCachedSamples**  ()，得到cache（vector）对象的引用。
 
 
-
 ### 何时触发？
-
 在初始化时创建了  **ThreadPool**  ::  **WorkerThread**  （默认线程池的线程，名为  **vComDef**  ，在  **runtime**  中创建），  **EventNotificationTask**  对象被分配给线程池，调用函数调用运算符  **operator()**  时，调用  **ProxyEventBase**  对象的  **NotifySync()**  ，其中调用了设置的  **receive_handler_**
 
 该任务何时分配？
-
 分配任务的直接原因是此处的代码，往线程池添加任务。是接收到event数据时，通过一系列调用触发的函数。
 ```cpp
   /*!
@@ -3683,7 +3493,6 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 ```
 
 `ProcessReceivedMessage(); `  ->   `OnSomeIpRoutingMessage`  
-
 
 
 
@@ -3755,7 +3564,7 @@ explicit ProxyMethod(ProxyPtr proxy_ptr) noexcept : proxy_ptr_{proxy_ptr} {}
 
 PS：此处模板参数的实例化是在**用户生成代码部分**：
 ！！！这个成员函数指针类型的模板类型参数联系实际传入的是：
-此处的模板参数实例化是通过`using声明`，在外层的`MethodParameters`用`std::uint8_t const&*`实例化，然后通过::访问到内部的`ProxyMethod`，并实例化模板参数（其中的成员函数指针的名字Method如同形参名，没有意义）
+此处的模板参数实例化是通过`using声明`，在外层的`MethodParameters`用`std::uint8_t const&*`实例化，然后通过`::`访问到内部的`ProxyMethod`，并实例化模板参数（其中的成员函数指针的名字Method如同形参名，没有意义）
 ```cpp
 /*!
  * \brief Type alias for service method 'StartApplicationMethod1', that is part of the proxy.
@@ -3768,7 +3577,6 @@ using StartApplicationMethod1 = ::amsr::socal::internal::methods::MethodParamete
         ProxyMethod<startapplication::cm::service1::StartApplicationCmService1_ServiceInterface, startapplication::cm::service1::internal::StartApplicationCmService1_ServiceInterfaceProxyImplInterface, startapplication::cm::service1::internal::StartApplicationCmService1_ServiceInterfaceHandleType, startapplication::cm::service1::internal::methods::StartApplicationMethod1,
                     &startapplication::cm::service1::internal::StartApplicationCmService1_ServiceInterfaceProxyImplInterface::MethodStartApplicationMethod1>;
 ```
-
 
 ！！！总之，`return_value = (proxy_impl_ptr.get()->*Method)(std::forward<ArgsT>(args)...);`的调用实际是调用到了**src-gen**的`StartApplicationCmService1_ServiceInterfaceProxyImplInterface`类的`MethodStartApplicationMethod1`函数
 内部实现：
@@ -3969,7 +3777,8 @@ PS：该操作是原子的
 
 ## 接收method类型的数据
 ### 分配解包任务
-PS：要解包后，才知道`method_id`以及`session_id`
+PS：要解包后，才得到`method_id`以及`session_id`
+
 ！！！在`vComReactor`线程中：
 使用`epoll`技术，等待事件触发，在`StartReceiving()`中注册回调`OnReceiveCompletion`，在层层调用栈中，
 当`ProcessSomeIpMessage`调用时，执行：
@@ -4517,7 +4326,403 @@ this->  **message_stored_bytes_ **  = this->  **header_**  .  **payload_size_ **
 
 
 ### proxy response thread pool：
-感觉没用起来
+感觉没用起来？
+
+
+
+
+# 关于vector如何使用`epoll`
+在`ara::core::Initialize()`解析多个配置文件，解析到`./etc/com_application.json`时，
+```cpp
+amsr::socal::internal::InitializeComponent(ara_com_json_file_path);
+```
+
+`Runtime层`
+```cpp
+return ara::com::Runtime::getInstance().InitializeCommunication(json_config_path);
+```
+
+`Runtime层`的`InitializeInternal()`
+```cpp
+/*! \internal
+ * - If the Runtime instance is not alive for multi-threaded applications
+ *   - Call HandleErrorNotRunning.
+ * - Otherwise, Initialize the reactor thread.
+ * - Instantiating the binding pool and initialize all bindings.
+ * - Flag that signalizes that runtime and bindings have been initialized.
+ * - Start all dynamic actions of all bindings.
+ * \endinternal
+ */
+void Runtime::InitializeInternal() noexcept {
+  if (is_running_) {
+    HandleErrorAlreadyRunning();
+  }
+
+  // Maximum number of callbacks the reactor needs to handle.
+  constexpr std::uint16_t max_reactor_callback_count{1024};
+
+  // Initialize the reactor thread. Reactor required before binding initialization because bindings may initialize
+  // connections (e.g. SOME/IP).
+  // The real communication via the reactor must only be started after StartBindings() is called.
+  InitializeReactorAndTimerManager(max_reactor_callback_count);
+  InitializeReactorThread(GetReactorThreadConfig());
+
+  // Instantiating the binding pool and initialize all bindings.
+  logger_.LogDebug([](ara::log::LogStream& s) { s << "InitializeBindings"; }, __func__, __LINE__);
+  InitializeBindings();
+
+  InitializeThreadPools();
+
+  // Flag that signalizes that runtime and bindings have been initialized.
+  is_running_ = true;
+
+  // Start all dynamic actions of all bindings (receive / transmit paths, timers etc.)
+  logger_.LogDebug([](ara::log::LogStream& s) { s << "StartBindings"; }, __func__, __LINE__);
+  StartBindings();
+}
+```
+
+
+`InitializeReactorAndTimerManager()`
+```cpp
+/*! \internal
+ * - Create reactor construction token.
+ * - If the reactor construction result does not have value
+ *   - Set the error code from the construction error.
+ *   - Log the fatal message.
+ *   - Invoke abortion.
+ * - Otherwise, create the reactor and timer manager.
+ * \endinternal
+ */
+void Runtime::InitializeReactorAndTimerManager(std::uint16_t num_of_callbacks) noexcept {
+  /* Create reactor construction token */
+  ara::core::Result<osabstraction::io::reactor1::Reactor1::ConstructionToken> reactor_construct_result{
+      osabstraction::io::reactor1::Reactor1::Preconstruct(num_of_callbacks)};
+  if (!reactor_construct_result.HasValue()) {
+    ara::core::ErrorCode const error_code{reactor_construct_result.Error()};
+    logger_.LogFatal(
+        [&num_of_callbacks, &error_code](ara::log::LogStream& s) {
+          s << "Failed to construct the reactor with num_of_callbacks = " << num_of_callbacks << ". " << error_code;
+        },
+        __func__, __LINE__);
+
+    ara::core::Abort("Failed to construct the reactor.");
+  }
+
+  reactor_.emplace(std::move(reactor_construct_result.Value()));
+  timer_manager_.emplace(&(reactor_.value()));
+}
+```
+
+`Preconstruct`是把什么预创建了？
+`Preconstruct`
+```cpp
+/*!
+ * \internal
+ * - Check plausibility of input parameter.
+ * - Create epoll instance.
+ * - Create eventfd instance.
+ * - Set up the unblock event.
+ * - If any of the above steps fails skip the remaining steps, close open files and return a resource error.
+ * - Otherwise construct and return a ConstructionToken with the allocated resources.
+ * \endinternal
+ */
+Result<Reactor1::ConstructionToken> Reactor1::Preconstruct(std::uint16_t num_callbacks) noexcept {
+  Result<Reactor1::ConstructionToken> result{Result<Reactor1::ConstructionToken>::FromError(OsabErrc::kResource)};
+  ConstructionToken::ConstructionResources resources;
+
+  if (num_callbacks > internal::kMaxNumCallbacks) {
+    ara::core::Abort("Reactor1 construction failed: Invalid number of callbacks specified.");
+  }
+  resources.epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
+  if (resources.epoll_fd_ == kInvalidNativeHandle) {
+    // VECTOR Next Line AutosarC++17_10-M19.3.1: MD_OSA_M19.3.1_PosixApi
+    result.EmplaceError(MakeErrorCode(OsabErrc::kResource, errno, "epoll_create1() failed."));
+  } else {
+    // VECTOR Next Construct AutosarC++17_10-A4.5.1: MD_OSA_A4.5.1_SysCallEnumAsFlags
+    // VECTOR Next Line AutosarC++17_10-M5.0.21: MD_OSA_M5.0.21_SysCallEnumAsFlags
+    resources.unblock_event_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (resources.unblock_event_fd_ == kInvalidNativeHandle) {
+      // VECTOR Next Line AutosarC++17_10-M19.3.1: MD_OSA_M19.3.1_PosixApi
+      result.EmplaceError(MakeErrorCode(OsabErrc::kResource, errno, "eventfd() failed."));
+      static_cast<void>(close(resources.epoll_fd_));
+    } else {
+      struct epoll_event epoll_ev;
+      EventTypes events;
+      events.SetReadEvent(true);
+      epoll_ev = InitEpollStruct(events, internal::kUnblockCallbackHandle);
+      if (epoll_ctl(resources.epoll_fd_, EPOLL_CTL_ADD, resources.unblock_event_fd_, &epoll_ev) == -1) {
+        // VECTOR Next Line AutosarC++17_10-M19.3.1: MD_OSA_M19.3.1_PosixApi
+        result.EmplaceError(MakeErrorCode(OsabErrc::kResource, errno, "epoll_ctl() failed."));
+        static_cast<void>(close(resources.epoll_fd_));
+        static_cast<void>(close(resources.unblock_event_fd_));
+      } else {
+        result.EmplaceValue(num_callbacks, resources);
+      }
+    }
+  }
+  return result;
+}
+```
+先判断入参：`num_callbacks`是否合规：不能大于8191，当前是1024.
+调用`epoll_create1`，创建了一个`epoll实例`。
+调用`eventfd`，创建了一个eventfd实例。
+如果都创建成功，构造vector定义的`epoll_event`对象，`EventTypes`对象（`SetReadEvent`），
+使用``EventTypes`对象来set`epoll_event`对象（epoll_event需要绑定到event上）
+调用`InitEpollStruct`，创建系统路径下的头文件中定义的`epoll_event`对象，根据传入的vector定义的`epoll_event`对象，设置这个系统下的`epoll_event`对象的成员：`EPOLLIN`，传入一个`CallbackHandle`，
+然后调用：系统调用`epoll_ctl`，
+
+`epoll_ctl`函数用于控制`某一个epoll实例`上的事件，具体是向`epoll实例`中添加一个文件描述符和对应的事件。
+文件描述符和对应事件此时还是空的。
+
+`Preconstruct`函数的返回值是`Result<ConstructionToken>`类型，包含信息：`num_callbacks`、`ConstructionResources`对象
+`InitializeReactorAndTimerManager`通过`Preconstruct`得到返回值后，从而构造`osabstraction::io::reactor1::Reactor1`类型的对象`reactor_`（由`Runtime`持有）
+`Reactor1`的构造函数：（PS：是osabsrataction层的）
+```cpp
+/*!
+ * \internal
+ * - Initialize all fields.
+ * \endinternal
+ */
+Reactor1::Reactor1(ConstructionToken&& token) noexcept
+    : epoll_fd_(token.ExtractEpollFd()),
+      // The size of the epoll_events_ vector has to be at least 1, otherwise epoll_wait() fails.
+      epoll_events_(std::max(token.GetNumCallbacks(), std::uint16_t{1})),  // Can throw std::bad_alloc
+      unblock_event_fd_(token.ExtractUnblockEventFd()),
+      callbacks_(token.GetNumCallbacks()),  // Can throw std::bad_alloc
+      callbacks_end_{},
+      registration_mutex_{} {
+  callbacks_end_ = callbacks_.begin();
+}
+```
+set以下的成员变量
+1. epoll本身的fd
+2. `std::vector<struct epoll_event>`类型的`epoll_events_`，外层代码里创建的`max_reactor_callback_count`：1024
+3. `unblock_event_fd_`，表示非阻塞事件
+4. `std::vector<internal::CallbackEntry>`，存储函数指针的集合
+5. 函数指针集合的迭代器
+6. `registration_mutex_`
+
+（PS：fd由操作系统预先分配，但是应该还没绑定到具体的函数）
+
+
+`ConstructionToken`类，是资源的集合
+```cpp
+class ConstructionToken{
+// ...
+   private:
+    /*!
+     * \brief Number of callbacks the Reactor should be able to handle.
+     */
+    std::uint16_t num_callbacks_{};
+
+    /*!
+     * \brief Handle for the epoll instance.
+     */
+    FileDescriptor epoll_fd_{};
+
+    /*!
+     * \brief Handle for the unblock eventfd.
+     */
+    FileDescriptor unblock_event_fd_{kInvalidNativeHandle};
+}
+
+```
+`epoll_fd_`成员表示epoll实例，`unblock_event_fd_`表示非阻塞类型的event
+
+`InitializeReactorAndTimerManager`还实例化了`vac::timer::ThreadSafeTimerManager`对象：
+以上面构造出的`reactor_`对象作为输入进行构造，`ThreadSafeTimerManager`得以构造基类`TimerManager`
+`InitializeReactorAndTimerManager`调用完后，调用`InitializeReactorThread`，创建了reactor线程
+```cpp
+/*! \internal
+ * - If the process mode of runtime is KSingleThreaded
+ *   - Create a reactor thread in single threaded mode.
+ *   - Log error information if thread creation fails.
+ * - Otherwise, do not instantiate a reactor thread in polling mode.
+ *
+ * Calls "ara::core::Abort()" if:
+ *  - Thread creation through amsr::thread::Thread::Create() fails
+ * \endinternal
+ */
+void Runtime::InitializeReactorThread(amsr::thread::ThreadConfig const& reactor_thread_config) noexcept {
+  logger_.LogDebug([](ara::log::LogStream const&) {}, __func__, __LINE__);
+
+  if (config_.GetProcessingMode() == amsr::socal::internal::configuration::RuntimeProcessingMode::kSingleThreaded) {
+    /* Instantiate reactor thread in single threaded mode */
+    this->reactor_done_ = false;
+    ara::core::Result<amsr::thread::Thread> thread_result{amsr::thread::Thread::Create(reactor_thread_config, [this]() {  // 创建线程，执行以下逻辑
+      while (!this->reactor_done_) {
+        std::pair<bool, struct timeval> const expiry{timer_manager_.value().GetNextExpiry()};
+        if ((expiry.first) &&
+            // Conversion must not lead to overflow. In case of overflow we should take the maximum allowed value.
+            (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds::max()) >
+             (std::chrono::seconds{expiry.second.tv_sec}) - std::chrono::seconds{1U})) {
+          // Calculate timeout value
+          std::chrono::milliseconds const timeout{
+              std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds{expiry.second.tv_sec}) +
+              std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::microseconds{expiry.second.tv_usec})};
+          static_cast<void>(reactor_.value().HandleEvents(timeout));
+        } else {
+          static_cast<void>(reactor_.value().HandleEvents(std::chrono::milliseconds::max()));
+        }
+        timer_manager_.value().HandleTimerExpiry();
+      }
+    })};
+    if (thread_result.HasValue()) {
+      reactor_thread_ = std::move(thread_result.Value());
+    } else {
+      logger_.LogFatal(
+          [&reactor_thread_config](ara::log::LogStream& s) {
+            s << "Could not create reactor thread: " << reactor_thread_config.name;
+          },
+          __func__, __LINE__);
+      ara::core::Abort("Could not create reactor thread.");
+    }
+  } else {
+    /*
+     * Do not instantiate a reactor thread in polling mode.
+     * User will control event handling by ProcessPolling() API
+     */
+    reactor_done_ = true;
+  }
+}
+```
+创建`reactor`线程，执行以下逻辑：
+调用`Timer`提供的接口`GetNextExpiry()`，
+执行：
+```cpp
+static_cast<void>(reactor_.value().HandleEvents(std::chrono::milliseconds::max()));
+```
+
+`HandleEvents`
+```cpp
+/*!
+ * \internal
+ * - Wait for events.
+ * - If waiting was interrupted by a signal
+ *   - Return kSignal.
+ * - If an unrecoverable error was encountered
+ *   - Abort the execution of the process.
+ * - If no events were reported
+ *   - Return kTimeout.
+ * - Otherwise if events were reported
+ *   - For each event
+ *     - If it is an unblock event.
+ *       - Handle the unblock event.
+ *     - Otherwise handle the IO event.
+ *   - Return kEventsHandledOrUnblock.
+ * \endinternal
+ */
+Result<UnblockReason> Reactor1::HandleEvents(std::chrono::milliseconds timeout) noexcept {
+  Result<UnblockReason> result{Result<UnblockReason>::FromError(OsabErrc::kFatal)};
+
+  // The following cast is valid because the maximum size of epoll_events_ is limited to kMaxNumCallbacks(8191) during
+  // the construction of the Reactor1 object.
+  // VECTOR Next Line AutosarC++17_10-A3.9.1: MD_OSA_A3.9.1_EpollApi
+  int const num_events{epoll_wait(epoll_fd_, epoll_events_.data(), static_cast<int>(epoll_events_.size()),
+                                  GetEpollWaitTimeout(timeout))};
+
+  if (num_events < 0) {
+    if (errno == EINTR) {  // VECTOR Same Line AutosarC++17_10-M19.3.1: MD_OSA_M19.3.1_PosixApi
+      result.EmplaceValue(UnblockReason::kSignal);
+    } else {
+      // The other errors EBADF(epoll_fd_ is invalid), EFAULT(No permissions to write to epoll_events_) and
+      // EINVAL(epoll_fd_ does not point to epoll instance) can only happen as an effect of another major error, are
+      // not recoverable and are therefore treated as a fatal error.
+      ara::core::Abort("Reactor1::HandleEvents(): Fatal error reported by epoll_wait().");
+    }
+  } else if (num_events == 0) {
+    result.EmplaceValue(UnblockReason::kTimeout);
+  } else {
+    // The following cast is valid because num_events has to be larger than 0 to execute this code.
+    for (std::size_t i{0}; i < static_cast<std::size_t>(num_events); ++i) {
+      const struct epoll_event& epoll_ev{epoll_events_[i]};
+      CallbackHandle const callback_handle{epoll_ev.data.u64};
+      if (callback_handle == internal::kUnblockCallbackHandle) {
+        HandleUnblock();
+      } else {
+        HandleOneEvent(callback_handle, epoll_ev);
+      }
+    }
+    result.EmplaceValue(UnblockReason::kEventsHandledOrUnblock);
+  }
+  return result;
+}
+```
+调用系统调用：`epoll_wait`，想要监听的事件，是通过`epoll_ctl`系统调用注册
+
+## 何时set要监听的事件？
+调用栈截取如下：
+`someip_daemon_client_.Connect();`
+
+`bool ConnectSync(osabstraction::io::ipc1::UnicastAddress const& address)`
+
+`ChangeWriteObservation(true);`
+
+
+### fd的mode的设置
+`SetBlockingMode(native_handle, SocketBlockingMode{false});`
+设置了fd的模式
+```cpp
+/*!
+ * \brief Sets native handle's blocking mode.
+ *
+ * \note  Since this function doesn't create the native handle it doesn't close it in case of an error.
+ *
+ * \param[in] native_handle  The native handle.
+ * \param[in] enable         The blocking mode to be set. True to enable blocking and false to turn blocking off.
+ *
+ * \return          -
+ *
+ * \error           -
+ *
+ * \context         ANY
+ *
+ * \pre             Valid native handle.
+ *
+ * \reentrant       FALSE
+ * \synchronous     TRUE
+ * \threadsafe      FALSE
+ *
+ * \vprivate        Vector component internal API
+ */
+/*!
+ * \internal
+ *  - Check pre-conditions: x
+ *  - Check for usage errors: x
+ *  - Get file attributes and abort on any error.
+ *  - Set the blocking flag to the passed value.
+ *  - Set the file attributes according to the updated flag and abort on any error.
+ *  - Return: x
+ * \endinternal
+ */
+auto SetBlockingMode(NativeHandle native_handle, SocketBlockingMode enable) noexcept -> void {
+  // VECTOR Next Line AutosarC++17_10-A3.9.1: MD_OSA_A3.9.1_PosixApi
+  int flags{::fcntl(native_handle, F_GETFL, 0)};
+  if (flags == kApiError) {
+    // Function calls ara::core::Abort()
+    MapNonSpecialFdOperationError(GetErrorNumber());
+  } else {
+    if (enable.value) {
+      // VECTOR Next Construct AutosarC++17_10-M5.0.21: MD_OSA__M5.0.21_O_NONBLOCK
+      // VECTOR Next Construct AutosarC++17_10-M2.13.2: MD_OSA_M2.13.2_O_NONBLOCK
+      flags = flags & ~O_NONBLOCK;
+    } else {
+      // VECTOR Next Construct AutosarC++17_10-M2.13.2: MD_OSA_M2.13.2_O_NONBLOCK
+      // VECTOR Next Line AutosarC++17_10-M5.0.21: MD_OSA__M5.0.21_O_NONBLOCK
+      flags = flags | O_NONBLOCK;
+    }
+    if (::fcntl(native_handle, F_SETFL, flags) == kApiError) {
+      // Function calls ara::core::Abort()
+      MapNonSpecialFdOperationError(GetErrorNumber());
+    }
+  }
+}
+```
+
+
+
+
 
 
 

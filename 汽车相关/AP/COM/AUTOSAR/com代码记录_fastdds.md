@@ -709,8 +709,7 @@ using UpdateRate = ara::com::internal::skeleton::MutableFieldDispatcher<::ara::c
 ```cpp
 using brakeEvent = ara::com::internal::skeleton::EventDispatcher<::ara::com::sample::RadarObjects>;
 ```
-！！！重要特点：这里的各种`XXXdispatcher类`继承的`DispatcherBase`实际都是`list<xxx>`，这个list的填充是在调用`OfferService`时，对`Adapter类`初始化时才做的
-
+！！！重要特点：这里的`EventDispatcher类`继承的`DispatcherBase`所持有的主体都是`list<EventImpl>`，对这个list的填充是在调用`OfferService`时，对`Adapter类`初始化时才做的
 
 PS：注意到，`MethodCallProcessingMode`默认为`kEvent`
 再看一下`radarSkeleton`的重要基类：`TypedServiceImplBase`的构造
@@ -1718,7 +1717,7 @@ void DdsProxyFactoryImpl::RegisterFindServiceHandle(FindServiceHandle handle, Pr
                                 return ((info.serviceId == serviceId) && (info.instanceId == instanceId));
                             })) // 匹配id
                         {
-                        return GetProxy(mapping, serviceId, instanceId, participant);  // ！！！ 调用ProxyBuilder对象的make()，得到ProxyFactory对象
+                        return GetProxy(mapping, serviceId, instanceId, participant);  // ！！！ 调用ProxyBuilder类的make()，得到ProxyFactoryImpl对象
                         }
                         else{
                             //don't use builtin reader check service userdata, just use it;
