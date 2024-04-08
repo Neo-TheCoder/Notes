@@ -3754,7 +3754,7 @@ PS：该操作是原子的
 注意：该函数的入参其实就是`session_id_`，如果`session_id`重复，
 如果已经存在具有相同键的元素，则可以通过`if (pending_request_stored.second)`判断得出，那么就会返回空的`optional_future`
 ！！！即便是相同类型的request，也是不同的`session_id`
-（`session_id`何时会重复？--> 多线程发起request时，session_id会重复？会丢弃数据）
+（`session_id`何时会重复？--> 多线程发起request时，session_id会重复？现在的处理逻辑是：会丢弃数据）
 
 如果发送失败，则调用`OnTxError`：
 ```cpp
@@ -3770,9 +3770,7 @@ PS：该操作是原子的
   }
 ```
 移除`PendingRequestMap`对象中当前session_id_对应的`ara::core::Promise<Output>`类型的request，并取出对应的`promise`，调用`SetError`
-
 如果`session_id`重复，则调用`OnSessionIdDuplicated`
-
 
 
 ## 接收method类型的数据
@@ -3804,8 +3802,8 @@ PS：要解包后，才得到`method_id`以及`session_id`
   }
 ```
 在`HandleResponse`中，
-根据session_id，从`ProxyMethodManager`维护的`pending_requests`取出相应的`Promise`
-！！！即便request类型相同，`session_id`也是不同的，这样就能确保相同类型的两个request，分别得到处理（放到线程池多线程地处理）
+根据`session_id`，从`ProxyMethodManager`维护的`pending_requests`取出相应的`Promise`
+！！！即便`request类型`相同，`session_id`也是不同的，这样就能确保相同类型的两个request，分别得到处理（放到线程池多线程地处理）
 
 `AddTask`：`PositiveResponseTask`
 ```cpp

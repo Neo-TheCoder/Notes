@@ -91,7 +91,7 @@ STL常将其用于仿函数和算法的搭配上
 
 
 # 第二章 空间配置器(allocator)
-之所以称之为空间配置器，是因为空间不只是内存，也可能是磁盘或者别的存储介质（可以实现allocator直接向硬盘存取空间）
+之所以称之为空间配置器，而不是内存配置器，是因为空间不只是`内存`，也可能是`磁盘`或者`别的存储介质`（可以实现allocator直接向硬盘存取空间）
 SGI STL提供的配置器则是内存配置器
 
 ## 2.1 空间配置器的标准接口
@@ -151,7 +151,7 @@ struct __allocator {
 ```
 
 ## 2.2 具备次配置力(sub-allocation)的SGI空间配置器
-SGI STL的配置器和标准规范不同的，名称是alloc（不接收类型参数），而非allocator。
+SGI STL的配置器和标准规范不同的，名称是`alloc`（不接收类型参数），而非`allocator`。
 ```cpp
 vector<int, std::allocator<int>> iv;    // 标准写法 VC中的
 
@@ -164,11 +164,11 @@ template<class T, class Alloc = alloc>
 class vector{...};
 ```
 
-### 2.2.1 SGI标准的空间配置器 std::allocator
-它虽然符合部分标准，但是效率不好，只是对operator new和operator delete的简单封装
+### 2.2.1 SGI标准的空间配置器 `std::allocator`
+它虽然符合部分标准，但是效率不好，只是对`operator new`和`operator delete`的简单封装
 
-### 2.2.2 SGI特殊的空间配置器 std::alloc
-该空间配置器考虑了效率问题
+### 2.2.2 SGI特殊的空间配置器 `std::alloc`
+该空间配置器效率高，推荐使用
 #### new操作实际上分为两步：
 1. 配置内存
 2. 构造对象
@@ -178,14 +178,13 @@ delete操作：
 2. 释放内存
 
 std::alloc实现中：
-**allocate()**用于内存配置操作
-**deallocate()**用于内存释放
-**construct()**用于对象构造
-**destroy()**用于对象析构
+`allocate()`用于`内存申请操作`
+`deallocate()`用于`内存释放`
+`construct()`用于`对象构造`
+`destroy()`用于`对象析构`
 
+`#include<memory>`中含有以下文件：
 ```cpp
-#include<memory>中含有以下文件：
-
 #include<stl_alloc.h> 
 // 负责内存空间的配置与释放 定义了一、二级配置器，二者协作
 allocate()、deallocate()
@@ -203,39 +202,70 @@ un_initialized_fill_n()
 // 它们的底层实现，在最差情况下会调用construct()、最佳情况下调用C标准函数memmove()直接进行内存数据的移动
 ```
 
-### 2.2.3 构造和析构基本工具 construct()和destroy()
+### 2.2.3 构造和析构基本工具 `construct()`和`destroy()`
+**在已配置内存的基础上**，用于对象的构造和析构
 ```cpp
 #include<stl_construct.h>
-包含了：
-#include<new.h>
+
+template<class T1>
+inline void construct(T1* p){
+    new ((void*)p) T1();  // 其实就是placement new，调用了T1的构造函数（无参数）
+}
 
 template<class T1, class T2>
 inline void construct(T1* p, const T2& value){
-    new (p) T1(value);  // placement new，调用了T1的构造函数
+    new (p) T1(value);  // 其实就是placement new，调用了T1的构造函数（有参数）
 }
 
 template<class T>
 inline void destroy(T* pointer){
-    pointer->~T();
+    pointer->~T();  // 调用析构
 }
 
-// 第二版本：析构指定范围的对象
-// 接收两个迭代器，该函数会找出元素的数值型别（value_type），以便得到最佳措施
+// 第二版本：析构 指定范围 的对象
+// 接收两个迭代器，该函数会找出元素的数值型别（value type），以便得到最佳措施
+template <class _ForwardIterator>
+inline void _Destroy(_ForwardIterator __first, _ForwardIterator __last) {
+  __destroy(__first, __last, __VALUE_TYPE(__first));    // __destroy第三个参数接收一个指针，__VALUE_TYPE获取值类型
+}
+
+// 其有不同的特化版本，是根据每个对象析构函数来判断的，先利用value_type()获得迭代器指定对象的型别，再利用_type_traits<T>判断其析构函数是否是trivial的（即析构函数没有特殊操作，类对象内部不包含需要特殊处理的资源）
+// 如果是，则什么都不做，如果不是，则循环范围内的所有对象，调用第一个版本的destroy()
+
+// 判断元素的数值型别(value type)是否有trivial destructor
+template<class ForwardIterator, class T>
+inline void __destroy(ForwardIterator first, ForwardIterator last, T*) {
+       typedef typename __type_traits<T>::has_trivial_destructor  trivial_destructor;
+       __destroy_aux(first, last, trivial_destructor());    // 通过traits技术得到value type，临时调用构造，返回true / false，以在编译期判断
+}
+
+// 如果元素的数值型别(value type)有non-trivial destructor, 则派送(dispatch)到这里
 template<class ForwardIterator>
-inline void destroy(ForwardIterator first, ForwardIterator last){
-    __destroy(first, last, value_type(first));
+inline void __destroy_aux(ForwardIterator first, ForwardIterator last,  __false_type) {
+       for (; first < last; ++first)
+              destroy(&*first);
 }
 
-// 其有不同的特化版本，是根据每个对象析构函数来判断的，先利用value_type()获得迭代器指定对象的型别，再利用_type_traits<T>判断其析构函数是否是无关痛痒的（即析构函数没有特殊操作，是编译器生成的），如果是，则什么都不做，如果不是，则循环范围内的所有对象，调用第一个版本的destroy()
+// 如果元素的数值型别(value type)有trivial destructor, 则派送(dispatch)到这里
+template<class ForwardIterator>
+inline void __destroy_aux(ForwardIterator first, ForwardIterator last,  __true_type) {
+}
+// 比如是char* [start, end)，就不需要调用析构，因为没构造对象，那块内存直接让别人拿去用就行了
+
+// destroy() 第二版针对迭代器为char*和wchar_t*的特化版
+// 原生指针区间不需要析构, 因为没有对象, 类似地，还有int*, long*, float*, double*，这里省略
+inline void destroy(char*, char*) { }
+inline void destroy(wchar_t*, wchar_t*) { }
+// ...
 ```
 
 ### 2.2.4 空间的配置与释放 std::alloc
-`<std_alloc.h>`负责：对象构造前的空间配置 和 对象析构后的空间释放
+`<std_alloc.h>`负责：`对象构造前的空间配置` 和 `对象析构后的空间释放`
 SGI对此的设计哲学：
 1. 向`system heap`要求空间
 2. 考虑`多线程状态`
-3. 考虑内存不足时的应变措施
-4. 考虑内存碎片问题
+3. 考虑`内存不足`时的应变措施
+4. 考虑`内存碎片`问题
 
 对于内存碎片，SGI设计了`双层级配置器`
 1. 第一级配置器
@@ -259,13 +289,11 @@ typedef malloc_alloc alloc; // 使得alloc表示第一级配置器
 typedef __default_alloc_template<__NODE_ALLOCATOR_THREADS, 0> alloc; // 第二级配置器
 # endif
 ```
-alloc不接受任何`template型别参数`
-
-如此包装才能使得alloc符合STL规格
+alloc不接受任何`template型别参数`,所以 如此包装才能使得alloc符合STL规格
 ```cpp
 template<class T, class Alloc>
 class simple_alloc
-//  简单的传递调用，使得配置器的配置单位由"bytes"转为元素类型的大小
+//  简单的 传递调用 ，使得配置器的配置单位由"bytes"转为元素类型的大小
 {    
     static T *allocate(size t n)
     {
@@ -285,7 +313,6 @@ class simple_alloc
         Alloc::deallocate(p，sizeof(T)); 
     }
 };
-
 ```
 
 ```cpp
@@ -708,23 +735,25 @@ class vector{
 
 
 
-
-
-
-
-
 ## 2.3 内存基本处理工具
-STL定义了**五个全局函数，用于未初始化空间上**，有利于容器的实现
+STL定义了`五个全局函数`，用于未初始化空间上，有利于容器的实现
+`uninitialzied_copy()`, `uninitialized_fill()`, `uninitialized_fill_n()`对应STL算法中的`copy()`, `fill()`, `fill_n()`
 
-### 2.3.1 uninitialzied_copy
+### 2.3.1 `uninitialzied_copy`
 ```cpp
     template<class InputIterator, class ForwardIterator>
     ForwardIterator
     uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result);
 ```
-使我们能够将**内存的配置与对象的构造行为分离**
-它会调用拷贝构造函数为入参指示范围的每一个对象产生一份copy对象，放入范围中
-C++标准要求：***uninitialized_copy()要么构造出所有必要元素，要么（当有任何一个copy constructor失败时）不构造任何东西***
+使我们能够 将 **内存的配置** 与 **对象的构造行为** 分离
+如果 输出目的地(即: `[ result, result + ( last - first ) )` ) 指向的是未初始化区域
+它会调用`拷贝构造函数`为（ `[result, last)`范围内的 ）每一个对象产生一份copy对象，放入输出范围中
+
+容器的全区间构造函数通常以两个步骤完成：
+1. 配置内存区块，足以包含范围内的所有元素
+2. 使用`uninitialized_copy()`，在该内存区快上构造对象
+
+C++标准要求：`uninitialized_copy()`要么构造出所有必要元素，要么（当有任何一个copy constructor失败时）不构造任何东西***
 
 ### 2.3.2 uninitialized_fill
 ```cpp

@@ -190,7 +190,7 @@ __rmw_take_response(
 }
 ```
 
-需要sequence_number保持一致的原因
+需要sequence_number保持一致的原因：确保response和request匹配
 ```cpp
   /// Handle a server response
   /**
@@ -224,6 +224,211 @@ __rmw_take_response(
     callback(future);
   }
 ```
+pending_requests_的数据结构是：`std::map<int64_t, std::tuple<SharedPromise, CallbackType, SharedFuture>> pending_requests_;`
+在把response通过`set_value`传递给上层之前，判断当前request的sequence number是否有效。
+？？？`request_header`怎么来的？
+
+
+
+
+
+
+#### ros2 client处理response的调用栈
+```cpp
+void
+Executor::execute_client(
+  rclcpp::ClientBase::SharedPtr client)
+{
+  auto request_header = client->create_request_header();
+  std::shared_ptr<void> response = client->create_response();
+  take_and_do_error_handling(
+    "taking a service client response from service",
+    client->get_service_name(),
+    [&]() {return client->take_type_erased_response(response.get(), *request_header);},
+    [&]() {client->handle_response(request_header, response);});
+}
+```
+先临时创建`std::shared_ptr<void> response`，然后通过`take_type_erased_response()`接口取得
+
+##### `take_and_do_error_handling()`的实现
+```cpp
+static
+void
+take_and_do_error_handling(
+  const char * action_description,
+  const char * topic_or_service_name,
+  std::function<bool()> take_action,
+  std::function<void()> handle_action)
+{
+  bool taken = false;
+  try {
+    taken = take_action();
+  } catch (const rclcpp::exceptions::RCLError & rcl_error) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger("rclcpp"),
+      "executor %s '%s' unexpectedly failed: %s",
+      action_description,
+      topic_or_service_name,
+      rcl_error.what());
+  }
+  if (taken) {
+    handle_action();
+  } else {
+    // Message or Service was not taken for some reason.
+    // Note that this can be normal, if the underlying middleware needs to
+    // interrupt wait spuriously it is allowed.
+    // So in that case the executor cannot tell the difference in a
+    // spurious wake up and an entity actually having data until trying
+    // to take the data.
+    RCLCPP_DEBUG(
+      rclcpp::get_logger("rclcpp"),
+      "executor %s '%s' failed to take anything",
+      action_description,
+      topic_or_service_name);
+  }
+}
+```
+可见，`take response`和`handle response`的操作是同步的：
+因为`take_action()`即`take_type_erased_response(response.get(), *request_header)`
+`handle_action()`即`handle_response()`
+
+`create_request_header()`：
+```cpp
+/// An rmw service request identifier
+typedef struct RMW_PUBLIC_TYPE rmw_request_id_t
+{
+  /// The guid of the writer associated with this request
+  int8_t writer_guid[16];
+
+  /// Sequence number of this service
+  int64_t sequence_number;
+} rmw_request_id_t;
+```
+`create_request_header()`仅仅是构造一个`struct`，它的`sequence_number`是随机的
+`create_response()`构造了用户层的response数据类型
+
+`take_type_erased_response()`
+```cpp
+bool
+ClientBase::take_type_erased_response(void * response_out, rmw_request_id_t & request_header_out)
+{
+  rcl_ret_t ret = rcl_take_response(
+    this->get_client_handle().get(),
+    &request_header_out,
+    response_out);
+  if (RCL_RET_CLIENT_TAKE_FAILED == ret) {
+    return false;
+  } else if (RCL_RET_OK != ret) {
+    rclcpp::exceptions::throw_from_rcl_error(ret);
+  }
+  return true;
+}
+```
+
+`rcl_take_response`调用`rcl_take_response_with_info()`，在该函数中，set request header
+```cpp
+rcl_ret_t
+rcl_take_response_with_info(
+  const rcl_client_t * client,
+  rmw_service_info_t * request_header,
+  void * ros_response)
+{
+  RCUTILS_LOG_DEBUG_NAMED(ROS_PACKAGE_NAME, "Client taking service response");
+  if (!rcl_client_is_valid(client)) {
+    return RCL_RET_CLIENT_INVALID;  // error already set
+  }
+
+  RCL_CHECK_ARGUMENT_FOR_NULL(request_header, RCL_RET_INVALID_ARGUMENT);
+  RCL_CHECK_ARGUMENT_FOR_NULL(ros_response, RCL_RET_INVALID_ARGUMENT);
+
+  bool taken = false;
+  request_header->source_timestamp = 0;
+  request_header->received_timestamp = 0;
+  if (rmw_take_response(
+      client->impl->rmw_handle, request_header, ros_response, &taken) != RMW_RET_OK)
+  {
+    RCL_SET_ERROR_MSG(rmw_get_error_string().str);
+    return RCL_RET_ERROR;
+  }
+  RCUTILS_LOG_DEBUG_NAMED(
+    ROS_PACKAGE_NAME, "Client take response succeeded: %s", taken ? "true" : "false");
+  if (!taken) {
+    return RCL_RET_CLIENT_TAKE_FAILED;
+  }
+  return RCL_RET_OK;
+}
+```
+
+
+`rmw_take_response()`调用到`__rmw_take_response()`
+```cpp
+rmw_ret_t
+__rmw_take_response(
+  const char * identifier,
+  const rmw_client_t * client,
+  rmw_service_info_t * request_header,
+  void * ros_response,
+  bool * taken)
+{
+  RMW_CHECK_ARGUMENT_FOR_NULL(client, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(
+    client,
+    client->implementation_identifier, identifier,
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION);
+  RMW_CHECK_ARGUMENT_FOR_NULL(request_header, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(ros_response, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
+
+  *taken = false;
+
+  auto info = static_cast<CustomClientInfo *>(client->data);
+  assert(info);
+
+  CustomClientResponse response;
+
+  if (info->listener_->getResponse(response)) {
+    auto raw_type_support = dynamic_cast<rmw_fastrtps_shared_cpp::TypeSupport *>(
+      info->response_type_support_.get());
+    eprosima::fastcdr::Cdr deser(
+      *response.buffer_,
+      eprosima::fastcdr::Cdr::DEFAULT_ENDIAN,
+      eprosima::fastcdr::Cdr::DDS_CDR);
+    if (raw_type_support->deserializeROSmessage(
+        deser, ros_response, info->response_type_support_impl_))
+    {
+      request_header->source_timestamp = response.sample_info_.source_timestamp.to_ns();
+      request_header->received_timestamp = response.sample_info_.reception_timestamp.to_ns();
+      request_header->request_id.sequence_number =
+        ((int64_t)response.sample_identity_.sequence_number().high) <<
+        32 | response.sample_identity_.sequence_number().low;
+
+      *taken = true;
+    }
+  }
+
+  return RMW_RET_OK;
+}
+```
+！！！从`info->listener_->getResponse(response)`可以看出，listener_维护从`on_data_available`中取得的response队列，每次处理队头元素。
+！！！通过`if (this->pending_requests_.count(sequence_number) == 0)`来匹配request和response
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### server对于request消息的处理
 ```cpp
