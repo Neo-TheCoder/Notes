@@ -737,9 +737,9 @@ class vector{
 
 ## 2.3 内存基本处理工具
 STL定义了`五个全局函数`，用于未初始化空间上，有利于容器的实现
-`uninitialzied_copy()`, `uninitialized_fill()`, `uninitialized_fill_n()`对应STL算法中的`copy()`, `fill()`, `fill_n()`
+`uninitialized_copy()`, `uninitialized_fill()`, `uninitialized_fill_n()`对应STL算法中的`copy()`, `fill()`, `fill_n()`
 
-### 2.3.1 `uninitialzied_copy`
+### 2.3.1 `uninitialized_copy`
 ```cpp
     template<class InputIterator, class ForwardIterator>
     ForwardIterator
@@ -747,40 +747,362 @@ STL定义了`五个全局函数`，用于未初始化空间上，有利于容器
 ```
 使我们能够 将 **内存的配置** 与 **对象的构造行为** 分离
 如果 输出目的地(即: `[ result, result + ( last - first ) )` ) 指向的是未初始化区域
-它会调用`拷贝构造函数`为（ `[result, last)`范围内的 ）每一个对象产生一份copy对象，放入输出范围中
+它会调用`拷贝构造函数`为（ `[result, last)`范围内的 ）每一个对象产生一份copy对象，放入输出范围中（拷贝一片区域的元素到另一片区域）
 
 容器的全区间构造函数通常以两个步骤完成：
-1. 配置内存区块，足以包含范围内的所有元素
-2. 使用`uninitialized_copy()`，在该内存区快上构造对象
+1. 配置内存区块，其大小足以包含范围内的所有元素
+2. 使用`uninitialized_copy()`，在该内存区块上`构造对象`
 
-C++标准要求：`uninitialized_copy()`要么构造出所有必要元素，要么（当有任何一个copy constructor失败时）不构造任何东西***
+C++标准要求：`uninitialized_copy()`要么构造出所有必要元素，要么（当有任何一个copy constructor失败时）不构造任何东西
 
-### 2.3.2 uninitialized_fill
+
+`uninitialized_copy`底层实现
+```cpp
+// Valid if copy construction is equivalent to assignment, and if the
+//  destructor is trivial.
+template <class _InputIter, class _ForwardIter>
+inline _ForwardIter 
+__uninitialized_copy_aux(_InputIter __first, _InputIter __last,
+                         _ForwardIter __result,
+                         __true_type)
+{
+  return copy(__first, __last, __result);   // 对于POD类型，这样处理最高效
+}
+
+template <class _InputIter, class _ForwardIter>
+_ForwardIter 
+__uninitialized_copy_aux(_InputIter __first, _InputIter __last,
+                         _ForwardIter __result,
+                         __false_type)
+{
+  _ForwardIter __cur = __result;
+  __STL_TRY {
+    for ( ; __first != __last; ++__first, ++__cur)
+      _Construct(&*__cur, *__first);
+    return __cur;
+  }
+  __STL_UNWIND(_Destroy(__result, __cur));  // 对于非POD类型，这样处理最稳妥
+}
+```
+
+针对`const char*`和`const wchar_t*`的特化：（wchar_t即宽字节的char，常为2/4位）
+`memmove`直接移动内存内容，它可以处理源内存区域和目标内存区域重叠的情况，因此在处理重叠内存区域时比`memcpy`更安全
+```cpp
+inline char* uninitialized_copy(const char* __first, const char* __last,
+                                char* __result) {
+  memmove(__result, __first, __last - __first); // 把first到last的内容，copy到__result位置
+  return __result + (__last - __first);
+}
+
+inline wchar_t* 
+uninitialized_copy(const wchar_t* __first, const wchar_t* __last,
+                   wchar_t* __result)
+{
+  memmove(__result, __first, sizeof(wchar_t) * (__last - __first));
+  return __result + (__last - __first);
+}
+```
+
+### 2.3.2 `uninitialized_fill`
 ```cpp
     template<class ForwardIterator, class T>
     uninitialized_fill(ForwardIterator first, ForwardIterator last, const T& x);
-    // 第三个入参是要填充的值
+    // 使用第三个入参，来初始化 first - last 的元素
+```
+一片区域的元素用一个元素来初始化
+
+C++标准要求：`uninitialized_fill()`要么构造出所有必要元素，要么（当有任何一个copy constructor失败时）不构造任何东西（把已经构造好的析构掉）
+
+`uninitialized_fill`底层实现：
+```cpp
+// Valid if copy construction is equivalent to assignment, and if the
+// destructor is trivial.
+template <class _ForwardIter, class _Tp>
+inline void
+__uninitialized_fill_aux(_ForwardIter __first, _ForwardIter __last, 
+                         const _Tp& __x, __true_type)
+{
+  fill(__first, __last, __x);   // 调用STL的fill
+}
+
+template <class _ForwardIter, class _Tp>
+void
+__uninitialized_fill_aux(_ForwardIter __first, _ForwardIter __last, 
+                         const _Tp& __x, __false_type)
+{
+  _ForwardIter __cur = __first;
+  __STL_TRY {
+    for ( ; __cur != __last; ++__cur)
+      _Construct(&*__cur, __x);
+  }
+  __STL_UNWIND(_Destroy(__first, __cur));
+}
 ```
 
-### 2.3.3 uninitialized_fill_n
+
+### 2.3.3 `uninitialized_fill_n`
 ```cpp
     template<class ForwardIterator, class Size, class T>
     ForwardIterator
     uninitialized_fill_n(ForwardIterator first, Size n, const T& x);
-    // 第三个入参是要填充的值
+    // 使用第三个入参，来初始化first开始的n个元素
 ```
-uninitialized_copy(first, last, result)：
+一片区域的n个元素用一个元素来初始化
+
+C++标准要求：`uninitialized_fill_n()`要么构造出所有必要元素，要么（当有任何一个copy constructor失败时）不构造任何东西（把已经构造好的析构掉）
+
+
+`uninitialized_fill_n()`源码：
+```cpp
+template <class _ForwardIter, class _Size, class _Tp>
+inline _ForwardIter 
+uninitialized_fill_n(_ForwardIter __first, _Size __n, const _Tp& __x)
+{
+  return __uninitialized_fill_n(__first, __n, __x, __VALUE_TYPE(__first));  // 通过__VALUE_TYPE得到类型后传入临时变量
+}   // 用__x来初始化，从__first开始的__n个元素
+```
+
+`__uninitialized_fill_n()`
+```cpp
+template <class _ForwardIter, class _Size, class _Tp, class _Tp1>
+inline _ForwardIter 
+__uninitialized_fill_n(_ForwardIter __first, _Size __n, const _Tp& __x, _Tp1*)  // 不需要使用入参传来的临时变量，只需要其类型
+{
+  typedef typename __type_traits<_Tp1>::is_POD_type _Is_POD;    // 使用traits技术，判断类型是否所需
+  return __uninitialized_fill_n_aux(__first, __n, __x, _Is_POD());
+}
+```
+
+`__uninitialized_fill_n_aux()`对于`POD类型`
+`POD`类型：`标量类型`、`C stuct`，必然有：`trival ctor/ dtor / copy / assignment`函数
+```cpp
+// Valid if copy construction is equivalent to assignment, and if the
+//  destructor is trivial.
+template <class _ForwardIter, class _Size, class _Tp>
+inline _ForwardIter
+__uninitialized_fill_n_aux(_ForwardIter __first, _Size __n,
+                           const _Tp& __x, __true_type)
+{
+  return fill_n(__first, __n, __x); // 6.4.2
+}
+```
+
+`__uninitialized_fill_n_aux()`对于`非POD类型`
+```cpp
+template <class _ForwardIter, class _Size, class _Tp>
+_ForwardIter
+__uninitialized_fill_n_aux(_ForwardIter __first, _Size __n,
+                           const _Tp& __x, __false_type)
+{
+  _ForwardIter __cur = __first;
+  __STL_TRY {
+    for ( ; __n > 0; --__n, ++__cur)
+      _Construct(&*__cur, __x); // 一个个地调用拷贝构造
+    return __cur;
+  }
+  __STL_UNWIND(_Destroy(__first, __cur));
+}
+```
+
+
+### 总结
+`uninitialized_copy(first, last, result)`：
 是将指定范围内的元素拷贝到未初始化的内存区域，并在目标内存中构造对象
 
-uninitialized_fill(first, last, value)：
+`uninitialized_fill(first, last, value)`：
 是将相同的值填充到范围内的每个元素中
 
-uninitialized_fill_n(first, n, value)：
+`uninitialized_fill_n(first, n, value)`：
 是用于指定填充元素个数的函数，适用于某个范围的连续一段元素需要填充相同的值的情况
 
 
+# 第三章 迭代器概念与traits编程技法
+`迭代器模式`是一种设计模式：提供一种方法，使之能够**依序巡访**某个聚合物(容器)所含的各个元素，而又**无需暴露该聚合物的内部表述方式**。
+
+## 3.1 迭代器设计思维————STL关键所在
+STL的中心思想：**将数据容器与算法分开**，彼此独立设计，最后再以胶着剂撮合。
+`find()`的实现，可以用在不同的容器上
+```cpp
+template <class _InputIter, class _Tp>
+inline _InputIter find(_InputIter __first, _InputIter __last,
+                       const _Tp& __val,
+                       input_iterator_tag)
+{
+  while (__first != __last && !(*__first == __val))
+    ++__first;
+  return __first;
+}
+```
+
+## 3.2 迭代器是一种智能指针
+迭代器**行为类型指针**：提供两大行为：
+1. 解引用（重载`operator*()`）
+2. 成员访问（重载`operator->`）
+
+假设现在有链表类，要设计其专属迭代器，那么必须对链表类的实现细节很了解，由于迭代器类必然和链表类的节点类有关联，那么节点类是必然暴露的，那么迭代器的开发工作应该是链表类的设计者一并开发，因此每一种STL容器都有专属迭代器。
+
+## 3.3 迭代器相应型别（`associated types`）
+**利用函数模板的参数推导机制**
+```cpp
+template<class T>
+void func(I iter){
+    func_impl(iter, *iter);
+}
+
+template<class I, class T>
+void func_impl(I iter, T t){    // 一旦被调用，编译器会自动进行模板参数推导，得出型别T
+    T tmp;  // 取得类型
+    // ...
+}
+```
+
+常用的迭代器相应型别有五种
+
+## 3.4 Traits编程技法
+迭代器所指对象的型别，又称`value_type`
+
+`关联类型`是一种概念，`value type`是具体的`类型`（是一种`特性`），`value type`可以用来表述`关联类型`的具体类型。
+
+```cpp
+// 为迭代器MyIter内嵌类型value_type
+template<class T>
+struct MyIter // 陷阱：如果迭代器是原生指针，根本就没这样一个class type
+{
+  typedef T value_type; // 内嵌类型声明(nested type)！！！
+  T* ptr;
+  MyIter(T* p = 0) : ptr(p) { }
+  T& operator*() const { return *ptr; }
+  // ...
+};
+
+// 将“template的参数类型推导”机制，针对value type，专门写成一个function template
+template<class I>
+typename I::value_type func(I ite) // typename I::value_type是func的返回值类型
+{ return *ite; }
+
+// 客户端
+// ...
+MyIter<int> ite(new int(8)); // 定义迭代器ite, 指向int 8
+cout << func(ite);           // 输出：8
+
+// 如果传给func的参数（迭代器），是一个原生指针，这种方式就失效了
+```
+为什么func的返回值必须加上`typename`关键字？
+因为T是模板参数，编译器生成代码之前，编译器不知道T是什么，那么编译器根本不知道`I::value_type`的真正语义：类型 / 成员函数 / 数据成员。
+
+声明内嵌类型有一个陷阱：不是所有`迭代器`都是`class type`，比如`原生指针（native pointer）`就不是（其实原生指针也是迭代器）。
+如果不是class type，就无法为它定义内嵌类型，但**STL又必须接受原生指针作为迭代器**，那要怎么办？
+答案是可以针对这种特定情况，使用`template partial specialization`（模板偏特化）做特殊化处理。
+
+### `template partial specialization`
+即：对模板参数进行部分特化（将泛化版本的某些template参数明确指定）
+```cpp
+// 通用版 class template
+template<typename T>
+class C{...} // 这个泛化版本允许（接受）T为任何类型
+
+template<typename T>
+class C<T*>{...}  // 偏特化版class template，仅适用于“T为原生指针”的情况
+                  // “T为原生指针”是“T为任何类型”的一个更进一步的条件限制
+
+```
+偏特化的`class C<T*>`仍然是一个模板，不过针对class C的模板参数T做了**进一步限制**，即T必须是指针类型。
 
 
+#### `类型萃取`：萃取迭代器的几大特性
+##### 萃取`value_type`
+```cpp
+// 萃取内嵌类型value type
+template<class I>
+struct iterator_traits { // traits意为“特性”，用于萃取出模板参数I的关联的原生类型value type
+  typedef typename I::value_type value_type;
+};
+```
+所谓traits，意义是，如果`模板参数I`定义有自己的`value type`，那么通过traits的作用，萃取出来的value_type就是`I::value_type`。
+
+```cpp
+template<class T>
+tyename I::value_type func(I ite) // typename I::value_type是func返回值类型
+{ return *ite; }
+
+
+
+
+// 改写 ==>
+
+// 萃取内嵌类型value type
+template<class I>
+struct iterator_traits { // traits意为“特性”，用于萃取出模板参数I的关联的原生类型value type
+  typedef typename I::value_type value_type;    // 取到内嵌类型
+};
+
+// 原生指针不是class，没有内嵌类型，通过偏特化版本定义value type
+template<class T>
+struct iterator_traits<T*> // 针对原生指针设计的偏特化版iterator_traits
+{
+  typedef T value_type;
+};
+
+template<class T>
+typename iterator_traits<I>::value_type // 这一整行是函数返回值类型
+func(I ite)
+{ return *ite; }
+```
+多了一层间接性（利用`iterator_traits<>`来做萃取）
+这样，虽然原生指针int*不是一种class type，但也可以通过traits技法萃取出value type（iterator_traits偏特化版为其定义的，关联类型）。如此，就解决了先前的问题。
+
+
+##### 对于指向常量的指针
+注意，通过`iterator_traits<const int*>::value_type`获得的是`const int`，也就是const性质也一并取出了，如果只要int怎么办？
+还是需要特化：
+```cpp
+// 通过针对pointer-to-const设计的偏特化版本，为萃取关联类型去掉const
+template<class T>
+struct iterator_traits<const T*>
+{
+  typedef T value_type; // 注意这里value_type不再是const类型, 通过该偏特化版已经去掉了const属性
+};
+```
+
+##### 迭代器特性
+traits扮演“特性萃取机”的角色，`针对迭代器的traits`称为`iterator_traits`，用于萃取各个迭代器特性。
+而迭代器特性，是指`迭代器的关联类型`（`associated types`）。为了让traits能正常工作，每个迭代器必须遵守约定，以内嵌类型定义（nested typedef）的方式，定义出关联的类型。
+
+当然，迭代器常用的关联类型不止value type，还有另外4种：difference type，pointer，reference，iterator category。如果希望开发的容器能与STL融合，就必须为你的容器的迭代器定义这5种类型。
+如此，“特性萃取机”traits就能忠实地将各种特性萃取出来：
+
+```cpp
+template<class I>
+struct iterator_traits
+{
+  typedef typename I::iterator_category iterator_category;
+  typedef typename I::value_type        value_type;
+  typedef typename I::difference_type   difference_type;
+  typedef typename I::pointer           pointer;
+  typedef typename I::reference         reference;
+};
+```
+`iterator_traits`必须针对传入类型为`pointer`、`pointer-to-const`者，设计偏特化版。
+
+### 3.4.1 迭代器相应型别之一：value_type
+
+### 3.4.2 迭代器相应型别之二：difference_type
+`difference_type`用来表示`两个迭代器之间的距离`（两个迭代器之间`相差的元素个数`），因此也可以用来表示`容器的最大容量`。
+因为对于连续空间的容器而言，头尾之间的距离就是最大容量。
+如果一个泛型算法提供计数功能，如STL `count()`，其返回值必须使用迭代器的difference type。
+
+例如，`std::count()`算法对迭代器区间，对值为value的元素进行计数：
+```cpp
+template<class I, class T>
+typename iteartor_traits<I>::difference_type // 这一整行是函数返回类型
+count(I first, I last, const T& value)
+{
+  typename iteartor_traits<I>::difference_type n = 0; // 迭代器之间的距离
+  for (; first != last; ++first)
+    ++n;
+  return n;
+}
+```
 
 
 
