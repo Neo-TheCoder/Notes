@@ -1104,6 +1104,164 @@ count(I first, I last, const T& value)
 }
 ```
 
+`原生指针的difference type`
+同value type，iterator_traits无法为原生指针内嵌`difference type`，需要设计特化版本。具体地，以C++内建`ptrdiff_t`（<stddef.h>）作为原生指针的difference type。
+
+```cpp
+// 通用版，从类型I萃取出difference type
+template<class I>
+struct iterator_traits
+{
+  ...
+  typedef typename I::difference_type difference_type;
+};
+
+// 针对原生指针而设计的偏特化版
+template<class I>
+struct iterator_traits<T*>
+{
+  ...
+  typedef ptrdiff_t difference_type;
+};
+
+// 针对原生pointer-to-const而设计的偏特化版
+template<class I>
+struct iterator_traits<const T*>
+{
+  ...
+  typedef ptrdiff_t difference_type;
+};
+```
+
+使用`difference_type`：
+```cpp
+typename iterator_traits<I>::difference_type
+```
+
+### 3.4.3 迭代器关联类型 reference type
+从“迭代器所指之物的内容是否允许改变”的角度看，迭代器分为两种：
+1. 不允许改变“所指对象的内容”，称为`constant iterators`（常量迭代器），例如`const int* pic`；
+2. 允许改变“所指对象的内容”，称为`mutable iterators`（可变迭代器），例如`int* pi`；
+
+当对一个`mutable iterators`进行解引用（dereference）时，获得不应该是一个`右值（rvalue）`，而应当是一个`左值（lvalue）`。
+因为右值不允许赋值操作（assignment），左值才允许。
+
+而对一个`constant iterator`进行解引用操作时，获得的是一个右值。
+
+C++中，函数如果要传回左值，都是以`by reference`方式进行，所以当p是个`mutable iterators`时，如果其`value type`是`T`，那么p的类型不应该是`T`，而应该是`T&`。
+如果p是个`constant iterators`，其`value type`是`T`，那么p的类型不应该是const T，而应该是`const T&`。
+这里讨论的*p的类型，也就是reference type。
+
+### 3.4.4 迭代器关联类型 pointer type
+pointer与reference在C++关系非常密切。
+```cpp
+Iterm& operator*() const { return *ptr; }  // 返回值类型是reference type，需要返回一个左值
+Iterm* operator->() const { return ptr; } // 返回值类型是pointer type
+```
+
+```cpp
+// 通用版traits
+template<class I>
+struct iterator_traits
+{
+  ...
+  typedef typename I::pointer pointer;          // native pointer 无法内嵌pointer, 因此需要偏特化版
+  typedef typename I::reference reference;      // native pointer 无法内嵌reference
+};
+
+// 针对原生指针的偏特化版traits
+template<class I>
+struct iterator_traits<T*>
+{
+  ...
+  typedef T* pointer;
+  typedef T& reference;
+};
+
+// 针对pointer-to-const的偏特化版traits，去掉了const常量性
+template<class I>
+struct iterator_traits<const T*>
+{
+  ...
+  typedef T* pointer;
+  typedef T& reference;
+};
+```
+
+PS：C++语法决定了：
+在C++中，`iter->value`等价于`iter.operator->()->value`，而不是`iter.operator->().value`，这是因为箭头运算符(`->`)的优先级高于成员访问运算符(`.`)。
+当我们写`iter->value`时，实际上会被解释为`iter.operator->()->value`，首先调用重载的箭头运算符函数返回指针，然后再通过该指针访问成员变量`value`。
+如果写成`iter.operator->().value`，这会被解释为先调用重载的箭头运算符函数返回一个临时对象，然后再通过该临时对象访问成员变量`value`，这并不符合箭头运算符的语义。
+
+
+### 3.4.5 迭代器关联类型 iterator_category
+根据移动特性和施行操作，迭代器分为5类：
+1. `Input Iterator`：
+    这种迭代器所指对象，不允许外界改变，**只读**（read only）。
+
+2. `Output Iterator`：
+    **只写**（write only）。
+
+3. `Forward Iterator`：
+    允许“写入型”算法（如`replace()`），在此种迭代器所形成的的区间上进行读写操作。
+
+4. `Bindirectional Iterator`：
+    可双向移动。某些算法需要逆向走访某个迭代器区间（录入逆向拷贝某范围内的元素）。
+
+5. `Random Access Iterator`：
+    前4种迭代器都只供应一部分指针算术能力（前3支持operator++，第4中加上operator--）。
+    第5中则涵盖所有指针算术能力，包括`p+n, p-n，p[n]，p1-p2，p1 < p2`。
+
+**设计算法时，如果可能，应尽量针对某种迭代器提供一个明确定义，并针对更强化的某种迭代器提供另一种定义，重复利用迭代器特性。这样，才能在不同情况下，提供最大效率。**
+
+#### `advance()`为例
+`advance()`是一个许多算法内部常用的函数，**功能是内部将p累进n次（前进距离n）**。
+```cpp
+// 针对InputIterator的advance()版本
+// 要求 n > 0
+template<class InputIterator, class Distance>
+void advance_II(InputIterator& i, Distance n)
+{
+  // 单向，逐一前进
+  while (n--) ++i; // or for(; n > 0; --n; ++i);
+}
+
+// 针对BidirectionalIterator的advance()版本
+// n没有要求，可大于等于0，也可以小于0
+template<class BidirectionalIterator, class Distance>
+void advance_BI(BidirectionalIterator& i, Distance n)
+{
+  // 双向，逐一前进
+  if (n >= 0)
+    while (n--) ++i; // or for (; n > 0; --n, ++i);
+  else
+    while (n++) --i; // or for (; n < 0; ++n, --i);
+}
+
+// 针对RandomAccessIterator的advance()版本
+// n没有要求
+template<class RandomAccessIterator, class Distance>
+void advance_RAI(RandomAccessIterator& i, Distance n)
+{
+  // 双向，跳跃前进
+  i += n;
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
