@@ -1247,14 +1247,289 @@ void advance_RAI(RandomAccessIterator& i, Distance n)
   i += n;
 }
 ```
+现在，当程序调用`advance()`时，应选择哪个版本的函数呢？
+如果选择`advance_II()`：对`Random Access Iterator`效率极低，原本O(1)操作成了O(N)；
+如果选择`advance_RAI()`，则无法接收`Input Iterator`（`Input Iterator`不支持跳跃前进）。
+我们可以将三者合一，对外提供统一接口。其设计思想是根据迭代器i的类型，来选择最适当的`advance()`版本：
+并且，不能在运行时判断，那样就慢了，要在编译期判断：
+利用函数重载，以及类型筛选：
 
 
+如果traits有能力萃取出迭代器的类型，便可以利用这个“迭代器类型”的关联类型，作为advance()的第三个参数，
+**让编译器根据函数重载机制自动选择对应版本`advance()`**。
+这个关联类型一定是一种`class type`，不能是数值、号码类的东西，因为编译器需要依赖它进行`函数重载决议（overloaded resolution）`，
+而函数重载是根据`参数类型`来决定的。
+
+需要额外定义5个`tag type`
+```cpp
+// 5个作为标记用的类型（tag types）
+struct input_iterator_tag {};
+struct output_iterator_tag {};
+struct forward_iterator_tag : public input_iterator_tag {};
+struct bidirectional_iterator_tag : public forward_iterator_tag {};
+struct random_access_iterator_tag : public bidirectional_iterator_tag {};
+```
+这5个class**只用作标记**，不需要任何成员，因此**不会有任何内存代价**。
+
+统一`__advance()`接口：
+```cpp
+// 如果迭代器类型是input_iterator_tag，就会dispatch至此
+template<class InputIterator, class Distance>
+inline void __advance(InputIterator& i, Distance n, input_iterator_tag)
+{
+    // 单向, 逐一前进
+    while (n--) ++i;
+}
+
+// 如果迭代器类型是forward_iterator_tag，就会dispatch至此
+/***
+    这是一个单纯的传递调用函数(trivial forwarding function), 实际stl中不需要该函数
+    如果编译器没有匹配到与forward_iterator_tag严格匹配的版本时，就会从继承关系来匹配input_iterator_tag版的__advance()
+***/
+
+template <class ForwardIterator, class Distance>
+inline void __advance(ForwardIterator& i, Distance n, forward_iterator_tag)
+{
+    // 单纯地进行传递调用(forwarding)
+    __advance(i, n, input_iterator_tag());
+}
+
+// 如果迭代器类型是bidirectional_iterator_tag，就会dispatch至此
+template<class BidirectionalIterator, class Distance>
+inline void __advance(BidirectionalIterator& i, Distance n, bidirectional_iterator_tag)
+{
+    // 双向, 逐一前进
+    if (n >= 0)
+        while (n--) ++i;
+    else
+        while (n++) --i;
+}
+
+template<class RandomAccessIterator, class Distance>
+inline void __advance(RandomAccessIterator& i, Distance n, random_access_iterator_tag)
+{
+    // 双向, 跳跃前进
+    i += n;
+}
+```
+注意：每个`__advanec()`最后一个参数都**只声明类型，而未指定参数名称**，因为纯粹只是用来**激活重载机制**，函数中不使用该参数。
+如果要加上参数名也可以，但不会用到。
+
+还需要对外提供一个`上层控制接口`，调用上述各个重载的`__advance()`。
+接口只需要两个参数，当它准备将工作转给上述的`__advance()`时，才自行加上第三参数：迭代器类型。
+因此，这个上层接口函数必须有能力从它所获得的迭代器中推导出其类型，这个工作可以交给`traits机制`：
+**上层调用**
+注意，模板类型参数`InputIterator`只是个名字，不是特指
+问题：为什么`advance()`的template参数名称，是最低阶的`InputIterator`？而不是最强化的那个？
+`advance()`能接受各种类型的迭代器，但其型别参数命名为`InputIterator`。
+这是STL算法的一个命名规则：以算法锁能接受的最低阶迭代器类型，来为其迭代器型别参数命名
+
+```cpp
+// 接口函数, 利用iterator_traits萃取迭代器的类型特性iterator_category
+template<class InputIterator, class Distance>
+inline void advance(InputIterator& i, Distance n)
+{
+    __advance(i, n, iterator_traits<InputIteartor>::iterator_category());   // 利用类型萃取技术 + 临时构造相应对象触发函数重载
+}
+```
+
+`iterator_category`
+```cpp
+// iterator_category() 返回一个临时对象，类型是参数I的迭代器类型（iterator_category）
+template<class I>
+inline typename iterator_traits<I>::iterator_category // 一整行是含返回型别
+iterator_category(const I&)
+{
+    typedef typename iterator_traits<I>::iterator_category category;
+    return category(); // 返回临时对象
+}
+```
+
+`iteartor_traits`类的 定义 / 特化
+```cpp
+// 通用版traits, 可用于萃取I的iterator_category
+template<class I>
+struct iteartor_traits
+{
+    ...
+    typedef typename I::iterator_category iterator_category; // 为traits添加萃取特性iterator_category
+};
+
+template <class _Iterator>
+struct iterator_traits {
+  typedef typename _Iterator::iterator_category iterator_category;
+  typedef typename _Iterator::value_type        value_type;
+  typedef typename _Iterator::difference_type   difference_type;
+  typedef typename _Iterator::pointer           pointer;
+  typedef typename _Iterator::reference         reference;
+};
+
+// 针对原生指针的特化
+template <class _Tp>
+struct iterator_traits<_Tp*> {
+  typedef random_access_iterator_tag iterator_category; // 特化
+  typedef _Tp                         value_type;
+  typedef ptrdiff_t                   difference_type;
+  typedef _Tp*                        pointer;
+  typedef _Tp&                        reference;
+};
+
+// 针对原生const指针的特化
+template <class _Tp>
+struct iterator_traits<const _Tp*> {
+  typedef random_access_iterator_tag iterator_category; // 特化
+  typedef _Tp                         value_type;
+  typedef ptrdiff_t                   difference_type;
+  typedef const _Tp*                  pointer;
+  typedef const _Tp&                  reference;
+};
+```
+
+问题：原生指针是一种`Random Access Iterator`. why?
+任何迭代器，其类型永远应该落在**该迭代器所隶属之各种类型中，最强化的那个**。
+例如，int*，既是Random Access Iterator，又是Bindirectional Iterator，同时也是Forward Iterator，而且是Input Iterator，那么其类型应该是最强化的`random_access_iterator_tag`。
+
+##### 消除“单纯传递调用的函数”
+`用class来定义迭代器的各种分类标签`的意义：
+1. 不仅可以促成重载机制运作，使得编译器能正确执行重载决议，
+2. 还可以通过继承，我们不必再写“单纯只做传递调用的函数”，如前面`__advance()`的`ForwardIterator`版（直接复用`input_iterator_tag`那版函数即可）。
+为什么？
+！！！因为编译器会优先匹配`实参与形参完全匹配`的函数版本，然后是从`继承关系`来匹配。这也是为什么5个迭代器类型中，存在继承关系。
+即：重载函数如果入参是基类，而传进去的是派生类对象，依然可以匹配，毕竟派生类继承自基类。
 
 
+#### 以`distance()`为例
+`distance()`是一个常用迭代器操作函数，用来计算两个迭代器之间的距离。针对不同迭代器类型，有不同的计算方式，带来不同的效率。
+
+`distance()`
+```cpp
+// 2个__distance()重载函数
+
+// 如果迭代器类型是input_iterator_tag，就dispatch至此
+template<class InputIterator>
+inline typename iterator_traits<InputIterator>::difference_type
+       __distance(InputIterator first, InputIterator last,
+              input_iterator_tag) {
+       typename iterator_traits<InputIterator>::difference_type n = 0;
+       // 逐一累计距离
+       while (first != last) {
+              ++first; ++n;
+       }
+       return n;
+}
+
+// 如果迭代器类型是random_access_iterator_tag，就dispatch至此
+template<class RandomAccessIterator>
+inline typename iterator_traits<RandomAccessIterator>::difference_type
+       __distance(RandomAccessIterator first, RandomAccessIterator last,
+              random_access_iterator_tag)
+{
+       // 直接计算差距
+       return last - first;
+}
+
+// 对用户接口, 可以自动推导出类型, 然后编译器根据推导出的iterator_category特性,
+// 自动选择调用__distance()重载函数版本
+/* 上层函数, 从所得的迭代器中推导出类型 */
+template<class InputIterator>
+inline typename iterator_traits<InputIterator>::difference_type
+       distance(InputIterator first, InputIterator last)
+{
+       typedef typename iterator_traits<InputIterator>::iterator_category  category; // 萃取迭代器类型iterator_category
+       return __distance(first, last, category()); // 根据迭代器类型，选择不同的__distance()重载版本
+}
+```
+
+## 3.5 `std::iterator`的保证
+为了符合规范，任何迭代器必须遵守一定的约定，提供5个内嵌关联类型，以便于traits萃取；否则，无法兼容STL。但如果每写一个迭代器，都要提供这5个内嵌关联类型，谁能保证每次都不漏掉或者出错？有没有一种更简便方式？
+SGI STL在`<stl_iterator.h>`中提供一个公共iterator class，每个新设计的迭代器只需要继承它，就可以保证符合STL所需要规范：
+
+```cpp
+template <class _Category, class _Tp, class _Distance = ptrdiff_t,
+          class _Pointer = _Tp*, class _Reference = _Tp&>
+struct iterator {
+  typedef _Category  iterator_category;
+  typedef _Tp        value_type;
+  typedef _Distance  difference_type;
+  typedef _Pointer   pointer;
+  typedef _Reference reference;
+};
+```
+terator class不含任何成员，纯粹只是类型定义。因此继承自它并不会有任何额外负担（无运行负担、无内存负担）。
+而且后三个模板参数由于有默认值，新迭代器可以无需提供实参。
+
+例如，前面自定义`ListIter`，改用继承自iterator方式，可以这些编写
+```cpp
+template<class Item>
+struct ListIter : public std::iterator<std::forward_iterator_tag, Item>
+{
+  // ...
+};
+```
+这样的好处是很明显的，可以极大地简化自定义迭代器类ListIter的设计，使其专注于自己的事情，而且不容易出错
+
+## 总结
+1. 设计适当的关联类型（associated types），是迭代器的责任；
+设计适当的迭代器，是容器的责任。
+因为只有容器本身，才知道设计出怎样的迭代器来遍历自己，并执行迭代器的各种行为（前进，后退，取值，取用成员，...）。
+至于算法，完全可以独立于容器和迭代器之外，只要设计以迭代器为对外接口即可。
+
+2. traits编程技法大量应用于STL实现中，利用“内嵌类型”的编程技巧和编译器template参数推导功能，增强了C++未能提供的关于类型认证方面的能力。
 
 
+## 3.7 __type_traits
+`iterator_traits`是STL针对迭代器加以规范，用来萃取迭代器特性的机制。
+SGI STL把这种技法扩大到迭代器以外的地方，于是有了`__type_traits`。（双下划线表示是内部所用，不在STL标准规范内）
+`__type_traits`负责萃取型别（`type`）的特性。
 
+SGI中，`__type_traits`位于`<type_traits.h>`，它提供了一种机制，用于萃取不同类型属性：在编译期就能完成`函数派生决定（function dispatch）`。
 
+这对于编写template很有帮助，比如，当我们准备对一个 “元素类型未知” 的数组执行copy操作时，如果能事先知道元素类型是否有一个`trivial copy constructor`（平凡的拷贝构造函数），就能帮助我们决定是否使用更高效的内存直接处理操作，如：`memcpy()`或`memmove()`。
+
+`__type_traits`的应用：
+```cpp
+__type_traits<T>::has_trivial_default_constructor
+__type_traits<T>::has_trivial_copy_constructor
+__type_traits<T>::has_trivial_assignment_operator
+__type_traits<T>::has_trivial_destructor
+__type_traits<T>::is_POD_type // POD: Plain Old Data
+```
+上面的式子，返回的是“真”或“假”，便于我们决定采用上面策略。
+但结果不是bool值，而是有着真/假属性的“对象”。
+因为我们希望编译器可以在编译期，就利用响应结果来进行参数推导，而编译器只有面对class object形式的参数，才会做参数类型推导。
+因此，上面式子应该传回这样的东西：
+```cpp
+// 用作真、假的标记类
+struct __true_type {};
+struct __false_type {};
+```
+这两个空白的class没有任何成员，仅作为标记类，不会带来任何负担。
+```cpp
+template<class type>
+struct __type_traits
+{
+  typedef __true_type this_dummy_member_must_be_first;
+  /*
+    不要移除这个成员：
+    它通知“有能力自动将__type_traits特化的编译器：
+    我们现在看到的这个__type_traits template是特殊的。
+    这是为了确保万一编译器也使用一个名为__type_traits而其实与此处定义无任何关联的template时，所有事情仍将顺利运作
+  */
+
+  /*
+    以下条件应该遵守，因为编译器有可能自动为各类型专属的__type_traits特化版本（有些编译器是这样的）：
+    - 你可以重新安排以下的成员次序
+    - 你可以移除以下任何成员
+    - 绝对不可以将以下成员重命名而没有改变编译器中对应名称
+    - 新加入的成员会被视为一般成员，除非你在编译期中加上适当支持
+  */
+  typedef __false_type has_trivial_default_constructor;
+  typedef __false_type has_trivail_copy_constructor;
+  typedef __false_type has_trivail_assignment_constructor;
+  typedef __false_type has_trivail_destructor;
+  typedef __false_type is_POD_type; // POD: Plain Old Data
+};
+```
 
 
 
