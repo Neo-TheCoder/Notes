@@ -493,11 +493,12 @@ union obj{
     char client_data[1];
 };
 ```
+由于`union`的特性，`free_list_link`和`client_data`共享同一块内存空间（即obj实际占据的内存，其大小由成员中最大的数据类型决定，其内容由最后赋值的成员决定），这样就节省了维护链表所必须造成的内存浪费。
 
 2. 大于128字节
     转交第一级配置器
 
-
+`__default_alloc_template`
 ```cpp
 // Default node allocator.
 // With a reasonable compiler, this should be roughly as fast as the
@@ -526,11 +527,11 @@ union obj{
 
 #if defined(__SUNPRO_CC) || defined(__GNUC__)
 // breaks if we make these template class members:
-  enum {_ALIGN = 8};
-  enum {_MAX_BYTES = 128};
-  enum {_NFREELISTS = 16}; // _MAX_BYTES/_ALIGN
+  enum {_ALIGN = 8};    // 每个内存块的上调边界？？？
+  enum {_MAX_BYTES = 128};  // 内存块大小的上限
+  enum {_NFREELISTS = 16}; // _MAX_BYTES/_ALIGN free-lists的个数
 #endif
-
+// 没有常见的类型参数，第二个类型参数没用上
 template <bool threads, int inst>
 class __default_alloc_template {
 
@@ -543,7 +544,7 @@ private:
     enum {_NFREELISTS = 16}; // _MAX_BYTES/_ALIGN
 # endif
   static size_t
-  _S_round_up(size_t __bytes)   // 按照8的整数倍分配
+  _S_round_up(size_t __bytes)   // 将输入字节数上调至8的倍数
     { return (((__bytes) + (size_t) _ALIGN-1) & ~((size_t) _ALIGN - 1)); }
 
 __PRIVATE:
@@ -556,21 +557,21 @@ private:
     static _Obj* __STL_VOLATILE _S_free_list[]; 
         // Specifying a size results in duplicate def for 4.1
 # else
-    static _Obj* __STL_VOLATILE _S_free_list[_NFREELISTS]; 
+    static _Obj* __STL_VOLATILE _S_free_list[_NFREELISTS];  // ！！！声明了一个static指针数组，存储的是16个指针，指针的类型是_Obj类型，__STL_VOLATILE即volatile，表示避免编译器对该变量的访问（编译器会将变量的值存储在寄存器中，而不是每次都从内存中读取）做优化，防止多线程访问时产生问题
 # endif
   static  size_t _S_freelist_index(size_t __bytes) {
         return (((__bytes) + (size_t)_ALIGN-1)/(size_t)_ALIGN - 1);
-  }
+  } // 根据区块大小，决定使用第几号free-list
 
   // Returns an object of size __n, and optionally adds to size __n free list.
-  static void* _S_refill(size_t __n);
+  static void* _S_refill(size_t __n);   // 分配一块指定大小：n字节的内存空间，并在需要时将其添加到空闲列表中
   // Allocates a chunk for nobjs of size size.  nobjs may be reduced
   // if it is inconvenient to allocate the requested number.
-  static char* _S_chunk_alloc(size_t __size, int& __nobjs);
+  static char* _S_chunk_alloc(size_t __size, int& __nobjs); // 配置一大块空间，容纳nobjs个大小为size的区块
 
   // Chunk allocation state.
-  static char* _S_start_free;
-  static char* _S_end_free;
+  static char* _S_start_free;   // 内存池的起始位置，只在_S_chunk_alloc时变化
+  static char* _S_end_free; // 内存池的结束位置，只在_S_chunk_alloc时变化
   static size_t _S_heap_size;
 
 # ifdef __STL_THREADS
@@ -646,14 +647,132 @@ public:
 } ;
 ```
 
+`__default_alloc_template`的静态成员变量的定义、初值设定
+```cpp
+template <bool __threads, int __inst>
+char* __default_alloc_template<__threads, __inst>::_S_start_free = 0;
+
+template <bool __threads, int __inst>
+char* __default_alloc_template<__threads, __inst>::_S_end_free = 0;
+
+template <bool __threads, int __inst>
+size_t __default_alloc_template<__threads, __inst>::_S_heap_size = 0;
+
+template <bool __threads, int __inst>
+typename __default_alloc_template<__threads, __inst>::_Obj* __STL_VOLATILE
+__default_alloc_template<__threads, __inst> ::_S_free_list[
+# if defined(__SUNPRO_CC) || defined(__GNUC__) || defined(__HP_aCC)
+    _NFREELISTS
+# else
+    __default_alloc_template<__threads, __inst>::_NFREELISTS
+# endif
+] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, }; // 16个元素的指针数组初始化为全0
+// The 16 zeros are necessary to make version 4.1 of the SunPro
+// compiler happy.  Otherwise it appears to allocate too little
+// space for the array.
+
+#endif /* ! __USE_MALLOC */
+// 在SunPro编译器版本4.1中，如果不将数组的所有元素初始化为0，编译器可能会分配不足的空间给数组
+```
+
+### 2.2.7 空间配置函数`allocate()`
+#### `allocate()`
+```cpp
+  /* __n must be > 0      */
+  static void* allocate(size_t __n)
+  {
+    void* __ret = 0;
+
+    if (__n > (size_t) _MAX_BYTES) {    // 若大于128则调用第一级配置器，即malloc
+      __ret = malloc_alloc::allocate(__n);
+    }
+    else {  // 若小于128字节，则检查free list：声明了一个指针变量，通过_S_freelist_index()函数得到了偏移量（free list有十六个空闲内存块，内存块大小是按8递增的）
+      _Obj* __STL_VOLATILE* __my_free_list
+          = _S_free_list + _S_freelist_index(__n);  // 此处是二级指针，该指针指向一个地址，这个地址，指向一个地址，它存储着free list的某一个节点
+      // Acquire the lock here with a constructor call.
+      // This ensures that it is released in exit or during stack
+      // unwinding.
+#     ifndef _NOTHREADS
+      /*REFERENCED*/
+      _Lock __lock_instance;  // 需要加锁保护：对内存链表的修改操作
+#     endif
+      _Obj* __RESTRICT __result = *__my_free_list;  // 得到指针数组的某个元素，它是一个指针
+      if (__result == 0)  // 没找到可用的free list，重新填充free list
+        __ret = _S_refill(_S_round_up(__n));
+      else {  // 调整free list
+        *__my_free_list = __result -> _M_free_list_link;  // 空闲内存块链表少了一个元素。总之，这个空闲内存块链表只会保存空闲的内存块，一开始其实是空的，在return之前，访问union的_M_free_list_link操作是有效的
+        __ret = __result;
+      }
+    }
+
+    return __ret;
+  };
+```
+
+`deallocate()`
+```cpp
+  /* __p may not be 0 */
+  static void deallocate(void* __p, size_t __n) // 指向待释放的内存块的指针，以及释放的大小
+  {
+    if (__n > (size_t) _MAX_BYTES)  // 大于128字节
+      malloc_alloc::deallocate(__p, __n);
+    else {  // 小于128字节
+      _Obj* __STL_VOLATILE*  __my_free_list
+          = _S_free_list + _S_freelist_index(__n);  // 得到free list对应的指针数组的元素的位置
+      _Obj* __q = (_Obj*)__p; // 得到指向当前待释放位置的、_Obj类型的指针
+
+      // acquire lock
+#       ifndef _NOTHREADS
+      /*REFERENCED*/
+      _Lock __lock_instance;
+#       endif /* _NOTHREADS */
+      __q -> _M_free_list_link = *__my_free_list; // 只是往一大片待回收的内存区域的前几个字节写入了一个地址，没做回收操作的话，依然是分配在堆上
+      *__my_free_list = __q;  // 更新头部节点（即头插法）
+      // lock is released here
+    }
+  }
+```
+`deallocate()`回收了内存区块。
 
 
+### 2.2.9 重新填充free lists
+当调用`allocate()`时发现free list没有可用区块时，调用`refill()`，为free list重新填充空间，新的空间取自内存池（通过`chunk_alloc()`完成），默认是取得20个新区快。
+`refill()`
+```cpp
+/* Returns an object of size __n, and optionally adds to size __n free list.*/
+/* We assume that __n is properly aligned.                                */
+/* We hold the allocation lock.                                         */
+template <bool __threads, int __inst>
+void*
+__default_alloc_template<__threads, __inst>::_S_refill(size_t __n)
+{
+    int __nobjs = 20;
+    char* __chunk = _S_chunk_alloc(__n, __nobjs); // 尝试取得nobjs个区块，作为free list的新节点，_S_chunk_alloc的第二个入参是传引用，也就是会修改
+    _Obj* __STL_VOLATILE* __my_free_list;
+    _Obj* __result;
+    _Obj* __current_obj;
+    _Obj* __next_obj;
+    int __i;
 
+    if (1 == __nobjs) return(__chunk);  // 如果_S_chunk_alloc调用只得到1个区块
+    __my_free_list = _S_free_list + _S_freelist_index(__n);
 
-
-
-
-
+    /* Build free list in chunk */
+      __result = (_Obj*)__chunk;
+      *__my_free_list = __next_obj = (_Obj*)(__chunk + __n);  // 让掌管96字节的free list节点，得到相应的地址
+      for (__i = 1; ; __i++) {
+        __current_obj = __next_obj;
+        __next_obj = (_Obj*)((char*)__next_obj + __n);  // 下一个96字节的位置
+        if (__nobjs - 1 == __i) {
+            __current_obj -> _M_free_list_link = 0;
+            break;
+        } else {
+            __current_obj -> _M_free_list_link = __next_obj;
+        }
+      } // 让掌管96字节的free list节点，把20个96字节的内存块串联起来
+    return(__result);
+}
+```
 
 ### 2.2.10 内存池
 `chunk_alloc()`负责：从内存池中取空间给free list
@@ -732,7 +851,6 @@ class vector{
   // ...
 }
 ```
-
 
 
 ## 2.3 内存基本处理工具
