@@ -1402,23 +1402,76 @@ enum memory_order {
 只保证当前操作的原子性，不考虑线程间同步，其他线程可能读到新/旧值。例如`std::shared_ptr`。
 
 
+# 函数模板可以偏特化吗？为什么？
+## 偏特化的定义
+偏特化允许我们为模板的部分参数提供特定的实现（完全指定或者部分指定），包括指针类型。
 
 
+## 函数模板为什么不可以偏特化
+是C++标准规定
+
+### 函数模版重载解析的`优先级`（假设有普通函数，模版函数，模版函数特化等等复杂情况）：
+1. `普通函数`，如果类型匹配，优先选中，`重载解析`结束（注意，重载解析只涉及非模板函数）；
+2. 如果没有普通函数匹配，那么所有的`基础函数模版`进入候选，编译器开始平等挑选，类型最匹配的，则被选中，注意，此时才会进入第(3)步继续筛选；
+3. 如果第(2)步里面选中了一个模版基础函数，则查找这个模版基础函数是否有`全特化版本`，如果有且类型匹配，则选中全特化版本，重载解析结束，否则使用(2)里面选中的模版函数，重载解析依然结束。
+4. 如果第(2)步里面没有选中任何函数基础模版，那么`匹配失败`，编译器会报错，程序员需要检查下代码。
+
+`函数模版的全特化版本`不参与`函数重载解析`，并且优先级低于函数基础模版参与匹配，其原因是：**C++标准委员会认为：如果因为程序员随意写了一个函数模版的全特化版本，而使得原先的重载函数模板匹配结果发生改变（也就是改变了约定的重载解析规则）是不能接受的**。
+函数模版的全特化到底是哪个函数基础模版的特化，需要参考可见原则。
+也就是说当特化版本声明时，它只可能特化的是当前编译单元已经定义的函数基础模版。
+最好不要（全）特化函数模板。来自：***C++ Core Guidelines: T.144: Don’t specialize function templates。***
 
 
+偏特化举例：
+```cpp
+using namespace std;
+
+// 主模板
+template<class T, class N>
+void print(T t){
+    std::cout << "Generic Print: " << t << std::endl;
+}
+
+// 对第一个模板参数为double类型的偏特化
+template<class N>
+void print<double, N>(double t){  // 显式地进行偏特化
+    std::cout << "Specialized Print for double: " << t << std::endl;
+}
+
+int main()
+{
+    double t = 3.14;
+    print<double, int>(t); // 调用偏特化版本
+    cout << "Hello World" << endl;
+    return 0;
+}
+```
 
 
+函数模板只能`重载`，不能`偏特化`
+```cpp
+#include <iostream>
+using namespace std;
 
+// 主模板
+template<class T, class N>
+void print(T t, N n){
+    std::cout << "Generic Print: " << t << std::endl;
+}
 
+// 对第一个模板参数为double类型的偏特化
+template<class T, class N>
+void print(double t, N n){
+    std::cout << "Specialized Print for double: " << t << std::endl;
+}
 
-
-
-
-
-
-
-
-
-
+int main()
+{
+    double t = 3.14;
+    print<double, int>(t, 1); // 调用偏特化版本
+    cout << "Hello World" << endl;
+    return 0;
+}
+```
 
 

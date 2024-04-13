@@ -1616,12 +1616,15 @@ __type_traits<T>::is_POD_type // POD: Plain Old Data
 但结果不是bool值，而是有着真/假属性的“对象”。
 因为我们希望编译器可以在编译期，就利用响应结果来进行参数推导，而编译器只有面对class object形式的参数，才会做参数类型推导。
 因此，上面式子应该传回这样的东西：
+
+仅用作标记的类，用于表示`true / false`
 ```cpp
 // 用作真、假的标记类
 struct __true_type {};
 struct __false_type {};
 ```
 这两个空白的class没有任何成员，仅作为标记类，不会带来任何负担。
+
 ```cpp
 template<class type>
 struct __type_traits
@@ -1648,11 +1651,229 @@ struct __type_traits
   typedef __false_type is_POD_type; // POD: Plain Old Data
 };
 ```
+先将各个内嵌的型别设置为`__false_type`，然后再针对每一个`标量类型（scalar types）`设计适当的`__type_traits`特化版本。
 
+`__type_traits`可以接受任何类型的参数，5个typedefs将经由以下渠道获得实值：
 
+`一般具现（general instantiation）`，内含对所有类型都必定有效的保守值。
+比如，上面各个`has_trivial_xxx`类型都被定义为`__false_type`，就是对所有类型都有效的保守值。
+经过声明的特化版本，例如`<type_traits.h>`中对所有C++标量类型（scalar types）（指`bool/char/int/float/double等基本类型`）都提供了对应`特化`声明。
+某些编译器自动为 所有类型 提供适当的特化版本。
 
+### __type_traits针对C++标量类型的特化版
+```cpp
+/* 以下针对C++基本型别char, signed char, unsignedchar, short, unsigned short,
+int, unsigned int, long, unsigned long, float, double, long double 提供特化版本.
+注意, 每个成员的值都是__true_type, 表示这些型别都可采用最快速方式(如memcpy)来进行拷贝(copy)或赋值(assign) */
 
+#   define __STL_TEMPLATE_NULL template<>
 
+__STL_TEMPLATE_NULL struct __type_traits<bool> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+#endif /* __STL_NO_BOOL */
+
+__STL_TEMPLATE_NULL struct __type_traits<char> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<signed char> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<unsigned char> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<short> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<unsigned short> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<int> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<unsigned int> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<long> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+
+__STL_TEMPLATE_NULL struct __type_traits<unsigned long> {
+   typedef __true_type    has_trivial_default_constructor;
+   typedef __true_type    has_trivial_copy_constructor;
+   typedef __true_type    has_trivial_assignment_operator;
+   typedef __true_type    has_trivial_destructor;
+   typedef __true_type    is_POD_type;
+};
+```
+
+### __type_traits在STL中的应用
+#### `uniitialized_fill_n()全局函数`
+```cpp
+// __type_traits应用: uninitialized_fill_n()
+template<class ForwardIterator, class Size, class T>
+inline ForwardIterator uninitialized_fill_n(ForwardIterator first, Size n, const  T& x) {
+       return __uninitialized_fill_n(first, n, x, value_type(first));
+}
+```
+
+`uninitialized_fill_n()`函数以x为初始化元素，自迭代器first开始`构造n个元素`。
+为求取最大效率，首先用`value_type()`萃取出迭代器first的value type，再用`__type_traits`判断该型别是否为POD类型：
+
+```cpp
+// __type_traits萃取T的is_POD_type特性，判断是否为POD类型
+// 利用__type_traits判断该型别是否为POD类型
+template<class ForwardIterator, class Size, class T, class T1>
+inline ForwardIterator __uninitialized_fiil_n(ForwardIterator first, Size n, const  T& x, T1*) {
+       typedef typename __type_traits<T1>::is_POD_type is_POD;
+       return __uninitialized_fiil_n_aux(first, n, x, is_POD);
+}
+```
+根据is_POD的结果（通过__type_traits根据value_type是否为POD类型，返回标记类型的对象）
+```cpp
+// 如果不是POD类型, 就派送(dispatch)到这里
+template<class ForwardIterator, class Size, class T>
+ForwardIterator __uninitialized_fill_n_aux(ForwardIterator first, Size n, const T&  x, __false_type) {
+  ...
+}
+
+// 如果是POD类型, 就会派送(dispatch)到这里.
+template<class ForwardIterator, class Size, class T>
+inline ForwardIterator ___uninitialized_fill_n_aux_(ForwardIterator first, Size n,  const T& x, __true_type) {
+  ...
+}
+
+// 以下定义于<stl_algobase.h>中的fill_n()
+template<class OutputIterator, class Size, class T>
+OutputIterator fill_n(OutputIterator first, Size n, const T& value) {
+  ...
+}
+```
+
+#### 负责对象析构的`destroy()`全局函数
+```cpp
+// destroy()第一个版本, 接受一个指针
+template<class T>
+inline void destroy(T* pointer) {
+  ...
+}
+
+// destroy()第二个版本, 接受两个迭代器. 次函数设法找出元素的数值类型,
+// 进而利用__type_traits<>求取最适当措施
+template<class ForwardIterator>
+inline void destroy(ForwardIterator first, ForwardIterator last) {
+  __destroy(first, last, value_type(first));
+}
+
+// __type_traits 萃取T的has_trivial_destructor特性, 判断是否为平凡析构函数
+// 判断元素的数值类型(value type)是否有trivial destructor
+template<class ForwardIterator, class T>
+inline void __destroy(ForwardIterator first, ForwardIterator last, T*) {
+  typedef typename __type_traits<T>::has_trivial_destructor  trivial_destructor;
+  __destroy_aux(first, last, trivial_destructor());
+}
+
+// 如果元素的数值类型(value type)有non-trivial destructor, 则派送(dispatch)到这里
+template<class ForwardIterator>
+inline void __destroy_aux(ForwardIterator first, ForwardIterator last,  __false_type) {
+  ...
+}
+
+// 如果元素的数值类型(value type)有trivial destructor, 则派送(dispatch)到这里
+template<class ForwardIterator>
+inline void __destroy_aux(ForwardIterator first, ForwardIterator last,  __true_type) {
+}
+```
+
+#### `copy()`全局函数
+```cpp
+// 利用__type_traits萃取T的has_trivial_copy_constructor特性，判断是否为平凡copy构造函数
+// 拷贝一个数组, 其元素为任意型别, 视情况采用最有效率的拷贝手段
+template<class T> inline void copy(T* source, T* destination, int n) {
+       copy(source, destination, n, typename  __type_traits<T>::has_trivial_copy_constructor());
+}
+
+// 拷贝一个数组, 其元素型别拥有non-trivial copy constructors, 则dispatch到这里
+template<class T> void copy(T* source, T* destination, int n, __false_type) {
+       // ...
+}
+
+// 拷贝一个数组, 其元素型别拥有trivial copy constructors, 则dispatch到这里
+// 可借助memcpy()完成工作
+template<class T> void copy(T* source, T* destination, int n, __true_type) {
+       // ...
+}
+```
+
+### 自定义`__type_traits`特化版
+通常，不应该直接使用__type_traits，STL内部使用。正如SGI <type_traits.h>内部有这样的声明：
+```cpp
+/* NOTE: This is an internal header file, included by other STL headers.
+ * You should not attempt to use it directly.
+ */
+```
+编译器通常会自动为class生成这些特性，这些特性取决于自定义class是否包含trivial default constructor，trivial copy constructor，trivial assignment operator，或者trivial destructor。
+但有些古老的编译器，可能并不能为class生成这些特性，导致即使是POD类型，但萃取出来的特性依然是__false_type。
+
+此时，需要自行设计一个`__type_traits特化版本`，明确告诉编译器该class具有哪些特性：
+```cpp
+// 假设自定义class名为Shape
+// 针对Shape设计的__type_traits特化版本
+template<>  // template<>用于明确告诉编译器这是一个模板特化的声明
+struct __type_traits<Shape> {
+    typedef __true_type  has_trivial_default_constructor; // 告诉编译器Shape拥有trivial default constructor
+    typedef __false_type has_trivial_copy_constructor;
+    typedef __false_type has_trivial_assignment_constructor;
+    typedef __false_type has_trivial_destructor;
+    typedef __false_type is_POD_type;
+};
+```
+### 如何判断一个class什么时候有自己的`non-trivial default constructor，non-trivial copy constructor，non-trivial assignment operator，non-trivial destructor`？
+一个简单判断原则：如果`class`内含`指针成员`，并且进行了`动态内存配置`，那么该class就需要实现出自己的`non-trivial-xxx`。
 
 
 
@@ -1661,6 +1882,22 @@ struct __type_traits
 
 
 # 第四章 序列式容器
+STL容器将运用最广的一些数据结构进行了实现。
+常用的数据结构不外乎：
+array，list，tree，stack，queue，hash table，set，map
+根据`数据在容器中的排列`特性，这些数据结构分为`序列式`、`关联式`
+
+
+# 4.1 容器的概观与分类
+
+
+
+
+
+
+
+
+
 
 ## 4.2 vector
 ### 4.2.1 vector概述
