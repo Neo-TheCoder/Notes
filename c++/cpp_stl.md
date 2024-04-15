@@ -1889,27 +1889,29 @@ array，list，tree，stack，queue，hash table，set，map
 
 
 # 4.1 容器的概观与分类
-
-
-
-
-
-
-
-
+### 4.1.1 序列式容器
+其中的元素可序，未必有序
+如`array`
+序列式容器中的元素是按照它们`被插入容器的顺序`进行存储的，因此元素在容器中是有序的。
+换句话说，元素的顺序是可以保证的，即元素的插入顺序和访问顺序是一致的。
+然而，序列式容器中的元素并不一定是有序的，这是因为`容器本身并不会对元素进行排序`。
 
 
 ## 4.2 vector
 ### 4.2.1 vector概述
-类似array，但是是动态空间，**内部机制会自行扩充元素**
-vector实现的关键在于**对大小的控制，以及重新配置时的数据移动效率**，假如旧空间满载，再如何为新元素扩充空间，是一个重要问题。
+类似`array`，但是是`动态空间`，**内部机制会自行扩充元素**
+vector实现的关键在于：**对大小的控制，以及重新配置时的数据移动效率**。
+假如旧空间满载，再如何为新元素扩充空间，是一个重要问题，徐，需要提高“配置新空间 -- 数据移动 -- 释放旧空间”的操作效率
+
+
 
 ### 4.2.2 vector定义摘要
+`vector`
 ```cpp
 template <class T, class Alloc = alloc>
 class Vector{
 public:
-    // 定义一堆类型别名
+    // 定义嵌套型别
     typedef T   value_type;
     typedef value_type* pointer;
     typedef value_type* iterator;
@@ -1954,7 +1956,7 @@ public:
 
     // 析构函数
     ~vector(){
-        destroy(start, finish); // 全局函数，是allocator的函数？？？
+        destroy(start, finish); // 全局函数
         deallocate();   // vector的成员函数，回收分配的内存
     }
     reference front() {return *begin();}    // 返回第一个元素的引用
@@ -1974,7 +1976,7 @@ public:
     }
 
     iterator erase(iterator position){
-        if(position + 1 != end())   // end()所指向的目前已使用空间的尾部是不存数据的
+        if(position + 1 != end())   // end()指向的目前已使用空间的尾部，它是不存数据的
             copy(position + 1, finish, position);
             --finish;
             destroy(finish);
@@ -1994,47 +1996,98 @@ protected:
     // 配置空间并填满内容
     iterator allocate_and_fill(size_type n, const T& x){
         iterator result = data_allocator::allocate(n);  // 分配内存
-        uninitialized_fill_n(result, n, x); // ？？？函数体在哪里 利用分配的内存，初始化对象
+        uninitialized_fill_n(result, n, x); // 利用x，来初始化从result位置开始的n个元素
         return result;
     }
 };
 
 ```
-
 ### 4.2.3 vector的迭代器
-**维护连续线性空间**，所以普通指针可以作为vector的迭代器而满足所有必要条件：比如operator*, operator->, operator++, operator--等操作，普通指针天生就具备
-由于vector有类似数组的特性，支持**Random Access Iterators**
+vector维护的是一个连续线性空间，不论元素类型是什么，普通指针都可以作为vector的迭代器而满足所有必要条件，因为vector需要的操作为：`operator*，operator->，operatro++， operator--， operator+， operator-， operator+=， operator-=`。
+而普通指针天生就具备这些操作。vector支持随机存取（`operator[]`），而普通指针也有这样的能力。因此，vector提供的迭代器是`Random Access Iterators`。
 
 ```cpp
-vector<int>::iterator ivite;    // int*
-vector<Shape>::iterator svite;  // Shape*
+vector<int>::iterator ivite;    // ivite的型别就是int*
+vector<Shape>::iterator svite;  // svite的型别就是Shape*
 ```
 
 ### 4.2.4 vector数据结构
-vector是线性连续空间，以两个迭代器start和finish分别指向配置得来的连续空间中目前已被使用的范围，
-迭代器end_of_storage指向整块连续空间（含备用空间）的尾端
+vector是线性连续空间，以两个迭代器`start`和`finish`分别指向配置得来的`连续空间中目前已被使用的范围`，
+迭代器`end_of_storage`指向`整块连续空间（含备用空间）的尾端`
 
-**为了降低空间配置时的速度成本，vector实际配置的大小可能比客户端需求量更大一些，以备将来可能的扩充**
---> 即capacity的概念：一个vector的容量永远 >= 大小
+**为了降低空间配置时的速度成本，vector`实际配置的大小`可能`比客户端需求量更大一些`，以备将来可能的扩充**
+--> 即capacity的概念：一个vector的容量永远 `>=` 大小
 **三个关键迭代器**：start、finish、end_of_storage
 
 **vector在增加新元素时，如果超过当时的容量，则容量会扩充两倍，如果两倍仍然不足，则扩充至足够大的容量**
-容量的扩张必须经历：重新配置、元素移动、释放原空间
+容量的扩张必须经历：`重新配置、元素移动、释放原空间`（必须要重新申请空间，移动元素，释放原空间）
+
 
 ### 4.2.5 vector的构造与内存管理
+#### `_Vector_base`类
+vector空间配置的细节都封装在`_Vector_base`内部
+```cpp
+template <class _Tp, class _Alloc> 
+class _Vector_base {
+public:
+  typedef _Alloc allocator_type;
+  allocator_type get_allocator() const { return allocator_type(); }
 
-关于capacity的变化
-如果是一个个地push_back元素，那么capacity的变化就是1，2，4，8...
-并且不会变小，即便是clear()了，也不会变小
+  _Vector_base(const _Alloc&)
+    : _M_start(0), _M_finish(0), _M_end_of_storage(0) {}
+  _Vector_base(size_t __n, const _Alloc&)
+    : _M_start(0), _M_finish(0), _M_end_of_storage(0) 
+  {
+    _M_start = _M_allocate(__n);  // 配置n字节空间
+    _M_finish = _M_start;
+    _M_end_of_storage = _M_start + __n;
+  }
 
+  ~_Vector_base() { _M_deallocate(_M_start, _M_end_of_storage - _M_start); }
+
+protected:
+  _Tp* _M_start;
+  _Tp* _M_finish;
+  _Tp* _M_end_of_storage;
+
+  typedef simple_alloc<_Tp, _Alloc> _M_data_allocator;
+  _Tp* _M_allocate(size_t __n)
+    { return _M_data_allocator::allocate(__n); }
+  void _M_deallocate(_Tp* __p, size_t __n) 
+    { _M_data_allocator::deallocate(__p, __n); }
+};
+```
+
+
+
+
+
+
+
+#### 关于capacity的变化
+如果是一个个地`push_back`元素，那么capacity的变化就是1，2，4，8...
+并且不会变小，即便是`clear()`了，也不会变小
+
+擦除元素时，会导致`finish`指针移动，改变`size()`大小，但并不会导致`end_of_storage`指针变化，也就是不会导致容量变化。
+如果想要`改变容量`以节省空间，需要调用`vector::shrink_to_fit()`，`减少容量`以适应size()大小。不过`shrink_to_fit()`是`C++11`加入的内容，老版的SGI STL并没有该功能。
+简而言之，**老版SGI STL无法缩减vector容量**。
 
 内部实现：
-vector缺省使用alloc作为空间配置器，并据此另外定义了一个data_allocator，用于更方便地以元素大小为配置单位。
+vector缺省使用`alloc`作为空间配置器，并据此另外定义了一个`data_allocator`，用于更方便地以元素大小为配置单位。
+vector提供许多构造函数，可以指定空间大小及初值：
+```cpp
+vector(size_type n, const T& value){
+  fill_initialize(n, value);  // 其中调用allocate_and_fill()，进行空间配置，调用uninitialized_fill_n()进行初始化对象
+}
+```
 
-push_back插入元素会先检查是否有备用空间，没有则扩充（重新配置2倍的内存、移动数据、释放原空间）
-注意：***对vector的任何操作，一旦涉及到空间的重新配置，指向原vector的所有迭代器就失效了**
+`push_back`插入元素会先检查是否有备用空间，没有则扩充（重新配置2倍的内存、移动数据、释放原空间）
 
-### 4.2.6 vector的元素操作：pop_back、erase、clear、insert
+
+
+注意：**对vector的任何操作，一旦涉及到空间的重新配置，指向原vector的所有迭代器就失效了**！！！
+
+### 4.2.6 vector的元素操作：`pop_back`、`erase`、`clear`、`insert`
 ```cpp
 void pop_back(){
     --finish;   // 尾端标记前移，表示放弃尾端元素
