@@ -2057,6 +2057,127 @@ protected:
     { _M_data_allocator::deallocate(__p, __n); }
 };
 ```
+注意：`simple_alloc`做了转换处理：把元素个数转换为以byte为单位的内存（因为对于第一级/第二级配置器而言，内存都是以byte为单位）
+转换如下：
+```cpp
+template<class T, class Alloc>
+class simple_alloc
+//  简单的 传递调用 ，使得配置器的配置单位由"bytes"转为元素类型的大小
+{    
+    static T *allocate(size t n)
+    {
+        return 0 == n?0 : (T*) Alloc::allocate(n * sizeof(T));
+    }
+    static T *allocate(void)
+    {
+        return (T*) Alloc::allocate(sizeof(T));
+    }
+    static void deallocate(T *p， size_t n)
+    {
+        if (0 != n)
+            Alloc::deallocate(p，n * sizeof(T));
+    }
+    static void deallocate(T *p)
+    {
+        Alloc::deallocate(p，sizeof(T)); 
+    }
+};
+```
+
+#### `vector`的构造函数
+vector的默认分配子是alloc（二级空间配置器），使用父类`_Vector_base`来屏蔽（空间配置）细节，方便以`元素大小`为配置单位。
+```cpp
+// _Base是别名
+template <class _Tp, class _Alloc = __STL_DEFAULT_ALLOCATOR(_Tp) >
+class vector : protected _Vector_base<_Tp, _Alloc> 
+{
+private:
+  typedef _Vector_base<_Tp, _Alloc> _Base;
+
+public:
+  explicit vector(const allocator_type& __a = allocator_type()) // 构造空vector, 对应客户端vector<int> ivec
+    : _Base(__a) {}
+
+  vector(size_type __n, const _Tp& __value,
+         const allocator_type& __a = allocator_type())  // 构造大小为n个元素, 所有值为value的vector, 对应客户端vector<int> ivec3(20, 5)
+    : _Base(__n, __a)
+    { _M_finish = uninitialized_fill_n(_M_start, __n, __value); }
+
+  explicit vector(size_type __n)  //  构造大小为n个元素的vector, 对应客户端vector<int> ivec2(10)
+    : _Base(__n, allocator_type())
+    { _M_finish = uninitialized_fill_n(_M_start, __n, _Tp()); }
+
+  vector(const vector<_Tp, _Alloc>& __x)  // 拷贝构造的vector, 对应客户端vector<int> ivec4(ivec3)
+    : _Base(__x.size(), __x.get_allocator())
+    { _M_finish = uninitialized_copy(__x.begin(), __x.end(), _M_start); }
+
+#ifdef __STL_MEMBER_TEMPLATES
+  // Check whether it's an integral type.  If so, it's not an iterator.
+  template <class _InputIterator>   // _InputIterator对整数做了特化！
+  vector(_InputIterator __first, _InputIterator __last,
+         const allocator_type& __a = allocator_type()) : _Base(__a) {   // 用迭代区间[first, last)构造vector
+    typedef typename _Is_integer<_InputIterator>::_Integral _Integral;
+    _M_initialize_aux(__first, __last, _Integral());  // 如果是整数，则不把输入参数作为迭代器处理
+  }
+}
+
+// PS：_M_initialize_aux()的处理
+  template <class _Integer>
+  void _M_initialize_aux(_Integer __n, _Integer __value, __true_type) { // 输入参数为整数类型，例如：vector<int> ivec6(ivec3.begin(), ivec3.end());
+    _M_start = _M_allocate(__n);
+    _M_end_of_storage = _M_start + __n; 
+    _M_finish = uninitialized_fill_n(_M_start, __n, __value);
+  }
+
+  template <class _InputIterator>
+  void _M_initialize_aux(_InputIterator __first, _InputIterator __last,
+                         __false_type) {
+    _M_range_initialize(__first, __last, __ITERATOR_CATEGORY(__first));
+  }
+
+```
+
+
+#### `vector`的析构函数
+```cpp
+// 释放迭代器区间[first, last), 如果迭代器指向基本类型, 什么也不做; 如果迭代器指向class 类型, 就先逐个析构
+~vector() { destroy(_M_start, _M_finish); }
+
+// 注意vector析构之后, 会接着析构基类. 因此即使vector什么也没做, 基类会回收线性内存空间
+// 析构基类会先回收内存段(start, end_of_storage - start)
+// 空间配置那一章提到过, 如果是二级配置器, 内存 > 128byte, 会直接返还给OS; 如果内存 <= 128byte, 会加入到某个合适的free list, 留作备用！！！
+~_Vector_base() { _M_deallocate(_M_start, _M_end_of_storage - _M_start); }
+```
+
+#### 指定数组初始大小`reserve()`, `resize()`
+```cpp
+ // 让vector容量 >= n 个元素
+  void reserve(size_type __n) {
+    if (capacity() < __n) { // 只有当前容量 < n时, 才需要重新配置空间
+      const size_type __old_size = size(); // 已经装了元素个数
+      iterator __tmp = _M_allocate_and_copy(__n, _M_start, _M_finish); // 配置n个元素新空间, 并将[start, finish)元素拷贝到新空间
+      destroy(_M_start, _M_finish); // 调用全局destroy()销毁[start, finish)上的元素. 对于基本类型, 什么也不做; 对于class类型, 析构对象
+      _M_deallocate(_M_start, _M_end_of_storage - _M_start); // 调用基类的deallocate() 释放线性空间
+        // 重新配置start, finish, end_of_storage 管理线性空间
+      _M_start = __tmp;
+      _M_finish = __tmp + __old_size;
+      _M_end_of_storage = _M_start + __n;
+    }
+  }
+
+    // 配置n个元素新空间, 并将[start, finish)元素拷贝到新空间
+    // 遵循 "commit or rollback"规则
+  iterator _M_allocate_and_copy(size_type __n, const_iterator __first,
+                                               const_iterator __last)
+  {
+    iterator __result = _M_allocate(__n);
+    __STL_TRY {
+      uninitialized_copy(__first, __last, __result);
+      return __result;
+    }
+    __STL_UNWIND(_M_deallocate(__result, __n)); // commit or rollback精髓: 发生异常时, 释放线性空间
+  }
+```
 
 
 
@@ -2064,7 +2185,17 @@ protected:
 
 
 
-#### 关于capacity的变化
+
+
+
+
+
+
+
+
+
+
+#### 关于`capacity`的变化
 如果是一个个地`push_back`元素，那么capacity的变化就是1，2，4，8...
 并且不会变小，即便是`clear()`了，也不会变小
 
@@ -2082,7 +2213,6 @@ vector(size_type n, const T& value){
 ```
 
 `push_back`插入元素会先检查是否有备用空间，没有则扩充（重新配置2倍的内存、移动数据、释放原空间）
-
 
 
 注意：**对vector的任何操作，一旦涉及到空间的重新配置，指向原vector的所有迭代器就失效了**！！！
