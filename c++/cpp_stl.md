@@ -2150,15 +2150,16 @@ public:
 ```
 
 #### 指定数组初始大小`reserve()`, `resize()`
+`reserve()`，预留指定大小的线性空间
 ```cpp
  // 让vector容量 >= n 个元素
   void reserve(size_type __n) {
     if (capacity() < __n) { // 只有当前容量 < n时, 才需要重新配置空间
       const size_type __old_size = size(); // 已经装了元素个数
-      iterator __tmp = _M_allocate_and_copy(__n, _M_start, _M_finish); // 配置n个元素新空间, 并将[start, finish)元素拷贝到新空间
-      destroy(_M_start, _M_finish); // 调用全局destroy()销毁[start, finish)上的元素. 对于基本类型, 什么也不做; 对于class类型, 析构对象
-      _M_deallocate(_M_start, _M_end_of_storage - _M_start); // 调用基类的deallocate() 释放线性空间
-        // 重新配置start, finish, end_of_storage 管理线性空间
+      iterator __tmp = _M_allocate_and_copy(__n, _M_start, _M_finish); // 1. 配置n个元素新空间, 并将[start, finish)元素拷贝到新空间
+      destroy(_M_start, _M_finish); // 2. 调用全局destroy()销毁[start, finish)上的元素. 对于基本类型, 什么也不做; 对于class类型, 析构对象
+      _M_deallocate(_M_start, _M_end_of_storage - _M_start); // 3. 调用基类的deallocate() 释放线性空间
+        // 重新设置start, finish, end_of_storage 用于管理线性空间
       _M_start = __tmp;
       _M_finish = __tmp + __old_size;
       _M_end_of_storage = _M_start + __n;
@@ -2172,24 +2173,41 @@ public:
   {
     iterator __result = _M_allocate(__n);
     __STL_TRY {
-      uninitialized_copy(__first, __last, __result);
+      uninitialized_copy(__first, __last, __result);  // 把first到last的元素拷贝到__result
       return __result;
     }
     __STL_UNWIND(_M_deallocate(__result, __n)); // commit or rollback精髓: 发生异常时, 释放线性空间
   }
 ```
 
+`resize()`：`resize()`用于指定vector的新size()，`改变`线性空间的`finsih`指针，但`不改变``start`和`end_of_storage`指针。
+```cpp
+    // 如果size()超过new_size, 就擦除多余的; 如果不超过, 就在末尾插入指定元素x. 最终目标是让size()等于new_size
+  void resize(size_type __new_size, const _Tp& __x) {
+    if (__new_size < size()) // 新size < 现有size()时, 说明原来的size较大, 需要擦除一部分
+      erase(begin() + __new_size, end()); // 擦除多余空间元素 [begin() + new_size, end())
+    else
+      insert(end(), __new_size - size(), __x);  // 用__x来补充若干元素
+  }
+  void resize(size_type __new_size) { resize(__new_size, _Tp()); }  // 其实是调用T的默认构造函数
 
+    // 擦除指定位置position的元素, 后面的(position~末尾)元素整体向前移动
+  iterator erase(iterator __position) {
+    if (__position + 1 != end()) // 要删除的元素不是末尾元素
+      copy(__position + 1, _M_finish, __position); // 将擦除位置后的区间[position+1, finish)元素, 拷贝到position起始处
+    --_M_finish;  // 因为只擦除一个元素, finish向前移动1
+    destroy(_M_finish); // finish指向的就是要删除的那个元素, 析构之, 但不释放空间(尚未归还给配置器)
+    return __position; // 返回销毁元素的位置
+  }
 
-
-
-
-
-
-
-
-
-
+    // 擦除迭代区间[first, last), 后面的元素整体向前移动（因为要确保随机访问，需要连续存储）
+  iterator erase(iterator __first, iterator __last) {
+    iterator __i = copy(__last, _M_finish, __first); // 将擦除区间后的区间[last, finish)元素, 拷贝到first起始处
+    destroy(__i, _M_finish); // 析构[i, finish)对象, 但并没有释放空间
+    _M_finish = _M_finish - (__last - __first); // 先前移动finish指针
+    return __first; // 返回销毁后的起始位置
+  }
+```
 
 
 
