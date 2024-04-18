@@ -2191,23 +2191,152 @@ public:
   }
   void resize(size_type __new_size) { resize(__new_size, _Tp()); }  // 其实是调用T的默认构造函数
 
-    // 擦除指定位置position的元素, 后面的(position~末尾)元素整体向前移动
+  // 擦除 指定位置position 的元素, 后面的(position~末尾)元素整体向前移动
   iterator erase(iterator __position) {
     if (__position + 1 != end()) // 要删除的元素不是末尾元素
       copy(__position + 1, _M_finish, __position); // 将擦除位置后的区间[position+1, finish)元素, 拷贝到position起始处
-    --_M_finish;  // 因为只擦除一个元素, finish向前移动1
-    destroy(_M_finish); // finish指向的就是要删除的那个元素, 析构之, 但不释放空间(尚未归还给配置器)
+    --_M_finish;  // 因为只擦除一个元素, finish向前移动1位
+    destroy(_M_finish); // finish指向的就是要删除的那个元素, 析构之, 但不释放空间(尚未归还给配置器)：因为还在capcity的范围内
     return __position; // 返回销毁元素的位置
   }
 
-    // 擦除迭代区间[first, last), 后面的元素整体向前移动（因为要确保随机访问，需要连续存储）
+  // 擦除 迭代区间[first, last) , 后面的元素整体向前移动（因为要确保随机访问，需要连续存储）
   iterator erase(iterator __first, iterator __last) {
     iterator __i = copy(__last, _M_finish, __first); // 将擦除区间后的区间[last, finish)元素, 拷贝到first起始处
     destroy(__i, _M_finish); // 析构[i, finish)对象, 但并没有释放空间
     _M_finish = _M_finish - (__last - __first); // 先前移动finish指针
-    return __first; // 返回销毁后的起始位置
+    return __first; // 返回销毁后的起始位置（用户可能要在这个位置做操作）
   }
 ```
+
+#### 查询：`size()`、`capacity()`
+```cpp
+  size_type size() const     // 当前元素个数
+    { return size_type(end() - begin()); }
+
+  size_type capacity() const // 当前容量, 即线性空间最大能存放的元素个数
+    { return size_type(_M_end_of_storage - begin()); }
+
+
+```
+
+#### 迭代器访问元素
+vector支持迭代器访问元素，提供`iterator`进行正向顺序访问，`reverse_iterator`进行反向访问，以及它们的`const`版本。
+所谓正向迭代器，是指从（地址空间）起始到末尾，从 `小下标到大下标` 的顺序访问；
+所谓反向迭代器，是指从（地址空间）末尾到开始，从 `大下标到小下标` 的顺序访问。
+```cpp
+    // 正向迭代器
+  iterator begin() { return _M_start; } // 线性空间起始位置对应迭代器
+  const_iterator begin() const { return _M_start; } // 线性空间起始位置对应const迭代器
+  iterator end() { return _M_finish; }  // 线性空间末尾位置对应迭代器
+  const_iterator end() const { return _M_finish; }  // 线性空间末尾位置对应const迭代器
+
+    // 反向迭代器
+  reverse_iterator rbegin()
+    { return reverse_iterator(end()); }
+  const_reverse_iterator rbegin() const
+    { return const_reverse_iterator(end()); }
+  reverse_iterator rend()
+    { return reverse_iterator(begin()); }
+  const_reverse_iterator rend() const
+    { return const_reverse_iterator(begin()); }
+```
+PS：`_M_start`都是`_Tp`类型，也就是指针
+
+#### 引用访问元素
+通过两类元素访问方式：
+1. 通过`front()`，`back()`直接访问第一个、最后一个元素，返回的是元素`引用`；
+2. 通过`operator[]`随机访问指定下标的元素，返回的是元素引用。
+```cpp
+  reference operator[](size_type __n) { return *(begin() + __n); } // 随机访问第n-1个元素 (从0开始计), 返回元素reference
+  const_reference operator[](size_type __n) const { return *(begin() + __n); } // 随机访问第n-1个元素 (从0开始计), 返回元素const reference
+
+  reference front() { return *begin(); }    // 第一个元素reference
+  const_reference front() const { return *begin(); }    // 第一个元素对应const reference
+  reference back() { return *(end() - 1); } // 最后一个元素reference
+  const_reference back() const { return *(end() - 1); } // 最后一个元素对应const reference
+```
+PS：编译器通过重载决议判断是否需要调用`const`版本的函数，如：`const_reference value = front();`
+
+#### vector元素操作
+##### 尾端插入元素`push_back`
+`push_back`是在线性空间当前已经使用段的末尾，添加一个新对象，同时右移`finish指针`。
+根据插入对象是否有参数，有两个版本push_back：
+1. 以值x构造的Tp对象；
+2. 无参构造Tp对象，即不需要初值x用于构造Tp对象。
+
+```cpp
+  // 在尾端插入以x构造的对象(调用Tp(x)), 会导致size加1. 容量不够时, 需要扩容
+  void push_back(const _Tp& __x) {
+    if (_M_finish != _M_end_of_storage) { // 备用空间足够, 不需要扩容
+      construct(_M_finish, __x); // 在尾端finish所指位置用x构造对象Tp()
+      ++_M_finish;               // 尾端标记右移一格
+    }
+    else
+      _M_insert_aux(end(), __x); // 在指定位置end() 插入以x构造的对象Tp()
+  }
+
+  // 在尾端插入空对象(调用Tp()), 会导致size加1. 容量不够时, 需要扩容
+  void push_back() {
+    if (_M_finish != _M_end_of_storage) { // 备用空间足够, 不需要扩容
+      construct(_M_finish); // 在尾端finish所指位置构造对象Tp()
+      ++_M_finish;          // 尾端标记右移一格
+    }
+    else
+      _M_insert_aux(end()); // 容量不足时，在指定位置end() 插入新构造对象Tp()（涉及到扩容）
+  }
+```
+
+##### 指定位置插入元素`insert`
+insert也是用于插入元素，跟push_back的区别在于insert是在**指定位置（迭代器）**插入新元素。
+也就是说，`push_back(x)`相当于`insert(end(), x)`。
+```cpp
+//-----------------------------
+// insert单个对象
+  // 在指定位置position插入单个对象Tp(x)
+  iterator insert(iterator __position, const _Tp& __x) {
+    size_type __n = __position - begin();   // 必然涉及到元素的挪动
+    if (_M_finish != _M_end_of_storage && __position == end()) {  // 容量不足
+      construct(_M_finish, __x);
+      ++_M_finish;
+    }
+    else
+      _M_insert_aux(__position, __x);
+    return begin() + __n;
+  }
+
+  // 在指定位置position插入单个对象Tp()
+  iterator insert(iterator __position) {
+    size_type __n = __position - begin();
+    if (_M_finish != _M_end_of_storage && __position == end()) {
+      construct(_M_finish);
+      ++_M_finish;
+    }
+    else
+      _M_insert_aux(__position);
+    return begin() + __n;
+  }
+
+//-----------------------------
+// insert多个对象
+
+  // 在指定位置position插入源区间[first, last)所有对象
+  void insert(iterator __position,
+              const_iterator __first, const_iterator __last);
+
+  // 在指定区间{pos, n}插入构造的Tp(x)对象
+  void insert (iterator __pos, size_type __n, const _Tp& __x)
+    { _M_fill_insert(__pos, __n, __x); }
+```
+
+
+
+
+
+
+
+
+
 
 
 
