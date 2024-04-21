@@ -2295,8 +2295,8 @@ insert也是用于插入元素，跟push_back的区别在于insert是在**指定
 // insert单个对象
   // 在指定位置position插入单个对象Tp(x)
   iterator insert(iterator __position, const _Tp& __x) {
-    size_type __n = __position - begin();   // 必然涉及到元素的挪动
-    if (_M_finish != _M_end_of_storage && __position == end()) {  // 容量不足
+    size_type __n = __position - begin();
+    if (_M_finish != _M_end_of_storage && __position == end()) {  // 先单独考虑该情况：容量充足，且要在最后位置插入
       construct(_M_finish, __x);
       ++_M_finish;
     }
@@ -2308,12 +2308,12 @@ insert也是用于插入元素，跟push_back的区别在于insert是在**指定
   // 在指定位置position插入单个对象Tp()
   iterator insert(iterator __position) {
     size_type __n = __position - begin();
-    if (_M_finish != _M_end_of_storage && __position == end()) {
+    if (_M_finish != _M_end_of_storage && __position == end()) {  // 如果在最后
       construct(_M_finish);
       ++_M_finish;
     }
     else
-      _M_insert_aux(__position);
+      _M_insert_aux(__position);  // 不用管空间是否足够，细节全放在_M_insert_aux处理
     return begin() + __n;
   }
 
@@ -2328,14 +2328,132 @@ insert也是用于插入元素，跟push_back的区别在于insert是在**指定
   void insert (iterator __pos, size_type __n, const _Tp& __x)
     { _M_fill_insert(__pos, __n, __x); }
 ```
+insert多个对象的函数在实现时，同样需要注意，`capacity剩余空间`是否足够的问题
+如果不足够，就必须重新开辟内存，并分段操作，对原有元素进行拷贝
+如果足够，分为以下两种情况：
+1. 待插入元素区间长度 <= finish - position
+2. 待插入元素区间长度 > finish - position
+本质都是做该操作：先从position开始挪出n个元素的位置（原位置的元素右移），copy这n个元素过来。只不过腾出n个元素时，移动元素的下标不同。
 
+`_M_insert_aux()`的实现：
+PS：`aux`表示辅助（函数）
+```cpp
+template <class _Tp, class _Alloc>
+void 
+vector<_Tp, _Alloc>::_M_insert_aux(iterator __position, const _Tp& __x)
+{
+  if (_M_finish != _M_end_of_storage) { // 存储空间充足
+    construct(_M_finish, *(_M_finish - 1)); // (位置，元素)
+    ++_M_finish;
+    _Tp __x_copy = __x;
+    copy_backward(__position, _M_finish - 2, _M_finish - 1);  // 将pos ~ finish - 2的元素复制到pos + 1, finish -1
+    *__position = __x_copy;
+  }
+  else {  // 空间不足
+    const size_type __old_size = size();
+    const size_type __len = __old_size != 0 ? 2 * __old_size : 1; // 扩容必然是按2倍扩容
+    iterator __new_start = _M_allocate(__len);  // 开辟新内存空间，把原来的元素全部copy过来
+    iterator __new_finish = __new_start;
+    __STL_TRY {
+      __new_finish = uninitialized_copy(_M_start, __position, __new_start); // 接口定义：(first, last, result)  // 先初始化前段元素
+      construct(__new_finish, __x);
+      ++__new_finish;
+      __new_finish = uninitialized_copy(__position, _M_finish, __new_finish);
+    }
+    __STL_UNWIND((destroy(__new_start,__new_finish), 
+                  _M_deallocate(__new_start,__len)));   // 如果申请内存出问题，就把构造的对象全部销毁，内存全部释放
+    destroy(begin(), end());  // 析构原先的对象
+    _M_deallocate(_M_start, _M_end_of_storage - _M_start);  // 释放原先的内存
+    _M_start = __new_start;   // 重置三大指针
+    _M_finish = __new_finish;
+    _M_end_of_storage = __new_start + __len;
+  }
+}
+```
 
+##### `pop_back`
+`pop_back()`弹出vector的最后一个元素，会让size减-1，但不会影响capacity。
+```cpp
+  // 将尾端元素拿掉, 并调整大小
+  void pop_back() {
+    --_M_finish; // 尾端标记前移一格, 表示将放弃尾端元素
+    destroy(_M_finish); // 全局函数, 如果finish所指元素是trivial type, 什么也不做; 如果是class type, 析构finish所指对象
+  }
+```
 
+##### `earse`
+分为两类：
+1. 擦除指定位置元素
+2. 擦除指定区间所有元素
 
+擦除元素后，后面的所有元素都会往前移动，以补充空位。
+另外，移动后的空位置，如果不是`trivial type`，需要调用其析构函数析构对象；如果是`trivial type`，可以什么也不做。
+擦除元素会影响size，因此需要移动尾端标记finish，移动格数取决于擦除的元素个数。但不会影响capacity。
 
+```cpp
+  // 擦除指定位置元素
+  iterator erase(iterator __position) {
+    if (__position + 1 != end()) // position所指并非最后一个元素, 说明后续还有元素, 需要往前移动补充擦除的空位
+      copy(__position + 1, _M_finish, __position); // 将元素从[position+1, finish)拷贝到[position, ...), 也就是position+1之后元素往前移动1格
+    --_M_finish; // 尾端标记前移一格
+    destroy(_M_finish); // 析构尾端元素对象
+    return __position;  // 返回擦除元素的位置对应迭代器
+  }
 
+  // 擦除指定区间[first, last)的所有元素
+  iterator erase(iterator __first, iterator __last) {
+    iterator __i = copy(__last, _M_finish, __first); // 将源区间[last, finish)所有元素前移, 拷贝到目标区间[first, ...), 返回目标区间结尾位置
+    destroy(__i, _M_finish); // 销毁拷贝后残余的对象[i, finish)
+    _M_finish = _M_finish - (__last - __first); // 尾端标记finish前移(last-first)格, 即已擦除元素个数
+    return __first;
+  }
+```
 
+##### `clear`
+```cpp
+  // 擦除所有元素, 如果是non-trivial type, 会对每个元素调用析构函数
+  void clear() { erase(begin(), end()); }
+```
 
+#### vector比较操作
+SGI STL支持多种vector判断操作，不过并不是作为`vector member function`，而是作为`global function`。
+使用全局函数，可以不用破坏容器的封装性。
+根据《Effective C++》Item19：operator>可以转换为由operator<实现，operator!=可以转换为由operator<实现。因此，只需要实现operator==和operator<即可。
+
+##### `operator==`
+```cpp
+// 比较两个vector的所有元素是否相等, 相等性通过equal判断
+// 相等的两个vector, 要求长度相等, 并且所有元素都相等(通过元素的 "!=" 判断)
+template <class _Tp, class _Alloc>
+inline bool
+operator==(const vector<_Tp, _Alloc>& __x, const vector<_Tp, _Alloc>& __y)
+{
+  return __x.size() == __y.size() &&
+         equal(__x.begin(), __x.end(), __y.begin());
+}
+```
+
+##### `operator<`
+```cpp
+// 字典序比较两个vector的所有元素, 判断第一个vector是否小于第二个
+template <class _Tp, class _Alloc>
+inline bool
+operator<(const vector<_Tp, _Alloc>& __x, const vector<_Tp, _Alloc>& __y)
+{
+  return lexicographical_compare(__x.begin(), __x.end(),
+                                 __y.begin(), __y.end());
+}
+```
+
+#### vector特殊操作`swap`
+```cpp
+  // 与x交换当前vector交换, 只需要交换维护底层线性空间3个指针即可, 无需将vector所有元素交换或拷贝
+  void swap(vector<_Tp, _Alloc>& __x) {
+    __STD::swap(_M_start, __x._M_start);
+    __STD::swap(_M_finish, __x._M_finish);
+    __STD::swap(_M_end_of_storage, __x._M_end_of_storage);
+  }
+```
 
 
 
