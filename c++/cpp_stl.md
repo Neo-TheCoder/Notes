@@ -2287,6 +2287,49 @@ PS：编译器通过重载决议判断是否需要调用`const`版本的函数�
   }
 ```
 
+###### PS：`push_back`和`emplace_back`的区别：
+1. C++11之前：
+通常使用`push_back()`向容器中加入一个右值元素（临时对象）的时候，首先会调用`构造函数`构造这个临时对象，然后需要调用`拷贝构造函数`将这个临时对象放入vector所持有的连续空间中。`原来的临时变量释放`。
+这样效率很慢，因为：
+创建临时对象时,需要`申请内存空间`, 申请内存空间一向是耗时很严重的操作;
+拷贝构造函数的`复制操作`也是需要`CPU时间`的;
+需要避免创建临时对象。
+
+2. C++11之后：
+引入了右值引用、移动构造函数后，`emplace_back()`右值时，直接在vector持有的连续空间中，构造对象。
+
+`emplace_back`(g++对应实现)
+```cpp
+#if __cplusplus >= 201103L
+  template<typename _Tp, typename _Alloc>   // 是vector的模板参数列表
+    template<typename... _Args>   // 是成员函数emplace_back的模板参数列表
+#if __cplusplus > 201402L
+      typename vector<_Tp, _Alloc>::reference
+#else
+      void  // c++11
+#endif
+      vector<_Tp, _Alloc>::
+      emplace_back(_Args&&... __args)
+      {
+	if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)   // 空间足够
+	  {
+	    _GLIBCXX_ASAN_ANNOTATE_GROW(1);
+	    _Alloc_traits::construct(this->_M_impl, this->_M_impl._M_finish,
+				     std::forward<_Args>(__args)...);
+	    ++this->_M_impl._M_finish;
+	    _GLIBCXX_ASAN_ANNOTATE_GREW(1);
+	  }
+	else
+	  _M_realloc_insert(end(), std::forward<_Args>(__args)...);
+#if __cplusplus > 201402L
+	return back();
+#endif
+      }
+#endif
+```
+
+
+
 ##### 指定位置插入元素`insert`
 insert也是用于插入元素，跟push_back的区别在于insert是在**指定位置（迭代器）**插入新元素。
 也就是说，`push_back(x)`相当于`insert(end(), x)`。

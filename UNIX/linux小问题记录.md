@@ -117,8 +117,86 @@ subsystem经常被称作"resource controller”，因为它主要被用来调度
 当一颗cgroup树不和任何subsystem关联的时候，意味着这棵树只是将进程进行分组，至于要在分组的基础上做些什么，将由应用程序自己决定，systemd就是一个这样的例子。
 
 
+# `epoll`
 
+在这里，`"事件"`指的是：**发生在文件描述符上的某种状态变化或操作**，例如数据可读、数据可写、连接建立等。
+在使用 I/O 复用模型（如 epoll）时，程序会监听多个文件描述符，当某个文件描述符上发生了特定的事件时，操作系统会通知程序，程序可以通过处理这些事件来进行相应的操作。
 
+事件和文件描述符的关系可以通过一个简单的例子来说明：
+假设有一个服务器程序，使用 epoll 来同时监听多个客户端的连接。
+每个客户端连接都会有一个对应的文件描述符，服务器程序会将这些文件描述符添加到 epoll 实例中进行监听。
+当客户端发送数据到服务器时，服务器程序会收到数据可读的事件，然后通过相应的文件描述符来处理这些数据。
+具体来说，假设有两个客户端连接，分别对应文件描述符 fd1 和 fd2。服务器程序使用 epoll 监听这两个文件描述符，当 fd1 上有数据可读时，操作系统会将数据可读的事件通知给服务器程序，服务器程序通过 fd1 来接收和处理客户端1发送的数据。同理，当 fd2 上有数据可读时，操作系统会将数据可读的事件通知给服务器程序，服务器程序通过 fd2 来接收和处理客户端2发送的数据。
+因此，事件和文件描述符之间的关系是：事件是发生在特定文件描述符上的状态变化或操作，程序通过监听文件描述符上的事件来实现对不同连接或操作的处理。
 
+注意：只要有`任何一个事件`发生，`epoll_wait`就会立即返回。
+```cpp
+#include <iostream>
+#include <sys/socket.h>
+#include <sys/epoll.h>
+#include <unistd.h>
+#include <cstring>
 
+# ifdef ABC    // epoll.h中的结构体定义
+typedef union epoll_data
+{
+  void *ptr;   // 指向用户自定义的、任意类型的数据
+  int fd;   // 表示文件描述符
+  uint32_t u32;
+  uint64_t u64;
+} epoll_data_t;
+
+struct epoll_event
+{
+  uint32_t events;	/* Epoll events */   // 定义事件类型
+  epoll_data_t data;	/* User data variable */
+} __EPOLL_PACKED;
+
+# endif
+
+struct Data {
+    int id;
+    char message[256];
+};
+
+void* threadB(void* arg) {
+    int* sockfd = (int*)arg;
+    struct epoll_event event;   // epoll_event类型用于描述事件：事件类型 / 事件数据
+    struct epoll_event events[1];
+    int epollfd = epoll_create(1);  // 创建epoll实例，监听的文件描述符数量设置为1
+    event.events = EPOLLIN; // EPOLLIN表示关注可读事件,文件描述符上有数据可读
+    event.data.fd = *sockfd;    // 设置了event结构体的data字段，存储了要监听的文件描述符，即socket
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, *sockfd, &event);     // 这行代码将线程B的socket文件描述符添加到epoll实例中进行监听
+    // epoll_ctl函数用于控制epoll实例，EPOLL_CTL_ADD表示添加一个新的文件描述符到epoll实例中，*sockfd是要添加的文件描述符，&event是描述事件的结构体。
+
+    while (true) {
+        int nfds = epoll_wait(epollfd, events, 1, -1);  // -1 表示不设置超时时间，nfds存储了发生事件的文件描述符的数量（既然在epoll_ctl里设置了要监听的文件描述符，为什么还要判断：因为实际情况中，会同时监听多个文件描述符）
+        for (int i = 0; i < nfds; ++i) {
+            if (events[i].data.fd == *sockfd) {     // 遍历发生事件的文件描述符，判断是否是线程B的socket文件描述符
+                Data data;
+                recv(*sockfd, &data, sizeof(data), 0);
+                std::cout << "Received data from A - ID: " << data.id << ", Message: " << data.message << std::endl;
+            }
+        }
+    }
+}
+
+int main() {
+    int sv[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, sv);    // 使用socketpair函数创建了一个全双工的通信管道
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, threadB, &sv[1]);
+
+    Data data = {123, "Hello from A"};
+    send(sv[0], &data, sizeof(data), 0);
+
+    pthread_join(tid, NULL);
+    close(sv[0]);
+    close(sv[1]);
+
+    return 0;
+}
+
+```
 
