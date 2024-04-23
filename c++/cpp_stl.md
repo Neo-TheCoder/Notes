@@ -2302,20 +2302,20 @@ PS：编译器通过重载决议判断是否需要调用`const`版本的函数�
 ```cpp
 #if __cplusplus >= 201103L
   template<typename _Tp, typename _Alloc>   // 是vector的模板参数列表
-    template<typename... _Args>   // 是成员函数emplace_back的模板参数列表
+    template<typename... _Args>   // 是成员函数emplace_back的模板参数列表，因为emplace_back的模板类型参数和vector的模板类型参数可能不是同一个
 #if __cplusplus > 201402L
       typename vector<_Tp, _Alloc>::reference
 #else
       void  // c++11
 #endif
       vector<_Tp, _Alloc>::
-      emplace_back(_Args&&... __args)
+      emplace_back(_Args&&... __args)   // 万能引用，接收若干参数
       {
 	if (this->_M_impl._M_finish != this->_M_impl._M_end_of_storage)   // 空间足够
 	  {
 	    _GLIBCXX_ASAN_ANNOTATE_GROW(1);
 	    _Alloc_traits::construct(this->_M_impl, this->_M_impl._M_finish,
-				     std::forward<_Args>(__args)...);
+				     std::forward<_Args>(__args)...); // ？？？为什么能调用到_Tp的构造函数
 	    ++this->_M_impl._M_finish;
 	    _GLIBCXX_ASAN_ANNOTATE_GREW(1);
 	  }
@@ -2327,8 +2327,6 @@ PS：编译器通过重载决议判断是否需要调用`const`版本的函数�
       }
 #endif
 ```
-
-
 
 ##### 指定位置插入元素`insert`
 insert也是用于插入元素，跟push_back的区别在于insert是在**指定位置（迭代器）**插入新元素。
@@ -2583,8 +2581,6 @@ if(n!= 0){
     // 备用空间不足，显然需要配置额外的内存
     // 新长度是旧长度的两倍
     // 复制和赋值
-    
-
 
     }
 #ifdef 异常
@@ -2593,29 +2589,15 @@ if(n!= 0){
 #endif
 
 
-
-
-
 }
 
 
 
 
 }
-
-
-
 
 
 ```
-
-
-
-
-
-
-
-
 
 
 
