@@ -200,3 +200,103 @@ int main() {
 
 ```
 
+
+## socket pair && epoll
+```cpp
+#include<vector>
+#include <iostream>
+#include <sys/socket.h>
+#include <sys/epoll.h>
+#include <unistd.h>
+#include <cstring>
+
+# ifdef ABC
+typedef union epoll_data
+{
+  void *ptr;
+  int fd;
+  uint32_t u32;
+  uint64_t u64;
+} epoll_data_t;
+
+struct epoll_event
+{
+  uint32_t events;	/* Epoll events */
+  epoll_data_t data;	/* User data variable */
+} __EPOLL_PACKED;
+
+# endif
+
+struct Data {
+    int id;
+    char message[256];
+};
+
+void* threadB(void* arg) {
+    int* sockfd = (int*)arg;
+    struct epoll_event event;   // epoll_event类型用于描述事件：事件类型 / 事件数据
+    struct epoll_event events[1];
+    int epollfd = epoll_create(1);  // 创建epoll实例，监听的文件描述符数量设置为1
+    event.events = EPOLLIN; // EPOLLIN表示关注可读事件,文件描述符上有数据可读
+    event.data.fd = *sockfd;    // 设置了event结构体的data字段，存储了要监听的文件描述符，即socket
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, *sockfd, &event);     // 这行代码将线程B的socket文件描述符添加到epoll实例中进行监听
+    // epoll_ctl函数用于控制epoll实例，EPOLL_CTL_ADD表示添加一个新的文件描述符到epoll实例中，*sockfd是要添加的文件描述符，&event是描述事件的结构体。
+
+    while (true) {
+        int nfds = epoll_wait(epollfd, events, 1, -1);  // -1 表示不设置超时时间，nfds存储了发生事件的文件描述符的数量（既然在epoll_ctl里设置了要监听的文件描述符，为什么还要判断：因为实际情况中，会同时监听多个文件描述符）
+        for (int i = 0; i < nfds; ++i) {
+            if (events[i].data.fd == *sockfd) {     // 遍历发生事件的文件描述符，判断是否是线程B的socket文件描述符
+                Data data;
+                recv(*sockfd, &data, sizeof(data), 0);
+                std::cout << "Received data from A - ID: " << data.id << ", Message: " << data.message << std::endl;
+            }
+        }
+    }
+}
+
+int main() {
+    int sv[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, sv);    // 使用socketpair函数创建了一个全双工的通信管道
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, threadB, &sv[1]);
+
+    Data data = {123, "Hello from A"};
+    send(sv[0], &data, sizeof(data), 0);
+
+    pthread_join(tid, NULL);
+    close(sv[0]);
+    close(sv[1]);
+
+    return 0;
+}
+```
+
+
+# 关于调度和优先级
+`RR`和`FIFO`都只用于实时任务。
+
+## `RR（Round Robin）`调度算法：
+RR调度算法是一种循环调度算法，任务按照到达的顺序依次执行，（在`相同的进程优先级`的情况下，如果优先级高的话可以抢占）每个任务执行一个时间片后，会被放到`就绪队列`的末尾等待下一次调度。
+在实时任务中，RR调度算法可以确保每个任务都有机会被执行，并且避免了某个任务长时间占用CPU的情况。
+RR调度算法适用于需要`公平分配CPU时间`的实时任务，但可能无法满足对任务响应时间有严格要求的场景。
+
+## `FIFO（First In, First Out）`调度算法：
+FIFO调度算法是一种非抢占式调度算法，（在`相同的进程优先级`的情况下，如果优先级高的话可以抢占）任务按照到达的顺序依次执行，**直到任务完成或者被阻塞**。
+在实时任务中，FIFO调度算法可以`确保任务按照到达的顺序执行`，不会被其他任务打断，适用于对任务执行顺序有严格要求的场景。
+由于FIFO调度算法是`非抢占式`的，因此如果某个任务长时间运行或者阻塞，可能会导致其他任务无法及时执行，影响系统的实时性能。
+
+## `SCHED_OTHER`调度算法：
+`SCHED_OTHER`是Linux系统中的一种默认的普通进程调度策略，也称为`CFS（Completely Fair Scheduler，完全公平调度器）`。
+在`SCHED_OTHER`调度策略下，系统会根据`进程的优先级（nice值，范围是：-20~19）`和其他因素动态地调整进程的执行顺序，以实现对CPU资源的公平分配。
+具体来说，SCHED_OTHER调度策略采用了`时间片轮转`的方式，每个进程都会被分配一个时间片，当`时间片用完`或者`进程主动让出CPU`时，调度器会选择下一个就绪队列中的进程来执行。
+`优先级较高`的进程会获得更多的CPU时间，但并不会完全抢占CPU资源，而是通过`动态调整时间片长度`来实现公平调度。
+`SCHED_OTHER`调度策略适用于大多数普通进程，它能够在保证系统整体性能的同时，尽可能公平地分配CPU资源给各个进程。
+相比于实时调度策略（如SCHED_FIFO和SCHED_RR），SCHED_OTHER更注重系统的整体性能和公平性，适用于一般的后台任务和交互式应用程序。
+
+
+
+
+
+
+

@@ -203,8 +203,106 @@ FIFO也是一种特殊的文件类型，他主要的目的在解决多个程序�
 PS：一个Linux文件能不能被执行，与他的第一栏的十个属性有关， 与文件名根本一点关系也没有。并且，具有“可执行的权限”以及“具有可执行的程序码”是两回事。
 
 
+# 第十七章 认识系统服务（daemons）
+## 17.1 什么是`daemon`与服务(`service`)
+服务：常驻的程序（`daemon`），可提供一些系统或网络功能（`service`）
+
+一般来说，当我们以文字模式或图形模式 （非单人维护模式） 完整开机进入 Linux 主机后，系统已经提供我们很多的服务：包括打印服务、工作调度服务、邮件管理服务等等。
+
+### 17.1.1 早期`System V`（最初由AT&T开发并发布的Unix操作系统的版本）的`init`管理行为中 daemon 的主要分类
+对于SystemV这一版本而言，我们启动系统服务的管理方式被称为`SysV的init脚本程序`的处理方式。操作系统内核调用的第一个程序是`init`。然后 init 去唤起所有的系统所需要的服务，包括本机服务或网络服务。
+
+####  init 的管理机制的特色
+1. 服务的启动、关闭与观察等方式：
+所有的服务启动脚本通通放置于`/etc/init.d/`下面，基本上都是使用`bash shell script`所写成的脚本程序。
+当需要`启动、关闭、重新启动、观察状态`时， 可以通过如下的方式来处理：
+  - 启动：/etc/init.d/daemon start
+  - 关闭：/etc/init.d/daemon stop
+  - 重新启动：/etc/init.d/daemon restart
+  - 状态观察：/etc/init.d/daemon status
+
+2. 服务启动的分类
+  - 独立启动模式（stand alone）
+服务独立启动，该服务直接`常驻于内存`中。
+它提供本机或用户的服务行为，`反应速度快`。
+
+  - 总管程序（super daemon）
+由特殊的`xinetd`或`inetd`这两个总管程序提供`socket对应`或`port对应`的管理。
+当没有用户要求某socket或port时，所需要的服务是不会被启动的。
+若有用户要求时， `xinetd总管`才会去唤醒相对应的服务程序。
+当该要求结束时，这个服务也会被结束掉。也就是**按需启动**。
+因为通过`xinetd`所总管，因此这个家伙就被称为`super daemon`。
+好处是可以通过`super daemon`这一程序来进行服务的时程、连线需求等的控制。
+缺点是唤醒服务需要一点`时间的延迟`。
+
+3. 服务的相依性问题
+服务是可能会有相依性的。
+例如，你要启动网络服务，但是系统没有网络， 那怎么可能可以唤醒网络服务呢？
+如果你需要连线到外部取得认证服务器的连线，但该连线需要另一个A服务的需求，问题是，A服务没有启动， 因此，你的认证服务就不可能会成功启动的！
+这就是所谓的服务相依性问题。init 在管理员自己**手动**处理这些服务时，是**没有办法**协助相依服务的唤醒的！
+
+4. 执行等级的分类
+init 是开机后内核主动调用的，然后 init 可以根据`使用者自订`的`执行等级`（runlevel） 来唤醒不同的服务，以进入不同的操作界面。
+基本上 Linux提供 7 个执行等级，其中比较重要的是：
+1）单人维护模式
+3）纯文本模式
+5）文字加图形界面
+而各个执行等级的启动脚本是通过`/etc/rc.d/rc[0-6]/SXXdaemon`链接到`/etc/init.d/daemon`。
+链接文件名 （SXXdaemon） 的功能为： S为启动该服务，XX是数字，为启动的顺序。由于有 SXX 的设置，因此在开机时可以`“依序执行”`所有需要的服务， 同时也能解决相依服务的问题。这点与管理员自己手动处理不太一样就是了。
+
+5. 制定执行等级默认要启动的服务
+若要创建如上提到的 SXXdaemon 的话，不需要管理员手动创建链接文件，通过如下的指令可以来处理默认启动、默认不启动、观察默认启动否的行为：
+  - 默认要启动： chkconfig daemon on
+  - 默认不启动： chkconfig daemon off
+  - 观察默认为启动否： chkconfig --list daemon
+
+6. 执行等级的切换行为
+当你要从纯命令行（runlevel 3）切换到图形界面（runlevel 5）， 不需要手动启动、关闭该执行等级的相关服务，只要“ init 5 ”即可切换，init 这小子
+会主动去分析`/etc/rc.d/rc[3 & 5].d/`这两个目录内的脚本， 然后启动转换 runlevel 中需要的服务，从而就完成整体的 runlevel 切换。
+
+#### 总结
+重要的指令包括 daemon 本身自己的脚本（`/etc/init.d/daemon`） 、`xinetd`这个特殊的总管程序 （`super daemon`）、设置默认开机启动的`chkconfig`， 以及会影响到执行等级的`init N`等。虽然 CentOS 7 已经不使用 init 来管理服务了，不过因为考虑到某些脚本没有办法直接塞入 systemd 的处理，因此这些脚本还是被保留下来，
 
 
+### 17.1.2 `systemd`使用的`unit分类`
+从 CentOS 7.x 以后，Red Hat 系列的 distribution 放弃沿用多年的 System V 开机启动服务的流程，就是前一小节提到的 init 启动脚本的方法，改用 systemd 这个启动服务管理机制。
+#### 使用`systemd`的优点
+1. 平行处理所有服务 加速开机流程
+旧的 init 启动脚本是串行，即便是不存在依赖关系的服务也是需要等待前面的完成才能进行。
+由于目前我们的硬件主机系统与操作系统几乎都支持多核心架构了，可以支持没有依赖关系的服务同时启动。
+
+2. 一经要求就回应的 on-demand 启动方式
+systemd全部就是仅有一只systemd服务搭配`systemctl`指令来处理，无须其他额外的指令来支持。
+不像 systemV 还要 init,chkconfig, service... 等等指令。 此外， systemd 由于常驻内存，因此任何要求 （on-demand） 都可以立即处理后续的 daemon 启动的任务，响应迅速。
+
+3. 服务相依性的自我检查
+由于 systemd 可以自订服务相依性的检查，因此如果 B 服务是架构在 A 服务上面启动的，那当你在没有启动 A 服务的情况下仅手动启动 B 服务时，systemd 会**自动**帮你启动 A 服务喔！这样就可以免去管理员得要一项一项服务去分析的麻烦～（如果读者不是新手，应该会有印象，当你没有启动网络， 但却启动 NIS/NFS时，那个开机时的 timeout 甚至可达到 10~30 分钟...）
+
+4. 依 daemon 功能分类
+systemd 旗下管理的服务非常多。
+首先 systemd 先定义所有的服务为一个`服务单位 （unit）`，并将该unit 归类到不同的服务类型 （type） 去。 
+旧的 init 仅分为`stand alone`与`super daemon`实在不够看，systemd 将服务单位 （unit） 区分为：
+`service`, `socket`, `target`, `path`, `snapshot`, `timer`等多种不同的类型（type）， 方便管理员的分类与记忆。
+
+5. 将多个 daemons 集合成为一个群组
+ 如同 systemV 的 init 里头有个 runlevel 的特色，systemd 亦将许多的功能集合成为一个所谓的 target 项目，这个项目主要在设计操作环境的创建， 所以是集合了许多的 daemons，亦即是**执行某个 target 就是执行好多个daemon**的意思！
+
+6. 向下相容旧有的 init 服务脚本
+基本上，systemd是可以相容于init的启动脚本的，因此，旧的 init 启动脚本也能够通过 systemd 来管理，只是更进阶的 systemd 功能就没有办法支持就是了。
+
+#### 不过`systemd`也是有些地方无法完全取代`init`的
+1. 在 runlevel 的对应上，大概仅有 runlevel 1, 3, 5 有对应到 systemd 的某些 target 类型而已，没有全部对应
+
+2. 全部的 systemd 都用 systemctl 这个管理程序管理，而 systemctl 支持的语法有限制，不像 /etc/init.d/daemon 就是纯脚本可以自订参数，systemctl 不可自订参数。
+
+3. 如果某个服务启动是管理员自己手动执行启动，而不是使用 systemctl 去启动的 （例如你自己手动输入 crond 以启动 crond 服务），那么 systemd 将无法侦测到该服务，而无法进一步管理。
+
+4. systemd 启动过程中，无法与管理员通过 standard input 传入讯息！因此，自行撰写systemd 的启动设置时，务必要取消互动机制～（连通过启动时传进的标准输入讯息也要避免！）
+
+
+## 17.2 通过`systemctl`管理服务
+基本上， systemd 这个启动服务的机制，主要是通过一只名为`systemctl`的指令来处理的！
+跟以前systemV需要 service / chkconfig / setup / init 等指令来协助不同， systemd 就是仅有systemctl 这个指令来处理而已。
 
 
 
@@ -220,10 +318,10 @@ PS：一个Linux文件能不能被执行，与他的第一栏的十个属性有�
 
 #### 系统的开机过程
 1. 载入 BIOS 的硬件信息与进行自我测试，并依据设置取得第一个可开机的设备；
-2. 读取并执行第一个开机设备内`MBR`（Master Boot Record, 主要开机记录区）的 boot Loader （亦即是 grub2, spfdisk 等程序）；
+2. 读取并执行第一个开机设备内`MBR`（Master Boot Record, 主要开机记录区）的`boot Loader`（亦即是 grub2, spfdisk 等程序）；
 3. 依据boot loader的设置载入`Kernel`，Kernel会开始侦测硬件与载入驱动程序；
-4. 在硬件驱动成功后，Kernel会主动调用 `systemd` 程序，并以 default.target 流程开机；
-    systemd 执行 `sysinit.target` 初始化系统及 basic.target 准备操作系统；
+4. 在硬件驱动成功后，Kernel会主动调用 `systemd` 程序，并以`default.target`流程开机；
+    systemd 执行 `sysinit.target` 初始化系统及`basic.target`准备操作系统；
     systemd 启动 `multi-user.target` 下的本机与服务器服务；
     systemd 执行 `multi-user.target` 下的 `/etc/rc.d/rc.local` 文件；
     systemd 执行 `multi-user.target` 下的 getty.target 及登陆服务；
