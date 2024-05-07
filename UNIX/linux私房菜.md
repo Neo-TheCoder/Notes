@@ -265,44 +265,111 @@ init 是开机后内核主动调用的，然后 init 可以根据`使用者自�
 
 
 ### 17.1.2 `systemd`使用的`unit分类`
-从 CentOS 7.x 以后，Red Hat 系列的 distribution 放弃沿用多年的 System V 开机启动服务的流程，就是前一小节提到的 init 启动脚本的方法，改用 systemd 这个启动服务管理机制。
+从 CentOS 7.x 以后，Red Hat 系列的 distribution 放弃沿用多年的 System V 开机启动服务的流程，就是前一小节提到的 init 启动脚本的方法，改用`systemd`这个启动服务管理机制。
+
 #### 使用`systemd`的优点
 1. 平行处理所有服务 加速开机流程
-旧的 init 启动脚本是串行，即便是不存在依赖关系的服务也是需要等待前面的完成才能进行。
-由于目前我们的硬件主机系统与操作系统几乎都支持多核心架构了，可以支持没有依赖关系的服务同时启动。
+旧的 init 启动脚本是串行，即便是**不存在依赖关系的服务**也是需要等待前面的完成才能进行。
+由于目前我们的硬件主机系统与操作系统几乎都支持**多核心架构**了，可以支持没有依赖关系的服务同时启动。
 
-2. 一经要求就回应的 on-demand 启动方式
+2. 一经要求就回应的`on-demand`启动方式
 systemd全部就是仅有一只systemd服务搭配`systemctl`指令来处理，无须其他额外的指令来支持。
-不像 systemV 还要 init,chkconfig, service... 等等指令。 此外， systemd 由于常驻内存，因此任何要求 （on-demand） 都可以立即处理后续的 daemon 启动的任务，响应迅速。
+不像 systemV 还要 init, chkconfig, service... 等等指令。
+此外，systemd由于**常驻内存**，因此任何要求（on-demand）都可以立即处理后续的 daemon 启动的任务，响应迅速。
 
 3. 服务相依性的自我检查
-由于 systemd 可以自订服务相依性的检查，因此如果 B 服务是架构在 A 服务上面启动的，那当你在没有启动 A 服务的情况下仅手动启动 B 服务时，systemd 会**自动**帮你启动 A 服务喔！这样就可以免去管理员得要一项一项服务去分析的麻烦～（如果读者不是新手，应该会有印象，当你没有启动网络， 但却启动 NIS/NFS时，那个开机时的 timeout 甚至可达到 10~30 分钟...）
+由于 systemd 可以自订服务相依性的检查，因此如果 B 服务是架构在 A 服务上面启动的，那当你在没有启动 A 服务的情况下仅手动启动 B 服务时，systemd 会**自动**帮你启动 A 服务！
+这样就可以免去管理员得要一项一项服务去分析的麻烦（例如：当你没有启动网络， 但却启动NIS/NFS时，那个开机时的 timeout 甚至可达到 10~30 分钟...）
 
 4. 依 daemon 功能分类
 systemd 旗下管理的服务非常多。
-首先 systemd 先定义所有的服务为一个`服务单位 （unit）`，并将该unit 归类到不同的服务类型 （type） 去。 
+首先 systemd 先定义所有的服务为一个`服务单位 （unit）`，并将该unit归类到不同的服务类型（type）去。 
 旧的 init 仅分为`stand alone`与`super daemon`实在不够看，systemd 将服务单位 （unit） 区分为：
 `service`, `socket`, `target`, `path`, `snapshot`, `timer`等多种不同的类型（type）， 方便管理员的分类与记忆。
 
 5. 将多个 daemons 集合成为一个群组
- 如同 systemV 的 init 里头有个 runlevel 的特色，systemd 亦将许多的功能集合成为一个所谓的 target 项目，这个项目主要在设计操作环境的创建， 所以是集合了许多的 daemons，亦即是**执行某个 target 就是执行好多个daemon**的意思！
+如同 systemV 的 init 里头有个runlevel的特色，systemd亦将许多的功能集合成为一个所谓的target项目，这个项目主要在设计操作环境的创建，所以是集合了许多的 daemons，亦即是**执行某个 target 就是执行好多个daemon**的意思！
+
+PS："runlevel"（运行级别）是一个重要的概念，用于表示系统的不同状态或模式。
+每个运行级别都对应着一组特定的系统服务和功能，系统可以根据需要切换不同的运行级别来实现不同的功能和行为。
+SystemV的init系统中通常定义了多个运行级别，比如0到6级别，每个级别都有特定的含义和对应的服务。例如，`运行级别3`可能表示`多用户模式`，包含了`网络服务和图形界面`；而`运行级别1`可能表示`单用户模式`，只包含`最基本的系统服务`。
+通过在SystemV的init系统中设置不同的运行级别，可以实现系统在不同场景下的灵活切换和配置。比如在维护模式下可以选择单用户模式（runlevel 1），在正常使用时可以选择多用户模式（runlevel 3或5）。每个运行级别都定义了系统启动时需要启动或关闭的服务，从而实现了系统在不同状态下的管理和控制。
 
 6. 向下相容旧有的 init 服务脚本
 基本上，systemd是可以相容于init的启动脚本的，因此，旧的 init 启动脚本也能够通过 systemd 来管理，只是更进阶的 systemd 功能就没有办法支持就是了。
 
 #### 不过`systemd`也是有些地方无法完全取代`init`的
 1. 在 runlevel 的对应上，大概仅有 runlevel 1, 3, 5 有对应到 systemd 的某些 target 类型而已，没有全部对应
-
-2. 全部的 systemd 都用 systemctl 这个管理程序管理，而 systemctl 支持的语法有限制，不像 /etc/init.d/daemon 就是纯脚本可以自订参数，systemctl 不可自订参数。
-
+2. 全部的 systemd 都用 systemctl 这个管理程序管理，而 systemctl 支持的语法有限制，不像 /etc/init.d/daemon 就是纯脚本可以自订参数，systemctl 不可自订参数。灵活性降低。
 3. 如果某个服务启动是管理员自己手动执行启动，而不是使用 systemctl 去启动的 （例如你自己手动输入 crond 以启动 crond 服务），那么 systemd 将无法侦测到该服务，而无法进一步管理。
-
 4. systemd 启动过程中，无法与管理员通过 standard input 传入讯息！因此，自行撰写systemd 的启动设置时，务必要取消互动机制～（连通过启动时传进的标准输入讯息也要避免！）
+
+不过，光是`同步启动服务脚本`这个功能就可以节省你很多开机的时间。同时 systemd 还有很多特殊的服务类型 （type） 可以提供更多有趣的功能
+
+
+#### systemd管理的`unit`
+1. systemd 的配置文件放置目录
+基本上， systemd 将过去所谓的 daemon 执行脚本通通称为一个服务单位 （unit），而每种服务单位依据功能来区分时，就分类为不同的类型 （type）。
+基本的类型有包括`系统服务`、`数据监听与交换的插槽档服务` （socket）、`储存系统状态的快照类型`、`提供不同类似执行等级分类的操作环境（target）`等等
+相关配置文件都在以下目录：
+/usr/lib/systemd/system/
+每个服务最主要的`启动脚本设置`，有点类似以前的`/etc/init.d`下面的文件
+
+/run/systemd/system/
+系统执行过程中所产生的服务脚本，这些脚本的`优先序`要 比`/usr/lib/systemd/system/`高
+
+/etc/systemd/system/
+管理员依据`主机系统的需求`所创建的执行脚本，其实这个目录有点像以前`/etc/rc.d/rc5.d/Sxx`之类的功能
+执行优先序又比`/run/systemd/system/`高
+
+也就是说，到底系统开机会不会执行某些服务其实是看`/etc/systemd/system/`下面的设置，所以该目录下面就是一大堆链接文件。
+而**实际执行的 systemd 启动脚本配置文件**， 其实都是放置在`/usr/lib/systemd/system/`下面的。
+因此如果你想要修改某个服务启动的设置，应该要去`/usr/lib/systemd/system/`下面修改才对！
+`/etc/systemd/system/`仅是链接到正确的执行脚本配置文件而已。所以想要看执行脚本设置，应该就得要到 /usr/lib/systemd/system/ 下面去查阅才对
+
+PS：/etc/systemd/system/目录中包含的是针对系统本地特定配置的符号链接。这些链接文件实际上指向/usr/lib/systemd/system/目录下的真实服务配置文件。
+所以，这个目录下的设置决定了系统开机是否执行某些服务，它提供了本地系统管理者修改和定制服务启动行为的入口。
+而实际的 systemd 启动脚本配置文件则位于/usr/lib/systemd/system/目录下。这些文件是系统所使用的默认配置，由软件包管理器提供和维护。一般情况下，**推荐在/etc/systemd/system/目录下创建或修改相应的符号链接，而不建议直接修改这些文件，因为它们可能会在软件包更新时被覆盖**。
+
+
+2. systemd 的 unit 类型分类说明
+/usr/lib/systemd/system/以下的数据如何区分上述所谓的不同的类型（type）呢？
+答案是根据扩展名（.sevice、.target）
+其实，选择执行multi-user.target 就是执行一堆其他 .service 或/及 .socket 之类的服务。
+
+
+
+
+| 文件扩展名 | 主要服务功能 |
+|  ----  | ----  |
+| .service  | 单元格 |
+| .socket  | 单元格 |
+| .target  | 单元格 |
+| .mount .automount  | 单元格 |
+| .path  | 单元格 |
+| .timer | 单元格 |
+
+
+
+
+
+
+
+
+
+
+
 
 
 ## 17.2 通过`systemctl`管理服务
 基本上， systemd 这个启动服务的机制，主要是通过一只名为`systemctl`的指令来处理的！
 跟以前systemV需要 service / chkconfig / setup / init 等指令来协助不同， systemd 就是仅有systemctl 这个指令来处理而已。
+
+
+
+
+
+
 
 
 
@@ -331,9 +398,6 @@ PS：`MBR`是磁盘最前面可安装boot loader的部分
 
 ### 19.1.2 BIOS,boot loader与kernel载入
 在个人计算机架构下，你想要启动整部系统首先就得要让系统去载入`BIOS`（Basic Input Output System），并**通过BIOS程序去载入CMOS的信息**，并且借由CMOS内的设置值取得主机的各项硬件设置，例如：CPU与周边设备的沟通频率啊、开机设备的搜寻顺序啊、硬盘的大小与类型啊、系统时间啊、各周边总线的是否启动Plug and Play（PnP, 随插即用设备）啊、各周边设备的I/O位址啊、以及与CPU沟通的IRQ岔断等等的信息。
-
-
-
 
 
 
