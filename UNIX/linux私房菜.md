@@ -333,37 +333,93 @@ PS：/etc/systemd/system/目录中包含的是针对系统本地特定配置的�
 
 
 2. systemd 的 unit 类型分类说明
-/usr/lib/systemd/system/以下的数据如何区分上述所谓的不同的类型（type）呢？
-答案是根据扩展名（.sevice、.target）
-其实，选择执行multi-user.target 就是执行一堆其他 .service 或/及 .socket 之类的服务。
-
-
-
+`/usr/lib/systemd/system/`以下的数据如何区分上述所谓的不同的类型（type）呢？
+--> 答案是根据扩展名（.sevice、.target）来判断
 
 | 文件扩展名 | 主要服务功能 |
 |  ----  | ----  |
-| .service  | 单元格 |
-| .socket  | 单元格 |
-| .target  | 单元格 |
-| .mount .automount  | 单元格 |
-| .path  | 单元格 |
-| .timer | 单元格 |
-
-
-
-
-
-
-
-
-
-
-
-
+| `.service`  | 一般服务类型 （service unit）：主要是系统服务，包括服务器本身所需要的本机服务以及网络服务都是！比较经常被使用到的服务大多是这种类型！|
+| `.socket`  | 内部程序数据交换的插槽服务 （socket unit）：主要是 IPC （Inter-process communication） 的传输讯息插槽档 （socket file） 功能。 这种类型的服务通常在监控讯息传递的插槽档，当有通过此插槽档传递讯息来说要链接服务时，就依据当时的状态将该用户的要求传送到对应的daemon， 若 daemon 尚未启动，则启动该 daemon 后再传送用户的要求。使用 socket 类型的服务一般是比较不会被用到的服务，因此在开机时通常会稍微延迟启动的时间 （因为比较没有这么常用嘛！）。一般用于本机服务比较多，例如我们的图形界面很多的软件都是通过 socket 来进行本机程序数据交换的行为。 （这与早期的 xinetd 这个 super daemon 有部份的相似喔！） |
+| `.target`  | 执行环境类型 （target unit）：其实是一群 unit 的集合，例如上面表格中谈到的 multi-user.target 其实就是一堆服务的集合～也就是说， 选择执行multi-user.target 就是执行一堆其他 .service 或/及 .socket 之类的服务就是了！ |
+| `.mount` `.automount`  | 文件系统挂载相关的服务 （automount unit / mount unit）：例如来自网络的自动挂载、NFS 文件系统挂载等与文件系统相关性较高的程序管理。 |
+| `.path`  | 侦测特定文件或目录类型 （path unit）：某些服务需要侦测某些特定的目录来提供伫列服务，例如最常见的打印服务，就是通过侦测打印伫列目录来启动打印功能！ 这时就得要.path 的服务类型支持了！ |
+| `.timer` | 循环执行的服务 （timer unit）：这个东西有点类似 anacrontab 喔！不过是由 systemd 主动提供的，比 anacrontab 更加有弹性！ |
 
 ## 17.2 通过`systemctl`管理服务
 基本上， systemd 这个启动服务的机制，主要是通过一只名为`systemctl`的指令来处理的！
-跟以前systemV需要 service / chkconfig / setup / init 等指令来协助不同， systemd 就是仅有systemctl 这个指令来处理而已。
+跟以前systemV需要 service / chkconfig / setup / init等指令来协助不同，systemd只有一个`systemctl`命令
+
+### 17.2.1 通过 systemctl 管理单一服务 （service unit） 的启动/开机启动与观察状态
+一般来说，服务的启动有两个阶段：
+1. `开机的时候`设置要不要启动这个服务
+2. 你`现在`要不要启动这个服务
+
+```sh
+[root@study ~]# systemctl [command] [unit]
+command 主要有：
+start ：立刻启动后面接的 unit
+stop ：立刻关闭后面接的 unit
+restart ：立刻关闭后启动后面接的 unit，亦即执行 stop 再 start 的意思
+reload ：不关闭后面接的 unit 的情况下，重新载入配置文件，让设置生效
+enable ：设置下次开机时，后面接的 unit 会被启动
+disable ：设置下次开机时，后面接的 unit 不会被启动
+status ：目前后面接的这个 unit 的状态，会列出有没有正在执行、开机默认执行否、登录等信息等！
+is-active ：目前有没有正在运行中
+is-enable ：开机时有没有默认要启用这个 unit
+
+
+PS：systemctl status命令是systemd系统管理器的一个命令，用于查看系统中某个服务的状态信息。通过执行systemctl status命令，可以获取服务的当前状态、最近一次状态变化的时间、服务所在的进程ID、服务的主要配置文件路径、服务所在的CGroup等信息。此外，该命令还可以显示服务的日志信息，以便管理员进行故障排查和问题分析。通常，管理员可以在执行systemctl status命令时，指定服务的名称或者使用通配符来查看所有服务的状态信息。总之，systemctl status命令是一个非常有用的工具，可以帮助管理员快速了解系统中各个服务的状态，从而更好地管理和维护系统。
+
+
+# 范例一：看看目前 atd 这个服务的状态为何？
+[root@study ~]# systemctl status atd.service
+atd.service - Job spooling tools
+Loaded: loaded （/usr/lib/systemd/system/atd.service; enabled）
+Active: active （running） since Mon 2015-08-10 19:17:09 CST; 5h 42min ago
+Main PID: 1350 （atd）
+CGroup: /system.slice/atd.service
+└─1350 /usr/sbin/atd -f
+Aug 10 19:17:09 study.centos.vbird systemd[1]: Started Job spooling tools.
+# 重点在第二、三行喔～
+# Loaded：这行在说明，开机的时候这个 unit 会不会启动，enabled 为开机启动，disabled 开机不会启动
+# Active：现在这个 unit 的状态是正在执行 （running） 或没有执行 （dead）
+# 后面几行则是说明这个 unit 程序的 PID 状态以及最后一行显示这个服务的登录文件信息！
+# 登录文件信息格式为：“时间” “讯息发送主机” “哪一个服务的讯息” “实际讯息内容”
+# 所以上面的显示讯息是：这个 atd 默认开机就启动，而且现在正在运行的意思！
+
+# 范例二：正常关闭这个 atd 服务
+[root@study ~]# systemctl stop atd.service
+[root@study ~]# systemctl status atd.service
+atd.service - Job spooling tools
+Loaded: loaded （/usr/lib/systemd/system/atd.service; enabled）
+Active: inactive （dead） since Tue 2015-08-11 01:04:55 CST; 4s ago
+Process: 1350 ExecStart=/usr/sbin/atd -f $OPTS （code=exited, status=0/SUCCESS）
+Main PID: 1350 （code=exited, status=0/SUCCESS）
+Aug 10 19:17:09 study.centos.vbird systemd[1]: Started Job spooling tools.
+Aug 11 01:04:55 study.centos.vbird systemd[1]: Stopping Job spooling tools...
+Aug 11 01:04:55 study.centos.vbird systemd[1]: Stopped Job spooling tools.
+# 目前这个 unit 下次开机还是会启动，但是现在是没在运行的状态中！同时，
+# 最后两行为新增加的登录讯息，告诉我们目前的系统状态喔！
+```
+
+不应该使用 kill 的方式来关掉一个正常的服务喔！否则 systemctl 会无法继续监控该服务的！ 那就比较麻烦。
+
+
+将 cups 服务整个关闭：
+```sh
+[root@study ~]# systemctl stop cups.service
+[root@study ~]# systemctl disable cups.service
+rm '/etc/systemd/system/multi-user.target.wants/cups.path'
+rm '/etc/systemd/system/sockets.target.wants/cups.socket'
+rm '/etc/systemd/system/printer.target.wants/cups.service'
+# 说明三个链接文件之间存在依赖关系
+```
+
+在关闭了cups.service的情况下，启动cups.socket，cups.service也会一并唤醒
+
+
+### 17.2.2 通过 systemctl 观察系统上所有的服务
+
 
 
 
@@ -398,8 +454,4 @@ PS：`MBR`是磁盘最前面可安装boot loader的部分
 
 ### 19.1.2 BIOS,boot loader与kernel载入
 在个人计算机架构下，你想要启动整部系统首先就得要让系统去载入`BIOS`（Basic Input Output System），并**通过BIOS程序去载入CMOS的信息**，并且借由CMOS内的设置值取得主机的各项硬件设置，例如：CPU与周边设备的沟通频率啊、开机设备的搜寻顺序啊、硬盘的大小与类型啊、系统时间啊、各周边总线的是否启动Plug and Play（PnP, 随插即用设备）啊、各周边设备的I/O位址啊、以及与CPU沟通的IRQ岔断等等的信息。
-
-
-
-
 

@@ -1,3 +1,22 @@
+# 一些关键逻辑
+当someipd收到控制信息，调用相应的Handler
+
+client app通过IPC向someipd发送两种消息，其发送的时机是这样的：
+# find service
+## client app
+StartFindService() -> ... -> send control message
+
+## someipd
+OnControlMessage()
+
+# request service
+## client app
+proxy obejct creation -> ... -> Proxy(), and then Preconstruct() -> CreateBackend() -> CreateClient() -> RequestService(), send control message
+
+## someipd
+OnControlMessage() -> RequestService() (当`IsOffered()`为true，才执行往下执行) -> Connect() -> ConnectTCP()，当socket可写，触发回调，改变状态机状态，设置为Connected
+
+
 # 关于someip_config.json的解析
 ```cpp
 /*!
@@ -3433,6 +3452,26 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 所以，可以认为：当proxy端连续发来多个相同类型的method request时，skeleton端每收到一个，就创建一个相应的任务
 
 
+
+# Proxy端初始化
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Proxy端接收数据
 
 通过`Unix Domain Socket`和Someipd通信，接收来自skeleton的消息
@@ -3987,8 +4026,6 @@ PS：使用  **epoll_wait**  函数的一般步骤如下：
 
 
 在  **Reactor1**  的  **Preconstruct**  ()函数中：
-
-
 
 有调用  **epoll_create1**  ()
 
