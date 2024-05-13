@@ -131,18 +131,6 @@ _Res function<_Res(_ArgTypes...)>::operator()(_ArgTypes... __args) const
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 # C++函数调用的本质
 函数调用背后是栈帧（***stack frame***）的建立（与操作系统平台以及编译器的实现有关）
 
