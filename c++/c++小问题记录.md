@@ -1537,9 +1537,9 @@ int main(){
 
 # `std::unique_ptr`
 `std::unique_ptr`的`release`和`reset`函数都是用于管理指针所有权的方法
-- `release`: `release`函数会释放`std::unique_ptr`对指针的所有权，返回指针并将`std::unique_ptr`置空。
+- `release`: `release`函数会释放`std::unique_ptr`对指针的所有权，返回`裸指针`并将`std::unique_ptr`置空。
 这在需要将指针传递给其他代码或数据结构所有权转移的情况下很有用，避免出现重复释放内存的问题。
 
 - `reset`: `reset`函数用于重置`std::unique_ptr`，可以将其指向新的对象或者置空。
-如果`std::unique_ptr`不再需要管理当前指针，可以使用`reset`将其置空，从而释放当前对象并避免内存泄漏。
+如果`std::unique_ptr`不再需要管理当前指针，可以使用`reset`将其置空（调用析构），从而释放当前对象并避免内存泄漏。
 如果需要`std::unique_ptr`管理新的对象，也可以使用`reset`来实现。

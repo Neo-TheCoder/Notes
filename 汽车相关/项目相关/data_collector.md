@@ -4,7 +4,7 @@ Someip_recorder将兼容当前方案并扩展出适合量产车的方案，默�
 data_collector仅在Product场景
 当someip_recorder收到trigger触发消息，合并mcap文件，通知data collector上云
 
-## data_collector三大方案
+## data_collector三大阶段
 1. 启动阶段
 一些初始化操作，解析配置，建立通信连接，监听someip_recorder状态
 
@@ -14,7 +14,6 @@ data_collector仅在Product场景
 
 3. 退出阶段
 延迟下电（why？）
-
 
 ## someip recorder模块细节
 ### 概览
@@ -37,10 +36,10 @@ DDS消息落盘管理
 
 所有功能模块主要包含两个线程，someip_recorder_thread、dds_control_report_thread
 1. someip_recorder_thread
-主要负责dds数据收集、数据落盘、trigger处理等
+主要负责`dds数据收集`、`数据落盘`、`trigger处理`等
 
 2. dds_control_report_thread
-主要负责control消息接收、状态汇报等
+主要负责`control消息接收`、`状态汇报`等
 
 
 ### 参数解析、存储管理模块param_mgr
@@ -128,19 +127,23 @@ Someip_recorder对接收到的trigger进行基本的有效性判断，当前状�
 各个状态的广播周期需要客户定义，广播的时候只广播当前的状态信息。
 
 
-
 ## data collector模块细节
-DataCollector作为单独的进程，需要提供根据该模型开发的数据采集及上云功能的源代码，跟someip recorder的区别是，不再使用脚本加jinja2模板的方式提供源代码。
+DataCollector作为单独的进程，需要提供根据该模型开发的数据采集及上云功能的源代码，跟someip recorder的区别是，**不再使用脚本加jinja2模板的方式提供源代码**。
 
-管理模块dc_mgr负责初始化和反初始化配置解析模块、监听模块、收集模块，创建数据收集、数据处理、数据上传线程，创建线程间交互的数据结构，进程退出时销毁线程，关闭打开的文件描述符；
+`管理模块dc_mgr`负责初始化和反初始化配置解析模块、监听模块、收集模块，创建数据收集、数据处理、数据上传线程，创建线程间交互的数据结构，进程退出时销毁线程，关闭打开的文件描述符；
+
 `配置解析模块`负责解析yaml文件中模块配置信息，供管理模块使用，解析yaml文件中的收集文件的详细信息，供收集模块使用；
-`监听模块`负责监听来自recorder的收集通知，新起线程执行数据收集任务，同时监听recorder的完成通知，通过交互通知收集模块通信数据已收集；
-`收集模块`负责根据解析模块解析出的参数、监听模块的输入、管理模块创建的线程与数据结构，实现数据的收集功能，同时依赖压缩模块，实现数据的处理；
 
+`监听模块`负责监听来自recorder的收集通知，**新起线程执行数据收集任务**，同时监听recorder的完成通知，通过交互通知收集模块通信数据已收集；
+
+`收集模块`负责：
+根据解析模块解析出的参数、监听模块的输入、管理模块创建的线程与数据结构，实现数据的收集功能，同时依赖压缩模块，实现数据的处理；
 
 ### 数据收集管理模块 dc_mgr
 负责其他模块的生命周期管理。
-如内部通信模块的建立，外部通信模块的建立等各个模块的初始化过程以及接收退出信号对各个模块的反初始化处理。内部通信资源是与someip_recorder进行的someip通信，用于接收someip_recorder的状态通知；外部通信资源是与云端通信的链路，将利用车云通信的sdk接口；
+如内部通信模块的建立，外部通信模块的建立等各个模块的初始化过程以及接收退出信号对各个模块的反初始化处理。
+内部通信资源是与someip_recorder进行的someip通信，用于接收someip_recorder的状态通知；
+外部通信资源是与云端通信的链路，将利用车云通信的sdk接口；
 
 #### 启动流程
 ##### 1. 初始化配置解析模块
@@ -180,27 +183,35 @@ dc配置解析模块 param_mgr主要有两个功能：
 
 ### 数据收集模块 collector
 负责收集someip_recorder数据及其它数据，如版本文件，设备信息文件，标定文件，camera数据，日志文件等。
-数据包括`通信数据`和`非通信数据`。
+！！！数据包括`通信数据`和`非通信数据`。
 - `通信数据`是`someip_recorder录制的数据`；
 - `非通信数据`是`版本文件，设备信息文件，标定文件，camera数据，日志文件`；
-在确认数据收集结束后转发内部信号，触发数据打包、数据压缩、数据上云、原始数据删除等处理。
-在trigger来源方面，`auto_trigger`与`manual_trigger`不分优先级，由recorder模块将trigger统一处理。DC模块无法感知trigger的差异。
+在确认数据收集结束后转发内部信号，触发：数据打包、数据压缩、数据上云、原始数据删除等处理。
+在trigger来源方面，`auto_trigger`与`manual_trigger`不分优先级，**由recorder模块将trigger统一处理**。
+**DC模块无法感知trigger的差异。**
 数据的收集和数据的处理分为两个线程处理。
 对于`日志文件`，需要各模块对日志内容的质量、日志的刷写频度、大小做一定程度的要求，通过采集的日志结合数据回放来定位问题。
 收集的日志可以根据trigger的时间戳收集当前日志及上一份压缩日志。
 
 #### 流程
+PS：量产限定
 执行步骤如下：
 1. 数据收集（配备线程池）
-    a. `数据收集任务类`根据触发时间戳在ufs_disk中创建指定目录，如在/smart_data/col/下创建data_bag_yyyymmdd_hhmmss目录。
+    a. `数据收集任务类`根据`触发时间戳`在ufs_disk中创建指定目录，如在`/smart_data/col/`下创建`data_bag_yyyymmdd_hhmmss目录`（精确到秒）。
 
     b. 先并行收集`非通信文件`
         i. 根据`main_trigger_id``查询DcMapping对象`，返回需要回传的数据类型，向线程池提交需要执行的任务，等待所有任务执行完毕。
-        ii.	从全局变量中获取VIN码，写入到/smart_data/col/data_bag_yyyymmdd_hhmmss/device文件中；
+        其中`DcMapping`类对象是param_mgr模块持有的
+        它解析dc_mapping.yaml文件，将triggerId与对应数据类型存储到unordered map中去，并提供查询接口能通过triggerId返回需要收集的数据类型
+        而triggerID和某一场景相关（如急加速、司机紧急制动等，这些属于`auto trigger`；而`上位机手动录制trigger`属于`pc_trigger`；而`云端手动录制trigger`，属于`cloud_trigger`），而该场景对应若干数据类型
+        由此可见，trigger是用于`通知recorder，要进行数据回传了`的信号
+
+        ii.	从全局变量中获取VIN码，写入到`/smart_data/col/data_bag_yyyymmdd_hhmmss/device`文件中；
 
     c. 再查询`通信文件`
-        i. 由于recorder需要在收到trigger之后还需要采集5s的数据，recorder在落盘完成之后会发出`trigger status`为`“trigger finish”`的通知给到dc模块， 此时，通知数据收集模块collector，通信数据收集完毕；
+        i. 由于recorder需要**在收到trigger之后还需要采集5s的数据**，recorder在落盘完成之后，会发出`trigger status`为`“trigger finish”`的通知给到dc模块， 此时，通知`数据收集模块collector`，通信数据收集完毕；
         dc判断其他非通信数据是否已经拷贝完毕，如果已经拷贝完毕，可以将拷贝过来后将执行整体的打包。
+
         ii. 循环查询通信数据已收集并发队列，
         如果查询成功，则将已收集完毕的数据入队待压缩并发队列，退出循环；
         否则等待1秒之后再查询，直到查询成功；
@@ -236,8 +247,20 @@ dc配置解析模块 param_mgr主要有两个功能：
 
 
 # 后记
-## ufs
-持久化存储介质
+## RAM Disk && UFS Disk
+RAM Disk（RAM盘）和 UFS Disk（通用闪存存储盘）是两种不同的存储技术，它们在计算机和移动设备中扮演着重要的角色。
+
+### `RAM Disk`：
+- RAM Disk是利用计算机内存（RAM）的一部分来模拟一个磁盘驱动器。因为内存的读写速度远快于任何传统硬盘或固态硬盘，所以RAM Disk可以提供极高的数据读写速度。
+- 它通常用于临时存储，可以显著提高某些应用程序的运行速度，比如数据库管理系统、游戏、图像编辑软件等。
+- 但是，RAM Disk中的数据是易失性的，这意味着一旦断电，其中的数据就会丢失。因此，它不适合用于永久存储数据。
+
+### `UFS Disk`：
+- UFS（Universal Flash Storage）是一种存储规范，专为带有嵌入式存储的移动设备设计，如智能手机和平板电脑。UFS提供了比传统eMMC更快的读写速度，尤其是在处理大量数据时。
+- UFS支持双通道，允许数据同时读写，这大大提高了其性能，尤其是在需要高数据吞吐量的应用场景中。
+- UFS存储器是非易失性的，即使在电源断开的情况下，数据也能被保留，适合用于长期存储。
+
+总结来说，RAM Disk提供极快的速度，但数据在断电后会丢失，适合用作临时存储来提升性能；而UFS Disk则是一种快速、稳定的存储解决方案，适用于移动设备中的长期数据存储。
 
 
 
