@@ -108,8 +108,145 @@ PS：`lock()`函数是 std::weak_ptr 的成员函数，它的作用是尝试获�
 如果对象仍然存在，`lock()`函数会返回一个指向该对象的 std::shared_ptr；
 如果对象已经被销毁，`lock()`函数会返回一个空的 std::shared_ptr。
 
-shared_ptr/weak_ptr 的“计数”在主流平台上是原子操作，没有用锁，性能不俗。
-shared_ptr/weak_ptr 的线程安全级别与std::string和STL容器样，后面还会讲。
+`shared_ptr/weak_ptr`的`计数`在主流平台上是原子操作，没有用锁，性能不俗。
+`shared_ptr/weak_ptr`的线程安全级别与std::string和STL容器样，后面还会讲。
+
+
+***孟岩在《垃圾收集机制批判》中一针见血地点出能指针的优势:“C++利用智能指针达成的效采是:一旦某对象不再被引用，系统刻不容缓，立刻回收内存。这通常发生在关键任务完成后的清理 (clean up) 时期，不会影响关键任务的实时性同时，内存里所有的对象都是有用的，绝对没有垃圾空占内存。”***
+
+
+## 1.7 系统避免各种指针错误
+
+C++里可能出现的内存问题大致有这么几个方面
+1. 缓冲区溢出(buffer overrun)。
+2. 空悬指针/野指针。
+3. 重复释放(double delete)。
+4. 内存泄漏(memory leak)。
+5. 不配对的 new[]/delete。
+6. 内存碎片(memory fragmentation)。
+正确使用智能指针能很轻易地解决前面5个问题，解决第6个问题需要别的思路。
+
+1. 缓冲区溢出:用`std::vector<char>`/`std::string`或自已编写`Buffer class`来管理缓冲区，自动记住用缓冲区的长度，并通过成员函数而不是裸指针来修改缓冲区。
+2. 空悬指针/野指针:用`shared_ptr/weak_ptr`，这正是本章的主题。
+3. 重复释放:用scoped_ptr，只在对象析构的时候释放一次。
+4. 内存泄漏:用scoped_ptr，对象析构的时候自动释放内存。
+5. 不配对的new[]/delete: 把`new[]`统统替换为`std::vector/scoped_array`。
+
+我认为，在现代的 C++ 序中一般不会出现 delete语句，资源(包括复杂对象本身)都是通过对象(智能指针或容器来管理的)，不需要程序员还为此操心。
+在这几种错误里边，内存泄漏相对危害性较小，因为它只是借了东西不归还，程序功能在一段时间内还算正常。
+其他如缓冲区溢出或重复释放等致命错误可能会造成安全性(security和data safety)方面的严重后果。
+需要注意一点:`scoped_ptr/shared_ptr/weak_ptr`都是`值语意`（它强调对象拷贝的是其值，而非其身份或引用），要么是栈上对象，或是其他对象的直接数据成员，或是标准库容器里的元素。
+几乎不会有下面这种用法:
+```cpp
+shared_ptr<Foo>* Foo = new shared_ptr<Foo>(new Foo); // WRONG semantic
+```
+
+还要注意，如果这几种智能指针是对象x的数据成员，而它的模板参数T是个incomplete类型，那么x的析构函数不能是默认的或内联的，必须在cpp文件里边显式定义，否则会有编译错或运行错。
+PS：不完全类型（incomplete type）是指编译器在某个特定位置只看到了类型的声明，但没有看到完整的定义。
+编译器在处理析构函数时需要知道如何正确地析构智能指针所管理的对象。而在这种情况下，编译器无法确定类型的大小和内部结构，因此无法正确地生成相关代码。
+
+## 1.8 应用到Observer上
+```cpp
+class Observer : public boost::enable_shared_from_this<Observer>
+{
+ public:
+  virtual ~Observer();
+  virtual void update() = 0;
+
+  void observe(Observable* s);
+
+ protected:
+  Observable* subject_;
+};
+
+class Observable
+{
+ public:
+  void register_(boost::weak_ptr<Observer> x);
+  // void unregister(boost::weak_ptr<Observer> x);
+
+  void notifyObservers()
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    Iterator it = observers_.begin();
+    while (it != observers_.end())
+    {
+      boost::shared_ptr<Observer> obj(it->lock());  // 提升为shared_ptr，只要对象至少被一个shared_ptr指着，就可以提升成功
+      if (obj)
+      {
+        obj->update();  // 当前接口调用时，对象不可能被析构，因为obj尚未离开作用域，不可能被销毁
+        ++it;
+      }
+      else  // 
+      { // 观察者对象已销毁，则移除
+        printf("notifyObservers() erase\n");
+        it = observers_.erase(it);  // erase指向被删除的元素之后的位置
+      }
+    }
+  }
+
+ private:
+  mutable muduo::MutexLock mutex_;
+  std::vector<boost::weak_ptr<Observer> > observers_;   // 必须是weak_ptr，如果是shared_ptr会产生循环引用，对象无法正确销毁
+  typedef std::vector<boost::weak_ptr<Observer> >::iterator Iterator;
+};
+```
+PS：
+`shared_ptr`的析构函数的伪代码：
+循环引用是因为实际对象的析构函数被接管了，只有（在shared_ptr的析构函数中判断：）当引用计数为0时才调用，而**shared_ptr对象作为类的成员对象，要在类的析构函数里调用**，如果A持有了指向B对象的shared_ptr，而B同样，则shared_ptr变量的生命周期互相被对方的对象所管理了，出现死局
+```cpp
+template <typename T>
+std::shared_ptr<T>::~shared_ptr() {
+    if (ptr_ != nullptr) { // ptr_ 是指向所管理对象的指针
+        // 减少引用计数
+        decrement_reference_count();
+
+        // 如果引用计数变为零
+        if (reference_count_ == 0) {
+            // 调用删除器删除对象
+            deleter_(ptr_);
+        }
+    }
+}
+```
+
+### 缺陷
+* 侵入性
+强制要求observer必须以`shared_ptr`来管理。
+
+* 不是完全线程安全
+observer的析构函数会调用`subject_->unregister(this);`
+万一subject_已经不复存在了呢？为了解决它，又要求observable本身是用shared_ptr管理的，并且subject_多半是个weak_ptr<observable>。
+
+* 锁争用(lock contention)
+即 observable 的三个成员函数都用了互斥器来同步（对临界资源的访问，需要加锁以保证结果的一致性），这会造成`register_()`和`unregister()`等待`notifybservers()`，而后者的执行时间是无上限的，因为它同步回调了用户提供的`update`函数（如果及其缓慢）。我们希望`register_()`和`unregister()`的执行时间不会超过某个固定的上限，以免殃及无辜群众。
+
+* 死锁
+万一`update()`虚函数中调用了`(un)register`呢？
+如果`mutex_`是不可重入的，那么会死锁；
+如果`mutex_`是可重入的，程序会面临迭代器失效 (core dump是最好的结果)，因为`vector<observers_>`在遍历期间被意外地修改了（`register`会操作`vector<observers_>`）。
+这个问题乍看起来似乎没有解决办法，除非在文档里做要求。
+（一种办法是:用可重入的mutex_，把容器换为`std::list`，并把`++it`往前挪一行。
+我个人倾向于使用不可重人的mutex，例如 Pthreads 默认提供的那个，因为“要求mutex可重人”本身往往意味着设计上出了问题(S2.1.1)。
+Java的intrinsiclock 是可重人的，因为要允许synchronized方法相互调用（派生类调用基类的同名synchronized 方法），我觉得这也是无奈之举）。
+
+
+## 1.9 再论shared_ptr的线程安全
+
+
+
+
+
+
+## 1.10 shared_ptr技术与陷阱
+
+
+
+
+
+
+
+
 
 
 

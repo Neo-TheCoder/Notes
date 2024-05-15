@@ -1543,3 +1543,47 @@ int main(){
 - `reset`: `reset`函数用于重置`std::unique_ptr`，可以将其指向新的对象或者置空。
 如果`std::unique_ptr`不再需要管理当前指针，可以使用`reset`将其置空（调用析构），从而释放当前对象并避免内存泄漏。
 如果需要`std::unique_ptr`管理新的对象，也可以使用`reset`来实现。
+
+
+# 判断一个类是否定义了某个成员函数
+```cpp
+
+#include <iostream>
+#include <type_traits>
+
+using namespace std;
+
+template <typename T, typename = void >
+struct HasPrintFunc : std::false_type {
+};
+
+template <typename T>
+struct HasPrintFunc<T, decltype(declval<T>().Print())> : std::true_type {
+};  // declval<T>()生成临时对象，而不实际创建对象，返回该对象的引用，void_t是C++17的用法，将模板参数转换为void类型
+
+class Foo {
+  public:
+    void Print();
+};
+
+class Bar {
+  public:
+};
+
+int main(void) {
+  if (HasPrintFunc<Foo>::value) {
+    cout << "Foo has Print function" << endl;
+  } else {
+    cout << "Foo has no Print function" << endl;
+  }
+
+  if (HasPrintFunc<Bar>::value) {
+    cout << "Bar has Print function" << endl;
+  } else {
+    cout << "Bar has no Print function" << endl;
+  }
+  return 0;
+}
+```
+
+
