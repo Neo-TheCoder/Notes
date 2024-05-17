@@ -11,7 +11,6 @@ data_collector仅在Product场景
 2. 运行阶段
 解析someip_recorder过来的消息，**并行**收集数据：收集一些必要的数据，收集完了打包--压缩--上传（显然都是串行），和云端进行通信
 
-
 3. 退出阶段
 延迟下电（why？）
 
@@ -186,6 +185,7 @@ dc配置解析模块 param_mgr主要有两个功能：
 ！！！数据包括`通信数据`和`非通信数据`。
 - `通信数据`是`someip_recorder录制的数据`；
 - `非通信数据`是`版本文件，设备信息文件，标定文件，camera数据，日志文件`；
+
 在确认数据收集结束后转发内部信号，触发：数据打包、数据压缩、数据上云、原始数据删除等处理。
 在trigger来源方面，`auto_trigger`与`manual_trigger`不分优先级，**由recorder模块将trigger统一处理**。
 **DC模块无法感知trigger的差异。**
@@ -200,16 +200,15 @@ PS：量产限定
     a. `数据收集任务类`根据`触发时间戳`在ufs_disk中创建指定目录，如在`/smart_data/col/`下创建`data_bag_yyyymmdd_hhmmss目录`（精确到秒）。
 
     b. 先并行收集`非通信文件`
-        i. 根据`main_trigger_id``查询DcMapping对象`，返回需要回传的数据类型，向线程池提交需要执行的任务，等待所有任务执行完毕。
-        其中`DcMapping`类对象是param_mgr模块持有的
-        它解析dc_mapping.yaml文件，将triggerId与对应数据类型存储到unordered map中去，并提供查询接口能通过triggerId返回需要收集的数据类型
+        i. 根据`main_trigger_id`查询`DcMapping对象`，返回需要回传的数据类型，向线程池提交需要执行的任务，等待所有任务执行完毕。
+        （其中`DcMapping`类对象是param_mgr模块持有的，**一个trigger会绑定数据收集列表，也就是若干topic**）
+        它解析`dc_mapping.yaml`文件，将triggerId与对应数据类型存储到unordered map中去，并提供查询接口能通过triggerId返回需要收集的数据类型
         而triggerID和某一场景相关（如急加速、司机紧急制动等，这些属于`auto trigger`；而`上位机手动录制trigger`属于`pc_trigger`；而`云端手动录制trigger`，属于`cloud_trigger`），而该场景对应若干数据类型
         由此可见，trigger是用于`通知recorder，要进行数据回传了`的信号
-
         ii.	从全局变量中获取VIN码，写入到`/smart_data/col/data_bag_yyyymmdd_hhmmss/device`文件中；
 
     c. 再查询`通信文件`
-        i. 由于recorder需要**在收到trigger之后还需要采集5s的数据**，recorder在落盘完成之后，会发出`trigger status`为`“trigger finish”`的通知给到dc模块， 此时，通知`数据收集模块collector`，通信数据收集完毕；
+        i. 由于recorder需要**在收到trigger之后还需要采集5s的数据**，recorder在落盘完成之后，会发出`trigger status`为`trigger finish`的通知给到dc模块， 此时，通知`数据收集模块collector`，通信数据收集完毕；
         dc判断其他非通信数据是否已经拷贝完毕，如果已经拷贝完毕，可以将拷贝过来后将执行整体的打包。
 
         ii. 循环查询通信数据已收集并发队列，
@@ -217,7 +216,7 @@ PS：量产限定
         否则等待1秒之后再查询，直到查询成功；
 
     d. 收集视频数据
-        i. camera处理雷同，也会在此状态下，拷贝了需要收集的数据在指定目录下（/smart_data/col/data_bag_yyyymmdd_hhmmss/camera_h264）
+        i. camera处理雷同，也会在此状态下，拷贝了需要收集的数据在指定目录下（`/smart_data/col/data_bag_yyyymmdd_hhmmss/camera_h264`）
 
 2. 数据处理
     a. `数据处理线程`收到触发事件，从待压缩并发队列中出队需`压缩文件夹`，将对应的`执行打包`和`压缩动作`添加到线程池并行执行； 
@@ -227,16 +226,106 @@ PS：量产限定
     a. `数据上传线程`收到通知，从待上云并发队列出队；
     b. 判断文件大小，小于等于10M，调用`云端通信模块v2c_sdk`的`小文件上传接口`，大于10M，调用`分片传送上传接口`进行文件上传操作；
 
-4. 确认数据已经上云后，将压缩包拷贝到/smart_data/col/uploaded目录下；
+4. 确认数据已经上云后，将压缩包拷贝到`/smart_data/col/uploaded`目录下；（也就是一个简单的备份操作）
     统计uploaded下面的文件数量，大于预设的最大值，将最老的压缩包删除；
 
-5. 在/smart_data/col/目录下创建一个操作日志：
+5. 在`/smart_data/col/`目录下创建一个操作日志：
     记录数据收集、包括非通信数据、通信数据的收集情况、数据打包、数据压缩、数据上传的整个pipeline情况；
     操作日志不上传，主要是给自身模块debug用。
     目的是：记录上次下电的时候，dc执行到哪一步了。
     dc本次上电后，会根据解析的结果，继续执行上一次的操作。
 
 
+### 云端通信模块v2c_sdk
+负责与云端交互，从云端下载`配置文件`，若下载失败默认使用本地的配置文件；
+将`收集的数据`进行上云。该模块将考虑数据的`安全通信`，与云端的`身份认证`内容。
+车云通信协议对数据上云采用`https协议`。
+数据回传走`vlan 11`链路上云。
+
+`云端通信模块`提供的接口中所有涉及时间戳（timestamp）的填充时，比如：`小文件上传接口`和`开始分片上传接口`中`Headers`的填充时，需要根据当前系统的时区采取相应的动作。
+如果当前时区是东八区，则直接填充系统时间到Headers的timestamp字段中，如果是零时区，需要在当前系统时间加上八小时填充到Headers的timestamp字段中。
+
+`断点续传`目前考虑处理好`上电周期内`的续传：
+在上传过程中，突然网络中断，需要重传几次（超时时间和重传次数从yaml配置文件获取），如果信号恢复，能够继续上传。
+重试几次失败后，本次对于下电场景，如果没传完，在下次上电时，读取操作日志，发现下次上电有上传动作没有执行完，就重新请求上传。
+
+
+## 相关配置文件解读
+```yaml
+dc_mapping.yaml
+mapping:
+- triggerId: xxx
+      Task: uploadCalibration
+- triggerId: yyy
+      Task: uploadAllLog
+- triggerId: zzz
+      Task: allFileMergeAndUpload
+```
+
+```yaml
+dc_cfg.yaml
+dc_config:
+  version: 1.0
+  maxThreadNum: 15
+  collections:
+    versionCollector:
+      searchFileList:
+        - "/smart_plt/VERSION"
+        - "/etc/version"
+    calibrationFilesCollector:
+      searchFolderPath:
+        - "/smart_para/parameter/calibration_eol"
+    logCollector:
+      searchSubPath: false
+      searchFolderPath:
+        - "/smart_data/logs/app"
+        - "/smart_data/logs/mcu/zlog"
+        - "/smart_data/logs/os"
+        - "/smart_data/logs/om"
+        - "/smart_data/logs/security"
+      searchFileName:
+        - "*.log"
+        - "*.log.gz"
+      logNum: 2 # 每种log的收集数量
+    cameraEncodeCollector:
+      - camera_1
+      - camera_2
+      - camera_3
+      - camera_4
+      - camera_5
+      - camera_6
+      - camera_7
+      - camera_8
+      - camera_9
+      - camera_10
+      - camera_11
+  processors:
+    compress:
+      outputFileName: "data_bag_%Y%m%d_%H%M%S.tar.gz"
+      outputFolderPath: "/smart_data/col"
+      delay_time: 10 # ms，分时压缩，降低cpu占有率
+    monitor:
+      maxfiles: 10 # 若已上传文件大于10个，则进行清理逻辑
+      maxDays: 7 # 若存在超过7天的已上传文件，则进行清理逻辑
+  upload:
+    timerOffSet: 10000 # ms，启动初始化后，延迟进行车云请求
+    deleteAfterUpload: true
+url: "" # 服务器地址
+timeout: 5000   # ms
+    retryCount: 3
+    retryInterval: 500 # ms
+  remoteTasks:
+    -taskid: 1
+     task: uploadAllFileEvery10Min
+    #-taskid: 2
+    # task: uploadAllFileEvery30Min
+    #-taskid: 3
+    # task: uploadAllFileEvery60Min
+    #-taskid: 4
+    # task: uploadAllLogAfter5Min
+    #-taskid: 5
+    # task: uploadCalibrationImmediately
+```
 
 
 
@@ -260,22 +349,5 @@ RAM Disk（RAM盘）和 UFS Disk（通用闪存存储盘）是两种不同的存
 - UFS支持双通道，允许数据同时读写，这大大提高了其性能，尤其是在需要高数据吞吐量的应用场景中。
 - UFS存储器是非易失性的，即使在电源断开的情况下，数据也能被保留，适合用于长期存储。
 
-总结来说，RAM Disk提供极快的速度，但数据在断电后会丢失，适合用作临时存储来提升性能；而UFS Disk则是一种快速、稳定的存储解决方案，适用于移动设备中的长期数据存储。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+总结来说，RAM Disk提供极快的速度，但数据在断电后会丢失，适合用作临时存储来提升性能；
+而UFS Disk则是一种快速、稳定的存储解决方案，适用于移动设备中的长期数据存储。

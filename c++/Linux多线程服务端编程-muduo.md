@@ -193,7 +193,7 @@ class Observable
 ```
 PS：
 `shared_ptr`的析构函数的伪代码：
-循环引用是因为实际对象的析构函数被接管了，只有（在shared_ptr的析构函数中判断：）当引用计数为0时才调用，而**shared_ptr对象作为类的成员对象，要在类的析构函数里调用**，如果A持有了指向B对象的shared_ptr，而B同样，则shared_ptr变量的生命周期互相被对方的对象所管理了，出现死局
+循环引用是因为实际对象的析构函数被接管了，只有（在shared_ptr的析构函数中判断：）当引用计数为0时才调用，而**shared_ptr对象作为类的成员对象，要在类的析构函数里调用**，如果A持有了指向B对象的shared_ptr，而B同样，则shared_ptr变量的生命周期互相被对方的对象所管理了，A和B都定义在堆上，出现死局
 ```cpp
 template <typename T>
 std::shared_ptr<T>::~shared_ptr() {
@@ -216,7 +216,7 @@ std::shared_ptr<T>::~shared_ptr() {
 
 * 不是完全线程安全
 observer的析构函数会调用`subject_->unregister(this);`
-万一subject_已经不复存在了呢？为了解决它，又要求observable本身是用shared_ptr管理的，并且subject_多半是个weak_ptr<observable>。
+万一subject_已经不复存在了呢？为了解决它，又要求observable本身是用shared_ptr管理的，并且subject_多半是个`weak_ptr<observable>`。
 
 * 锁争用(lock contention)
 即 observable 的三个成员函数都用了互斥器来同步（对临界资源的访问，需要加锁以保证结果的一致性），这会造成`register_()`和`unregister()`等待`notifybservers()`，而后者的执行时间是无上限的，因为它同步回调了用户提供的`update`函数（如果及其缓慢）。我们希望`register_()`和`unregister()`的执行时间不会超过某个固定的上限，以免殃及无辜群众。
@@ -228,25 +228,143 @@ observer的析构函数会调用`subject_->unregister(this);`
 这个问题乍看起来似乎没有解决办法，除非在文档里做要求。
 （一种办法是:用可重入的mutex_，把容器换为`std::list`，并把`++it`往前挪一行。
 我个人倾向于使用不可重人的mutex，例如 Pthreads 默认提供的那个，因为“要求mutex可重人”本身往往意味着设计上出了问题(S2.1.1)。
-Java的intrinsiclock 是可重人的，因为要允许synchronized方法相互调用（派生类调用基类的同名synchronized 方法），我觉得这也是无奈之举）。
+Java的intrinsiclock是可重入的，因为要允许synchronized方法相互调用（派生类调用基类的同名synchronized方法），我觉得这也是无奈之举）。
 
 
 ## 1.9 再论shared_ptr的线程安全
+虽然我们借shared_ptr 来实现线程安全的对象释放，但是shared_ptr 本身不是100% 线程安全的。
+它的引用计数本身是安全且无锁的，但对象的读写则不是，**因为shared_ptr有两个数据成员，读写操作不能原子化**。
 
+根据文档，shared_ptr的线程安全级别和内建类型、标准库容器、std::string 一样，
+即:一个shared_ptr对象实体可被多个线程`同时读取`。
+两个shared_ptr对象实体可以被两个线程同时写入，`析构`算写操作。
+如果要从多个线程读写同一个shared_ptr对象，那么需要加锁。
+请注意，以上是shared_ptr对象本身的线程安全级别，不是它管理的对象的线程安全级别。
 
+```cpp
+// globalPtr能被多个线程看到，那么它的读写需要加锁。注意我们不必用读写锁
+// 而只用最简单的互斥锁，这是为了性能考虑。
+// 因为临界区非常小，用互斥锁也不会阻塞并发读。
+// 为了拷贝 globalPtr，需要在读取它的时候加锁，即:
+void read()
+{
+  shared_ptr<Foo> localPtr;
+  MutexLockGuard lock(mutex);
+  localPtr = globalPtr; // read globalPtr
+  // use localPtr since here，读写 ocalPtr 也无须加锁
+  doit(localPtr);
+}
+
+// 写入的时候也要加锁:
+void write()
+{
+  shared_ptr<Foo> newPtr(new Foo); // 注意，对象的创建在临界区之外
+  {
+    MutexLockGuard lock(mutex);
+    globalPtr = newPtr; // write to globalPtr
+    //use newPtr since here，读写 newPtr 无须加锁
+    doit(newPtr);
+  }
+}
+```
+注意到上面的`read()`和`write()`在临界区之外都没有再访问globalPtr，
+而是用了一个指向同一Foo对象的栈上shared_ptr，local copy。
+下面会谈到，只要有这样的local copy存在，shared_ptr作为函数参数传递时不必复制，用`reference to const`作为参数类型即可。
+
+另外注意到上面的`new Foo`是在临界区之外执行的，这种写法通常比在临界区内写`globalPtr.reset(new Foo)`要好，因为缩短了临界区长度。
+
+如果要销毁对象，我们固然可以在临界区内执行`globalPtr.reset()`，但是这样往往会让对象析构（有一定的性能开销）发生在临界区以内，增加了临界区的长度。
+
+一种改进办法是像上面一样定义一个`localPtr`，用它在临界区内与`globalPtr`交换(`swap()`)，
+这样能保证把对象的销毁推迟到临界区之外。
+
+练习：在`write()`函数中，`globalPtr = newPtr;`
+这一句有可能会在临界区内销毁原来globalptr指向的Foo对象（`operator=`可能导致引用计数减一为0），设法将销行为移出临界区。
 
 
 
 
 ## 1.10 shared_ptr技术与陷阱
+### 意外延长对象的生命期
+`shared_ptr`是强引用(铁丝绑的)，只要有一个指向x对象的`shared_ptr`存在，该对象就不会析构。
+而`shared_ptr`又是允许拷贝构造和赋值的(否则引用计数就无意义了)，如果不小心遗留了一个拷贝，那么对象就永世长存了。
+例如前面提到如果把 p.16中observers_的类型改为`vector<shared_ptr<observer>>`，那么除非手动调用`unregister()`（从而调用`pop()`），否则observer对象永远不会析构（因为即使shared_ptr对象析构了，其指向的对象也未必析构）。
+即便它的析构函数会调用`unregister()`，但是不`unregister()`就不会调用observer的析构函数，这变成了鸡与蛋的问题。这也是Java内存泄漏的常见原因。
+
+另外一个出错的可能是`boost::bind`，因为`boost::bind`会把实参拷贝一份，如果参数是个`shared_ptr`，那么对象的生命期就不会短于`boost::function`对象:
+```cpp
+class Foo
+{
+  void doit();
+};
+shared_ptr<Foo> pFoo(new Foo);
+boost::function<void()> func = boost::bind(&Foo::doit, pFoo); // long life foo
+```
+
+这里`func对象`持有了`shared_ptr<Foo>`的一份拷贝，有可能会在不经意间延长倒数第二行创建的`Foo`对象的生命期。
+
+### 函数参数
+因为要修改引用计数(而且拷贝的时候通常要加锁)，`shared_ptr`的拷贝开销比拷贝原始指针要高，但是需要拷贝的时候并不多。
+多数情况下它可以以`const reference 方式传递`，一个线程只需要在最外层函数有一个实体对象，之后都可以用const reference来使用这个 shared_ptr。例如有几个函数都要用到 Foo 对象:
+```cpp
+void save(const shared_ptr<Foo>& pFoo); // pass by const reference
+void validateAccount(const Foo& foo);
+bool validate(const shared_ptr<Foo>& pFoo) // pass by const reference
+{
+  validateAccount(*pFoo);
+  // ...
+}
+// 那么在通常情况下，我们可以传常引用(pass by const reference):
+
+void onMessage(const string& msg)
+{
+  // 只要在最外层持有一个实体，安全不成问题
+  shared_ptr<Foo> pFoo(new Foo(msg)):
+  if (validate(pFoo)){
+  // 没有拷贝 pFoo
+    save(pFoo);
+  }
+}
+```
+遵照这个规则，基本上不会遇到反复拷贝 shared_ptr 导致的性能问题。
+另外由于 pFoo 是栈上对象，不可能被别的线程看到，那么读取始终是线程安全的。
+
+### 析构动作在创建时被捕获
+这是一个非常有用的特性，这意味着:
+* 虚析构不再是必需的。
+  ```cpp
+    std::shared_ptr<Base> ptr = std::make_shared<Derived>();
+  ```
+  为什么能够调用派生类的析构函数：
+  可能是取得了派生类的类型，同时释放了this指针，具体需要看`std::shared_ptr`代码
+
+* `shared_ptr<void>`可以持有任何对象，而且能安全地释放。
+* shared_ptr对象可以安全地跨越模块边界，比如从DLL里返回，而不会造成从模块A分配的内存在模块B里被释放这种错误。
+* 二进制兼容性：
+  即便 Foo 对象的大小变了，那么旧的客户代码仍然可以使用新的动态库，而无须重新编译。
+  前提是 Foo 的头文件中不出现访问对象的成员的inline函数，并且Foo对象的由动态库中的Factory构造，返回其shared_ptr。
+* 析构动作可以定制。
+
+PS：如果客户代码里有`new Bar`，那么肯定不安全，因为 new 的字节数不够装下新 Bar。
+相反，如果 library 通过 factory 返回 Bar* （并通过 factory 来销毁对象）或者直接返回 shared_ptr<Bar>，客户端不需要用到 sizeof(Bar)，那么可能是安全的。同样的道理，直接定义 Bar bar; 对象（无论是函数局部对象还是作为其他 class 的成员）也有二进制兼容问题。**重点就是客户不直接调用Bar**
+
+最后这个特性的实现比较巧妙，因为`shared_ptr<T>`只有一个模板参数，而`析构行为`可以是函数指针、仿函数(functor)或者其他什么东西。
+这是泛型编程和面向对象编程的一次完美结合。有兴趣的读者可以参考Scott Meyers 的文章。这个技术在后面的对象池中还会用到。
 
 
+### 析构所在的线程
+对象的析构是同步的，当最后一个指x的shared_ptr 离开其作用域的时候，x会同时在同一个线程析构。这个线程不一定是对象诞生的线程这个特性是把双刃剑:如果对象的析构比较耗时，那么可能会拖慢关键线程的速度(如果最后一个shared_ptr 引发的析构发生在关键线程);同时，我们可以用一个单独的线程来专门做析构，通过一个 BlockingQueue<shared_ptr<void> >把对象的析构都转移到那个专用线程，从而解放关键线程。
 
 
-
-
-
-
+### 现成的RAII handle
+我认为 RAII(资源取即初始化)是C++语言区别于
+其他所有编程语言的最重要的特性，一个不懂 RAII的 C++ 程序员不是一个合格的
+C++序员。初学C++的教条是“new 和 delete要配对，new了之后要记着 delete”:
+如果使用 RAII[CCS,条款13]，要改成“每一个明确的资源配置动作(例如 new)都应
+该在单一语句中执行，并在该语句中立刻将配置获得的资源交给 handle 对象(如
+shared_ptr)，程序中一般不出现 delete”。shared_ptr 是管理共享资源的利器，需要
+注意避免循环引用，通常的做法是 owner 持有指向child 的 shared_ptr，child 持有
+指向owner的weak_ptr。
 
 
 

@@ -515,16 +515,12 @@ void SomeipRecorder::HandleTriggerEvent(smart_platform_msgs::msg::RecorderComman
 }
 ```
 
-
-
 6. `COMMAND_CLEAR_DEBUG_STORAGE_POOL`
 ...
 
 
 7. `COMMAND_CLEAR_PRODUCT_STORAGE_POOL`
 ...
-
-
 
 
 

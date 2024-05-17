@@ -362,21 +362,21 @@ PS：这是由于C++语言的重载解析规则和值类别的特性所决定的
 示例：
 ```cpp
 #include<iostream>
-void foo(int&) { std::cout << "lvalue" << std::endl; }
+void foo(int&) {std::cout << "lvalue" << std::endl; }
 void foo(int&&) { std::cout << "rvalue" << std::endl; }
 
 int main() {
-int&& rref = 1; //rref是一个左值，类型为int &&，即int的右值引用。
-foo(rref); // lvalue  因为rref已经是一个具名的表达式了，虽然是右值引用，但是该表达式是左值，在函数重载决议时，视作左值，匹配左值版本的函数。
-foo(5); //rvalue
-foo(std::move(5)); //rvalue 因为std::move是一个右值引用类型的表达式，所以匹配以右值引用为形参的函数版本
+  int&& rref = 1; //rref是一个左值，类型为int &&，即int的右值引用。
+  foo(rref); // lvalue  因为rref已经是一个具名的表达式了，虽然是右值引用，但是该表达式是左值，在函数重载决议时，视作左值，匹配左值版本的函数。
+  foo(5); //rvalue
+  foo(std::move(5)); //rvalue 因为std::move是一个右值引用类型的表达式，所以匹配以右值引用为形参的函数版本
 
-int x = 5;
-foo(std::move(x)); //rvalue
+  int x = 5;
+  foo(std::move(x)); //rvalue
 }
 ```
-
-
+`std::move`告诉编译器将对象视为右值。因此，std::move的结果是一个右值。
+需要注意的是，即使使用`std::move`后，`对象本身的类型`仍然是左值，只是在表达式中被视为右值。
 
 ## 关于右值引用
 **&&不一定是代表右值引用**
@@ -1585,5 +1585,117 @@ int main(void) {
   return 0;
 }
 ```
+
+# `std::shared_ptr`为什么不需要虚析构
+```cpp
+// 调用std::shared_ptr的构造函数的版本：（调用栈如下）
+
+
+  /**
+   *  @brief  Create an object that is owned by a shared_ptr.
+   *  @param  __args  Arguments for the @a _Tp object's constructor.
+   *  @return A shared_ptr that owns the newly created object.
+   *  @throw  std::bad_alloc, or an exception thrown from the
+   *          constructor of @a _Tp.
+   */
+  template<typename _Tp, typename... _Args>
+    inline shared_ptr<_Tp>
+    make_shared(_Args&&... __args)
+    {
+      typedef typename std::remove_cv<_Tp>::type _Tp_nc;
+      return std::allocate_shared<_Tp>(std::allocator<_Tp_nc>(),
+				       std::forward<_Args>(__args)...);
+    }
+
+  /**
+   *  @brief  Create an object that is owned by a shared_ptr.
+   *  @param  __a     An allocator.
+   *  @param  __args  Arguments for the @a _Tp object's constructor.
+   *  @return A shared_ptr that owns the newly created object.
+   *  @throw  An exception thrown from @a _Alloc::allocate or from the
+   *          constructor of @a _Tp.
+   *
+   *  A copy of @a __a will be used to allocate memory for the shared_ptr
+   *  and the new object.
+   */
+  template<typename _Tp, typename _Alloc, typename... _Args>
+    inline shared_ptr<_Tp>
+    allocate_shared(const _Alloc& __a, _Args&&... __args)
+    {
+      return shared_ptr<_Tp>(_Sp_alloc_shared_tag<_Alloc>{__a},
+			     std::forward<_Args>(__args)...);
+    }
+
+      // This constructor is non-standard, it is used by allocate_shared.
+      template<typename _Alloc, typename... _Args>
+	shared_ptr(_Sp_alloc_shared_tag<_Alloc> __tag, _Args&&... __args)
+	: __shared_ptr<_Tp>(__tag, std::forward<_Args>(__args)...)
+	{ }
+
+  // 注意到在初始化列表中，初始化了_M_ptr
+  // ！！！这是__shared_ptr类的构造函数
+      // This constructor is non-standard, it is used by allocate_shared.
+      template<typename _Alloc, typename... _Args>
+	__shared_ptr(_Sp_alloc_shared_tag<_Alloc> __tag, _Args&&... __args)
+	: _M_ptr(), _M_refcount(_M_ptr, __tag, std::forward<_Args>(__args)...)
+	{ _M_enable_shared_from_this_with(_M_ptr); }
+
+// 成员变量指针_M_ptr的定义：
+  element_type*	   _M_ptr;
+
+// element_type类型的取得：
+using element_type = typename remove_extent<_Tp>::type;
+
+
+// 而operator=
+      template<typename _Yp>
+	_Assignable<_Yp>
+	operator=(const __shared_ptr<_Yp, _Lp>& __r) noexcept
+	{
+	  _M_ptr = __r._M_ptr;  // 浅拷贝
+	  _M_refcount = __r._M_refcount;
+	  return *this;
+	}
+
+
+
+// 1
+      virtual void
+      _M_dispose() noexcept
+      {
+	allocator_traits<_Alloc>::destroy(_M_impl._M_alloc(), _M_ptr());
+      }
+
+// 1.1
+      _Tp* _M_ptr() noexcept { return _M_impl._M_storage._M_ptr(); }
+
+
+// 2
+      /**
+       *  @brief  Destroy an object of type @a _Up
+       *  @param  __a  An allocator.
+       *  @param  __p  Pointer to the object to destroy
+       *
+       *  Calls @c __a.destroy(__p).
+      */
+      template<typename _Up>
+	static void
+	destroy(allocator_type& __a, _Up* __p)
+	noexcept(noexcept(__a.destroy(__p)))
+	{ __a.destroy(__p); }
+
+// 3
+      template<typename _Up>
+	void
+	destroy(_Up* __p)
+	noexcept(std::is_nothrow_destructible<_Up>::value)
+	{ __p->~_Up(); }
+```
+
+
+
+
+
+
 
 
