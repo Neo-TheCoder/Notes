@@ -249,7 +249,6 @@ PS：量产限定
 在上传过程中，突然网络中断，需要重传几次（超时时间和重传次数从yaml配置文件获取），如果信号恢复，能够继续上传。
 重试几次失败后，本次对于下电场景，如果没传完，在下次上电时，读取操作日志，发现下次上电有上传动作没有执行完，就重新请求上传。
 
-
 ## 相关配置文件解读
 ```yaml
 dc_mapping.yaml
@@ -268,14 +267,14 @@ dc_config:
   version: 1.0
   maxThreadNum: 15
   collections:
-    versionCollector:
+    versionCollector:   # 版本信息
       searchFileList:
         - "/smart_plt/VERSION"
         - "/etc/version"
-    calibrationFilesCollector:
+    calibrationFilesCollector:  # 标定文件
       searchFolderPath:
         - "/smart_para/parameter/calibration_eol"
-    logCollector:
+    logCollector:   # 日志文件
       searchSubPath: false
       searchFolderPath:
         - "/smart_data/logs/app"
@@ -287,7 +286,7 @@ dc_config:
         - "*.log"
         - "*.log.gz"
       logNum: 2 # 每种log的收集数量
-    cameraEncodeCollector:
+    cameraEncodeCollector:  # camera数据
       - camera_1
       - camera_2
       - camera_3
@@ -301,8 +300,8 @@ dc_config:
       - camera_11
   processors:
     compress:
-      outputFileName: "data_bag_%Y%m%d_%H%M%S.tar.gz"
-      outputFolderPath: "/smart_data/col"
+      outputFileName: "data_bag_%Y%m%d_%H%M%S.tar.gz"   # 输出压缩包，以精确到秒的时刻来命名
+      outputFolderPath: "/smart_data/col"   # 压缩包输出路径
       delay_time: 10 # ms，分时压缩，降低cpu占有率
     monitor:
       maxfiles: 10 # 若已上传文件大于10个，则进行清理逻辑
@@ -326,8 +325,6 @@ timeout: 5000   # ms
     #-taskid: 5
     # task: uploadCalibrationImmediately
 ```
-
-
 
 
 

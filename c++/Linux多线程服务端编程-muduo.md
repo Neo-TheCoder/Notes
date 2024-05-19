@@ -192,6 +192,9 @@ class Observable
 };
 ```
 PS：
+std::weak_ptr没有重载`operator->`
+
+PS：
 `shared_ptr`的析构函数的伪代码：
 循环引用是因为实际对象的析构函数被接管了，只有（在shared_ptr的析构函数中判断：）当引用计数为0时才调用，而**shared_ptr对象作为类的成员对象，要在类的析构函数里调用**，如果A持有了指向B对象的shared_ptr，而B同样，则shared_ptr变量的生命周期互相被对方的对象所管理了，A和B都定义在堆上，出现死局
 ```cpp
@@ -353,18 +356,191 @@ PS：如果客户代码里有`new Bar`，那么肯定不安全，因为 new 的�
 
 
 ### 析构所在的线程
-对象的析构是同步的，当最后一个指x的shared_ptr 离开其作用域的时候，x会同时在同一个线程析构。这个线程不一定是对象诞生的线程这个特性是把双刃剑:如果对象的析构比较耗时，那么可能会拖慢关键线程的速度(如果最后一个shared_ptr 引发的析构发生在关键线程);同时，我们可以用一个单独的线程来专门做析构，通过一个 BlockingQueue<shared_ptr<void> >把对象的析构都转移到那个专用线程，从而解放关键线程。
+对象的析构是同步的，当最后一个指x的shared_ptr离开其作用域的时候，x会同时在同一个线程析构。这个线程不一定是对象诞生的线程。
+这个特性是把双刃剑：如果对象的析构比较耗时，那么可能会拖慢`关键线程`的速度(如果最后一个shared_ptr引发的析构发生在关键线程);
+同时，我们可以用一个`单独的线程`来专门做析构，通过一个`BlockingQueue<shared_ptr<void>>`把对象的析构都转移到那个专用线程，从而解放关键线程。
 
 
 ### 现成的RAII handle
-我认为 RAII(资源取即初始化)是C++语言区别于
-其他所有编程语言的最重要的特性，一个不懂 RAII的 C++ 程序员不是一个合格的
-C++序员。初学C++的教条是“new 和 delete要配对，new了之后要记着 delete”:
-如果使用 RAII[CCS,条款13]，要改成“每一个明确的资源配置动作(例如 new)都应
-该在单一语句中执行，并在该语句中立刻将配置获得的资源交给 handle 对象(如
-shared_ptr)，程序中一般不出现 delete”。shared_ptr 是管理共享资源的利器，需要
-注意避免循环引用，通常的做法是 owner 持有指向child 的 shared_ptr，child 持有
-指向owner的weak_ptr。
+我认为`RAII(资源取即初始化)`是C++语言区别于其他所有编程语言的最重要的特性，一个不懂 RAII的 C++ 程序员不是一个合格的C++程序员。
+初学C++的教条是`new 和 delete要配对，new了之后要记着 delete`，
+如果使用 RAII[CCS,条款13]，要改成`每一个明确的资源配置动作(例如 new)都应该在单一语句中执行，并在该语句中立刻将配置获得的资源交给 handle 对象(如shared_ptr)，程序中一般不出现 delete`。
+shared_ptr 是管理共享资源的利器，需要注意避免循环引用，通常的做法是 owner 持有指向child 的 shared_ptr，child 持有指向owner的weak_ptr。
+
+
+## 1.11 对象池
+假设有`Stock`类，代表一只股票的价格。
+每一只股票有一个唯一的字符串标识，比如Google 的 key 是`NASDAQ:GOOG`，IBM是`NYSE:IBM`。
+Stock 对象是个主动对象，它能不断获取新价格。为了节省系统资源，同一个程序里边每一只出现的股票只有一个 Stock 对象，如果多处用到同一只股票，那么Stock 对象应该被共享。
+如果某一只股票没有再在任何地方用到，其对应的 Stock 对象应该析构，以释放资源，这隐含了`“引用计数”`。
+为了达到上述要求，我们可以设计一个`对象池 StockFactory`。
+它的接口很简单，根据 key 返回 Stock 对象。
+我们已经知道，在多线程程序中，既然对象可能被销毁，那么返回shared_ptr 是合理的。自然地，我们写出如下代码(可惜是错的)
+```cpp
+// version 1: questionable code
+class StockFactory : boost::noncopyable
+public:
+  shared_ptr<Stock> get(const string& key);
+
+private:
+  mutable MutexLock mutex_;
+  std::map<string，shared_ptr<Stock>> stocks_;  // 就目前接口而言，只要map存在，Stock对象就一直存在
+```
+
+`get()`的逻辑很简单，如果在stocks_里找到了 key，就返回 stocks_[key];
+否则新建一个 Stock，并存入 stocks_[key]。
+
+细心的读者或许已经发现这里有一个问题，stock 对象永远不会被销毁，因为map 里存的是 shared_ptr，始终有“铁丝”绑着。那么或许应该仿照前面observable那样存一个weak_ptr?
+比如
+```cpp
+// // version 2:数据成员修改为 std::map<string，weak_ptr<Stock> >stocks_;
+shared_ptr<Stock> StockFactory::get(const string& key){
+  shared_ptr<Stock> pStock;
+  MutexLockGuard lock(mutex_);
+  weak_ptr<Stock>& wkStock = stocks_[key]; // 如果 key 不存在，会默认构造一个（这是std::map的特性！）
+  pStock = wkStock.lock(); //尝试把“棉线”提升为“铁丝”
+  if (!pStock){
+    pStock.reset(new Stock(key));   // 析构原先对象，确保map里的都是最新的Stock对象
+    wkStock = pStock; // 这里更新了 stocks_[key]，注意 wkStock 是个引用
+  }
+  return pStock;
+}
+```
+
+
+这么做固然 Stock 对象是销毁了，但是程序却出现了`轻微的内存泄漏`，为什么?
+因为`stocks_`的大小只增不减，`stocks_.size()`是曾经存活过的 Stock 对象的总数，即便活的 stock 对象数目降为0。（因为`std::weak_ptr`始终在占据内存空间）
+或许有人认为这不算泄漏，因为内存并不是彻底遗失不能访问了，而是被某个标准库容器占用了。我认为这也算内存泄漏，毕竟是“战场”没有打扫干净。
+
+其实，考虑到世界上的股票数目是有限的，这个内存不会一直泄漏下去，大不了把每只股票的对象都创建一遍，估计泄漏的内存也只有几兆字节。
+如果这是一个`其他类型的对象池`，对象的 key 的集合不是封闭的，内存就会一直泄漏下去。
+解决的办法是，**利用`shared_ptr`的定制析构功能**。
+`shared_ptr`的构造函数可以有一个额外的模板类型参数，传人一个函数指针或仿函数 d，在析构对象时执行d(ptr)，其中 ptr是 shared_ptr 保存的对象指针。
+`shared_ptr`这么设计并不是多余的，因为反正要在创建对象时捕获释放动作，始终需要一个 bridge。
+
+```cpp
+template<class Y，class D>
+shared_ptr::shared_ptr(Y* p，D d);
+
+template<class Y，class D>
+void shared_ptr::reset(Y* p，D d);
+//注意 Y的类型可能与 T不同，这是合法的，只要 Y* 能隐式转换为 T*。
+```
+那么我们可以利用这一点，在析构 Stock 对象的同时清理 stocks_。
+
+```cpp
+// version 3
+class StockFactory : boost::noncopyable
+{
+  //在 get()中，将 pStock.reset(new Stock(key));改为:
+  pStock.reset(new Stock(key)，boost::bind(&StockFactory::deleteStock，this，_1));
+  private:
+  void deleteStock(Stock* stock)
+  {
+  if (stock) {
+    MutexLockGuard lock(mutex_);
+    stocks_.erase(stock->key());  // ！！！
+  }
+  delete stock; // sorry，I lied
+  // assuming StockFactory lives longer than all Stock's ...
+  }
+}
+```
+
+这里我们向`pStock.reset()`传递了第二个参数，一个boost::function，让它在析构Stock* p时调用本 StockFactory 对象的`deleteStock`成员函数。
+警惕的读者可能已经发现问题，那就是我们把一个原始的`StockFactory this`指针保存在了`boost::function`里，这会有线程安全问题。
+如果这个`Stock-Factory`先于`Stock`对象析构，那么会`core dump`。
+正如observer在析构函数里去调用`Observable::unregister()`，而那时Observable对象可能已经不存在了。
+通过`弱回调`技术可以解决
+
+
+### 1.11.1 `enable_shared_from_this`
+用于解决`在类成员函数中`获取`shared_ptr`的问题，使用时，要继承`enable_shared_from_this`这一基类
+
+`StockFactory::get()`把原始指针 this 保存到了boost::function中
+如果 StockFactory 的生命期比 Stock 短，那么Stock析构时去调StockFactory::deleteStock 就会 core dump。
+似乎我们应该祭出惯用的 shared_ptr 大法来解决对象生命期问题，但是`StockFactory::get()`本身是个成员函数，如何获得一个`指向当前对象`的`shared_ptr<stockFactory>`对象呢？
+有办法，用`enable_shared_from_this`。
+这是一个`以其派生类为模板类型实参 的 基类 模板`，继承它，`this`指针就能变身为`shared_ptr`。
+```cpp
+class StockFactory : public boost::enable_shared_from_this<StockFactory>, boost::noncopyable
+{/*...*/};
+```
+为了使用`shared_from_this()`，StockFactory不能是stack object，必须是heap obiect，且由 shared_ptr 管理其生命期，即`shared_ptr<StockFactory> stockFactory(new StockFactory);`
+万事俱备，可以让`this`摇身一变，化为`shared_ptr<stockFactory>`了
+
+```cpp
+// version 4
+shared_ptr<Stock> StockFactory::get(const string& key)
+{
+// change
+// pStock.reset(new Stock(key)， boost::bind(&StockFactory::deleteStock， this，_1));
+// to
+pStock.reset(new Stock(key), boost::bind(&StockFactory::deleteStock, shared_from_this(), _1));
+}
+```
+
+这样一来，boost::function里保存了一份`shared_ptr<StockFactory>`，可以保证调用`StockFactory::deleteStock`的时候那个`StockFactory`对象还活着。注意一点，`shared_from_this()`不能在构造函数里调用，因为在构造`StockFactory`的时候，它还没有被交给shared_ptr 接管。
+最后一个问题，stockFactory 的生命期似乎被`意外延长`了。
+
+
+
+### 1.11.2 弱回调
+把`shared_ptr`绑(`boost::bind`)到`boost:function`里，那么回调的时候`StockFactory对象`始终存在，是安全的。
+这同时也延长了对象的生命期，使之不短于绑得的 boost:function 对象。
+
+**有时候我们需要`“如果对象还活着，就调用它的成员函数，否则忽略之”`的语意**
+就像`observable::notifyobservers()`那样，我称之为“弱回调”。
+这也是可以实现的，利用`weak_ptr`，我们可以把 weak_ptr 绑到 boost::function 里，这样对象的生命期就不会被延长。
+然后在回调的时候先尝试提升为 shared_ptr，
+如果提升成功，说明接受回调的对象还健在，那么就执行回调;
+如果提升失败，就不必劳神了。
+
+使用这一技术的完整 StockFactory 代码如下:
+```cpp
+class StockFactory : public boost::enable_shared_from_this<StockFactory>, boost::noncopyable
+{
+public:
+  shared_ptr<Stock> get(const string& key)
+  {
+    shared_ptr<Stock> pStock;
+    MutexLockGuard lock(mutex_);
+    weak_ptr<Stock>& wkStock = stocks_[key]; // 注意 wkStock 是引用
+    pStock = wkStock.lock();
+    if (!pStock){
+    pStock.reset(new Stock(key), boost::bind(&StockFactory::weakDeleteCallback, boost::weak_ptr<StockFactory>(shared_from_this()), _1));
+    wkStock = pStock;
+    }
+  return pStock;
+  }
+
+// 上面必须强制把shared_from_this()转型为 weak_ptr，才不会延长生命期
+// 因为 boost::bind 拷贝的是实参的类型，不是形参的类型，从而拷贝weak_ptr类型
+
+ private:
+  static void weakDeleteCallback(const boost::weak_ptr<StockFactory>& wkFactory,
+                                 Stock* stock)
+  {
+    printf("weakDeleteStock[%p]\n", stock);
+    boost::shared_ptr<StockFactory> factory(wkFactory.lock());
+    if (factory)
+    {
+      factory->removeStock(stock);
+    }
+    else
+    {
+      printf("factory died.\n");
+    }
+    delete stock;  // sorry, I lied
+  }
+};
+```
+
+
+
+
+
+
 
 
 

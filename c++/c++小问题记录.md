@@ -1588,8 +1588,13 @@ int main(void) {
 
 # `std::shared_ptr`为什么不需要虚析构
 ```cpp
-// 调用std::shared_ptr的构造函数的版本：（调用栈如下）
+    std::shared_ptr<Base> ptr = std::make_shared<Derived>();
+```
 
+先通过`make_shared`构造出一个临时的shared_ptr对象，然后调用移动构造函数，把资源移动到`std::shared_ptr<Base>`中
+
+```cpp
+// 调用std::shared_ptr的构造函数的版本：（调用栈如下）
 
   /**
    *  @brief  Create an object that is owned by a shared_ptr.
@@ -1646,20 +1651,99 @@ int main(void) {
 // element_type类型的取得：
 using element_type = typename remove_extent<_Tp>::type;
 
-
-// 而operator=
-      template<typename _Yp>
-	_Assignable<_Yp>
-	operator=(const __shared_ptr<_Yp, _Lp>& __r) noexcept
+// _M_refcount即__shared_count对象
+// 通过element_type*	   _M_ptr; 把类型传递给__shared_count的第一个参数
+      template<typename _Tp, typename _Alloc, typename... _Args>
+	__shared_count(_Tp*& __p, _Sp_alloc_shared_tag<_Alloc> __a,
+		       _Args&&... __args)       // ！！！*_Tp& 表示对指针的引用
 	{
-	  _M_ptr = __r._M_ptr;  // 浅拷贝
-	  _M_refcount = __r._M_refcount;
-	  return *this;
+	  typedef _Sp_counted_ptr_inplace<_Tp, _Alloc, _Lp> _Sp_cp_type;
+	  typename _Sp_cp_type::__allocator_type __a2(__a._M_a);
+	  auto __guard = std::__allocate_guarded(__a2);
+	  _Sp_cp_type* __mem = __guard.get();
+	  auto __pi = ::new (__mem)
+	    _Sp_cp_type(__a._M_a, std::forward<_Args>(__args)...);
+	  __guard = nullptr;
+	  _M_pi = __pi;     // 基类指针，指向派生类对象
+	  __p = __pi->_M_ptr();
+	}
+  // _Sp_counted_base<_Lp>*  _M_pi;
+
+
+// 调用shared_ptr<Base>的移动构造
+      __shared_ptr(__shared_ptr&& __r) noexcept
+      : _M_ptr(__r._M_ptr), _M_refcount()
+      {                                   // _M_refcount即__shared_count对象，__shared_count类持有_Sp_counted_base指针，_Sp_counted_base是不带类型参数的！！！
+	_M_refcount._M_swap(__r._M_refcount);   // __shared_ptr持有__shared_count<_Lp>类型的_M_refcount对象，把类型传递给__shared_count的第一个参数
+	__r._M_ptr = 0;
+      }                                   // 而析构的时候，是调用_Sp_counted_ptr_inplace的函数
+
+
+// swap的细节
+      void
+      _M_swap(__shared_count& __r) noexcept
+      {
+	_Sp_counted_base<_Lp>* __tmp = __r._M_pi;   // 交换_Sp_counted_base的派生类: _Sp_counted_ptr_inplace对象，而_Sp_counted_ptr_inplace内部是带类型信息的
+	__r._M_pi = _M_pi;
+	_M_pi = __tmp;
+      }
+
+
+      /**
+       *  @brief  Move-constructs a %shared_ptr instance from @a __r.
+       *  @param  __r  A %shared_ptr rvalue.
+       *  @post   *this contains the old value of @a __r, @a __r is empty.
+       */
+      template<typename _Yp, typename = _Constructible<shared_ptr<_Yp>>>
+	shared_ptr(shared_ptr<_Yp>&& __r) noexcept
+	: __shared_ptr<_Tp>(std::move(__r)) { }
+
+
+
+// 构造__shared_ptr<Base>, _Yp是Base
+      template<typename _Yp, typename = _Compatible<_Yp>>
+	__shared_ptr(__shared_ptr<_Yp, _Lp>&& __r) noexcept
+	: _M_ptr(__r._M_ptr), _M_refcount()
+	{
+	  _M_refcount._M_swap(__r._M_refcount);
+	  __r._M_ptr = 0;
 	}
 
 
+      template<typename _Yp, typename = _Compatible<_Yp>>
+	__shared_ptr(__shared_ptr<_Yp, _Lp>&& __r) noexcept
+	: _M_ptr(__r._M_ptr), _M_refcount()
+	{
+	  _M_refcount._M_swap(__r._M_refcount);
+	  __r._M_ptr = 0;
+	}
+/*
+  关键调用
+  _M_ptr(__r._M_ptr)
+*/
+
+
+// 在函数传参时，把__shared_ptr<Base, _Lp>右值引用绑定到了shared_ptr<Derived>对象？？？
+
+
+
+
+// 析构时的逻辑
+
+// _Sp_counted_base
+_M_release();
+	    _M_dispose();
+// ！！！
+// _Sp_counted_ptr_inplace -> _Sp_counted_base
+
+// _Sp_counted_ptr_inplace继承自_Sp_counted_base
+// __shared_count类持有_Sp_counted_base指针
+// 其中_Sp_counted_ptr_inplace带类型参数_Tp，是__shared_count传递给它的，于是在swap时，传递的是_M_refcount，_M_refcount即__shared_count对象
+// __shared_ptr通过element_type*	   _M_ptr; 把类型传递给__shared_count的第一个参数
+
 
 // 1
+// 是_Sp_counted_ptr_inplace的成员函数,而_Sp_counted_ptr_inplace是__shared_count的成员指针
       virtual void
       _M_dispose() noexcept
       {
@@ -1669,6 +1753,8 @@ using element_type = typename remove_extent<_Tp>::type;
 // 1.1
       _Tp* _M_ptr() noexcept { return _M_impl._M_storage._M_ptr(); }
 
+// 1.1.1
+__gnu_cxx::__aligned_buffer<_Tp> _M_storage;
 
 // 2
       /**
@@ -1691,10 +1777,6 @@ using element_type = typename remove_extent<_Tp>::type;
 	noexcept(std::is_nothrow_destructible<_Up>::value)
 	{ __p->~_Up(); }
 ```
-
-
-
-
 
 
 
