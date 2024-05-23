@@ -2,7 +2,9 @@
 ## 场景概览
 Someip_recorder将兼容当前方案并扩展出适合量产车的方案，默认的情况下运行Product逻辑代码，当收到PC端的DDS消息需要切换到Debug模式后，切换到Debug模式，此时停止响应Product模式下的任何指令，直到PC端发送的DDS消息切换到Product模式
 data_collector仅在Product场景
-当someip_recorder收到trigger触发消息，合并mcap文件，通知data collector上云
+当someip_recorder收到task id（定时上传xxx文件），其与trigger id有一定映射关系，合并mcap文件，通知data collector上云
+当前的设计是，收集文件时，无脑全部收集，在传入待处理队列前，根据trigger id对不需要的文件进行删除。
+
 
 ## data_collector三大阶段
 1. 启动阶段
@@ -205,7 +207,10 @@ PS：量产限定
         它解析`dc_mapping.yaml`文件，将triggerId与对应数据类型存储到unordered map中去，并提供查询接口能通过triggerId返回需要收集的数据类型
         而triggerID和某一场景相关（如急加速、司机紧急制动等，这些属于`auto trigger`；而`上位机手动录制trigger`属于`pc_trigger`；而`云端手动录制trigger`，属于`cloud_trigger`），而该场景对应若干数据类型
         由此可见，trigger是用于`通知recorder，要进行数据回传了`的信号
-        ii.	从全局变量中获取VIN码，写入到`/smart_data/col/data_bag_yyyymmdd_hhmmss/device`文件中；
+        ii.	从全局变量中获取VIN码（可能事先通过parameter server模块调用method获取），写入到`/smart_data/col/data_bag_yyyymmdd_hhmmss/device`文件中；
+
+        其中，log文件的收集比较复杂，有三种规则，配置文件中，还包含收集数量的配置，复杂点在于：可能需要递归查找子目录，根据log文件名中的时间戳选择最新的log文件
+
 
     c. 再查询`通信文件`
         i. 由于recorder需要**在收到trigger之后还需要采集5s的数据**，recorder在落盘完成之后，会发出`trigger status`为`trigger finish`的通知给到dc模块， 此时，通知`数据收集模块collector`，通信数据收集完毕；
@@ -325,8 +330,6 @@ timeout: 5000   # ms
     #-taskid: 5
     # task: uploadCalibrationImmediately
 ```
-
-
 
 
 

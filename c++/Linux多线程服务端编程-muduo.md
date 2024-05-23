@@ -3,7 +3,8 @@
 
 
 ## 1.1 当析构函数遇到多线程
-与其他面向对象语言不同，C++ 要求程序员自己管理对象的生命期，这在多线程环境下显得尤为困难。当一个对象能被多个线程同时看到时，那么对象的销毁时机就会变得模糊不清，可能出现多种竟态条件(race condition):
+与其他面向对象语言不同，C++ 要求程序员自己管理对象的生命期，这在多线程环境下显得尤为困难。
+当一个对象能被多个线程同时看到时，那么对象的销毁时机就会变得模糊不清，可能出现多种竟态条件(race condition):
 * 在即将析构一个对象时，从何而知此刻是否有别的线程正在执行该对象的成员函数？
 * 如何保证在执行成员函数期间，对象不会在另一个线程被析构？
 * 在调用某个对象的成员函数之前，如何得知这个对象还活着?它的析构函数会不会碰巧执行到一半？
@@ -19,8 +20,8 @@
 
 
 ## 1.2 对象的创建容易
-对象构造要做到线程安全，唯一的要求是在构造期间不要泄露 this 指针，即
-* 不要在构造函数中注册任何回调;
+对象构造要做到线程安全，唯一的要求是`在构造期间不要泄露 this 指针`，即
+* 不要在构造函数中注册任何回调（会把this指针暴露出去，其他线程可能拿到this指针，立刻执行，而本对象尚未构造完毕）;
 * 也不要在构造函数中把`this`传给跨线程的对象:
 * 即便在构造函数的最后一行也不行。
 
@@ -41,7 +42,9 @@
 
 
 ## 1.4 线程安全的Observer很难
-**一个动态创建的对象是否还存活，是不能通过指针看出来的**，因为如果销毁，就无法访问，无法访问就无从得知状态，如果原址又创建了新的对象，则无从判断原对象。
+**一个动态创建的对象是否还存活，是不能通过指针看出来的**：
+* 如果销毁，就无法访问，无法访问就无从得知状态，
+* 如果原址又创建了新的对象，则无从判断原对象。
 
 面向对象中，对象间关系主要有三种（后两种关系容易出现内存问题）：
 1. 组合
@@ -67,9 +70,9 @@
 回到正题上来，**如果对象x注册了任何非静态成员函数回调，那么必然在某处持有了指向x的指针，这就暴露在了race condition之下。**
 
 
-
 ## 1.5 裸指针为什么不行
-指向对象的原始指针(raw pointer)是坏的尤其当暴露给别的线程时。observable应当保存的不是原始的 observer*，而是别的什么东西，能分辨 observer 对象是否存活。
+指向对象的原始指针(raw pointer)是坏的，尤其当暴露给别的线程时。
+observable应当保存的不是原始的 observer*，而是别的什么东西，能分辨 observer 对象是否存活。
 类似地，如果 observer 要在析构函数里解注册(这虽然不能解决前面提到的race condition，但是在析构函数里打扫战场还是应该的)
 那么 subject_的类型也不能是原始的 observable*。
 
@@ -116,7 +119,6 @@ PS：`lock()`函数是 std::weak_ptr 的成员函数，它的作用是尝试获�
 
 
 ## 1.7 系统避免各种指针错误
-
 C++里可能出现的内存问题大致有这么几个方面
 1. 缓冲区溢出(buffer overrun)。
 2. 空悬指针/野指针。
@@ -192,11 +194,13 @@ class Observable
 };
 ```
 PS：
-std::weak_ptr没有重载`operator->`
+`std::weak_ptr`没有重载`operator->`
 
 PS：
 `shared_ptr`的析构函数的伪代码：
-循环引用是因为实际对象的析构函数被接管了，只有（在shared_ptr的析构函数中判断：）当引用计数为0时才调用，而**shared_ptr对象作为类的成员对象，要在类的析构函数里调用**，如果A持有了指向B对象的shared_ptr，而B同样，则shared_ptr变量的生命周期互相被对方的对象所管理了，A和B都定义在堆上，出现死局
+循环引用是因为实际对象的析构函数被接管了，
+只有（在shared_ptr的析构函数中判断：）当引用计数为0时才调用，而**shared_ptr对象作为类的成员对象，要在类的析构函数里调用**，
+如果A持有了指向B对象的shared_ptr，而B同样，则shared_ptr变量的生命周期互相被对方的对象所管理了，A和B都定义在堆上，出现死局
 ```cpp
 template <typename T>
 std::shared_ptr<T>::~shared_ptr() {
@@ -222,7 +226,9 @@ observer的析构函数会调用`subject_->unregister(this);`
 万一subject_已经不复存在了呢？为了解决它，又要求observable本身是用shared_ptr管理的，并且subject_多半是个`weak_ptr<observable>`。
 
 * 锁争用(lock contention)
-即 observable 的三个成员函数都用了互斥器来同步（对临界资源的访问，需要加锁以保证结果的一致性），这会造成`register_()`和`unregister()`等待`notifybservers()`，而后者的执行时间是无上限的，因为它同步回调了用户提供的`update`函数（如果及其缓慢）。我们希望`register_()`和`unregister()`的执行时间不会超过某个固定的上限，以免殃及无辜群众。
+即 observable 的三个成员函数都用了互斥器来同步（对临界资源的访问，需要加锁以保证结果的一致性），
+这会造成`register_()`和`unregister()`等待`notifybservers()`，而后者的执行时间是无上限的，因为它同步回调了用户提供的`update`函数（如果极其缓慢）。
+我们希望`register_()`和`unregister()`的执行时间不会超过某个固定的上限，以免殃及无辜群众。
 
 * 死锁
 万一`update()`虚函数中调用了`(un)register`呢？
@@ -230,7 +236,7 @@ observer的析构函数会调用`subject_->unregister(this);`
 如果`mutex_`是可重入的，程序会面临迭代器失效 (core dump是最好的结果)，因为`vector<observers_>`在遍历期间被意外地修改了（`register`会操作`vector<observers_>`）。
 这个问题乍看起来似乎没有解决办法，除非在文档里做要求。
 （一种办法是:用可重入的mutex_，把容器换为`std::list`，并把`++it`往前挪一行。
-我个人倾向于使用不可重人的mutex，例如 Pthreads 默认提供的那个，因为“要求mutex可重人”本身往往意味着设计上出了问题(S2.1.1)。
+我个人倾向于使用不可重入的mutex，例如 Pthreads 默认提供的那个，因为**“要求mutex可重人”本身往往意味着设计上出了问题**(2.1.1)。
 Java的intrinsiclock是可重入的，因为要允许synchronized方法相互调用（派生类调用基类的同名synchronized方法），我觉得这也是无奈之举）。
 
 
@@ -239,7 +245,7 @@ Java的intrinsiclock是可重入的，因为要允许synchronized方法相互调
 它的引用计数本身是安全且无锁的，但对象的读写则不是，**因为shared_ptr有两个数据成员，读写操作不能原子化**。
 
 根据文档，shared_ptr的线程安全级别和内建类型、标准库容器、std::string 一样，
-即:一个shared_ptr对象实体可被多个线程`同时读取`。
+即：一个shared_ptr对象实体可被多个线程`同时读取`。
 两个shared_ptr对象实体可以被两个线程同时写入，`析构`算写操作。
 如果要从多个线程读写同一个shared_ptr对象，那么需要加锁。
 请注意，以上是shared_ptr对象本身的线程安全级别，不是它管理的对象的线程安全级别。
@@ -254,14 +260,14 @@ void read()
   shared_ptr<Foo> localPtr;
   MutexLockGuard lock(mutex);
   localPtr = globalPtr; // read globalPtr
-  // use localPtr since here，读写 ocalPtr 也无须加锁
+  // use localPtr since here，读写 ocalPtr 也无须加锁，因为localPtr显然是个定义在栈上的局部变量
   doit(localPtr);
 }
 
 // 写入的时候也要加锁:
 void write()
 {
-  shared_ptr<Foo> newPtr(new Foo); // 注意，对象的创建在临界区之外
+  shared_ptr<Foo> newPtr(new Foo); // 注意，对象的创建在临界区之外，对象的创建比较耗时，这样可以缩小临界区
   {
     MutexLockGuard lock(mutex);
     globalPtr = newPtr; // write to globalPtr
@@ -283,7 +289,6 @@ void write()
 
 练习：在`write()`函数中，`globalPtr = newPtr;`
 这一句有可能会在临界区内销毁原来globalptr指向的Foo对象（`operator=`可能导致引用计数减一为0），设法将销行为移出临界区。
-
 
 
 
@@ -343,7 +348,7 @@ void onMessage(const string& msg)
 
 * `shared_ptr<void>`可以持有任何对象，而且能安全地释放。
 * shared_ptr对象可以安全地跨越模块边界，比如从DLL里返回，而不会造成从模块A分配的内存在模块B里被释放这种错误。
-* 二进制兼容性：
+* `二进制兼容性`：
   即便 Foo 对象的大小变了，那么旧的客户代码仍然可以使用新的动态库，而无须重新编译。
   前提是 Foo 的头文件中不出现访问对象的成员的inline函数，并且Foo对象的由动态库中的Factory构造，返回其shared_ptr。
 * 析构动作可以定制。
@@ -439,7 +444,7 @@ class StockFactory : boost::noncopyable
   {
   if (stock) {
     MutexLockGuard lock(mutex_);
-    stocks_.erase(stock->key());  // ！！！
+    stocks_.erase(stock->key());  // ！！！清除掉map里的元素
   }
   delete stock; // sorry，I lied
   // assuming StockFactory lives longer than all Stock's ...
@@ -476,7 +481,7 @@ shared_ptr<Stock> StockFactory::get(const string& key)
 // change
 // pStock.reset(new Stock(key)， boost::bind(&StockFactory::deleteStock， this，_1));
 // to
-pStock.reset(new Stock(key), boost::bind(&StockFactory::deleteStock, shared_from_this(), _1));
+  pStock.reset(new Stock(key), boost::bind(&StockFactory::deleteStock, shared_from_this(), _1));
 }
 ```
 
@@ -543,8 +548,7 @@ public:
 
 
 ## 1.12 替代方案
-
-除了使用`shared_ptr/weak_ptr`，要想在C++里做到线程安全的对象回调与析构，可能的办法有以下一些。
+除了使用`shared_ptr/weak_ptr`，要想在C++里做到线程安全的对象回调与析构，可能的办法有以下一些：
 1. 用一个全局的 facade 来代理 Foo类型对象访问，所有的 Foo 对象回调和析构都通过这个facade来做，也就是把指针替换为 objId/handle，每次要调用对象的成员函数的时候先check-out，用完之后再check-in（释放所有权）。这样理论能避免racecondition，但是代价很大：
 因为要想把这个 facade 做成线程安全的，那么必然要用`互斥锁`。
 这样一来，从两个线程访问两个不同的 Foo 对象也会用到同一个锁，让本来能够并行执行的函数变成了串行执行，没能发挥多核的优势。
@@ -574,29 +578,32 @@ C++ 程序员反过来要向Java 学习，多少有些讽刺。
 
 ## 1.14 Observer之谬
 
-
-本章S18把`shared_ptr/weak_ptr`应用到Observer模式中，部分解决了其线程安全问题。
+本章1.8把`shared_ptr/weak_ptr`应用到Observer模式中，部分解决了其线程安全问题。
 我用 Observer 举例，因为这是一个广为人知的设计模式，但是它有本质的问题。
 Observer 模式的本质问题在于其面向对象的设计。
 换句话说，我认为正是面向对象(OO)本身造成了 Observer 的缺点。
-`observer 是基类`，这带来了非常强的合，强度仅次于友元(friend)。
-这种耦合不仅限制了成员函数的名字、参数、返回值，还限制了成员函数所属的类型（必须是observer 的派生类）。
+`observer 是基类`，这带来了非常强的耦合，强度仅次于友元(friend)。
+这种耦合不仅限制了：成员函数的名字、参数、返回值，
+还限制了成员函数所属的类型（必须是observer 的派生类）。
 
 PS：
-* 目标对象和观察者对象之间的直接依赖关系：
-  在观察者模式中，目标对象需要维护一个`观察者列表`，并`在状态变化时通知观察者`。
-  这导致目标对象和观察者对象之间存在直接的依赖关系，目标对象需要知道观察者对象的存在并与之进行交互。这种直接的依赖关系增加了两者之间的耦合程度。
-* 观察者接口的实现：观察者模式要求观察者对象实现一个共同的接口，以便目标对象可以调用观察者的特定方法进行通知。
-  这意味着`观察者对象需要按照接口定义实现相应的方法`，这种实现细节的要求增加了观察者对象的耦合度。
+* `目标对象`和`观察者对象`之间的`直接依赖关系`：
+  在观察者模式中，`目标对象`需要维护一个`观察者列表`，并`在状态变化时通知观察者`。
+  这导致目标对象和观察者对象之间存在直接的依赖关系，目标对象需要知道观察者对象的存在并与之进行交互。
+  这种直接的依赖关系增加了两者之间的耦合程度。
+
+* 观察者接口的实现：观察者模式要求观察者对象实现一个共同的接口，以便`目标对象 可以 调用观察者的特定方法进行通知`。
+  这意味着`观察者对象需要：按照接口定义实现相应的方法`，这种实现细节的要求增加了观察者对象的耦合度。
+
 * 目标对象的通知方式：在观察者模式中，`目标对象通常通过直接调用观察者对象的方法来进行通知`。
 这种直接的调用方式使得目标对象需要了解观察者对象的具体实现细节，进一步增加了两者之间的耦合程度。
 
-Observer class 是基类，这意味着如果 Foo 想要观察两个类型的事件(比如时钟和温度)，需要使用多继承。
+`Observer class`是基类，这意味着如果 Foo 想要观察两个类型的事件(比如时钟和温度，分别需要实现：时钟观察者和温度观察者)，需要使用多继承。
 这还不是最糟糕的，如果要重复观察同一类型的事件(比如1秒一次的心跳和30一次的自检)，就要用到一些伎俩来 work around，因为不能从一个Base class 继承两次。
 
-在C++里为了替换Observer，可以用`Signal/Slots`，我指的不是QT那种靠语言扩展的实现，而是完全靠标准库实现的 thread safe、race condition free、thread contention free的Signal/Slots，并且不强制要求 shared_ptr 来管理对象，也就是说完全解决了1.8列出的Observer 遗留问题。这会用到2.8介绍的`“借shared_ptr实现copy-on-write”`技术。
-在C++11中，借助variadic template，实现最简单(trivial)的一对多回调可谓
-不费吹灰之力，代码如下。
+在C++里为了替换Observer，可以用`Signal/Slots`，我指的不是QT那种靠语言扩展的实现，而是完全靠标准库实现的 thread safe、race condition free、thread contention free的Signal/Slots，
+并且不强制要求 shared_ptr 来管理对象，也就是说完全解决了1.8列出的Observer 遗留问题。这会用到2.8介绍的`“借shared_ptr实现copy-on-write”`技术。
+在C++11中，借助可变模板参数（variadic template），实现最简单(trivial)的一对多回调可谓不费吹灰之力，代码如下。
 ？？？多思考下
 ```cpp
 template <typename RET, typename... ARGS>
@@ -628,7 +635,6 @@ class SignalTrivial<RET(ARGS...)>
 
 
 
-
 # 第二章 线程同步精要
 并发编程有两种基本模型，一种是`message passing`，另一种是`shared memory`。
 在分布式系统中，运行在多台机器上的多个进程的并行编程只有一种实用模型`message passing`。
@@ -641,11 +647,14 @@ class SignalTrivial<RET(ARGS...)>
 
 **线程同步的四项原则**，按重要性排列:
 1. 首要原则是尽量最低限度地共享对象，`减少需要同步的场合`。
-一个对象能不暴露给别的线程就不要暴露：如果要暴露，优先考虑`immutable对象`（即只读对象）:实在不行才暴露可修改的对象，并用同步措施来充分保护它。
+一个对象 能不暴露给别的线程就不要暴露：
+  如果要暴露，优先考虑`immutable对象`（即只读对象）
+  实在不行才暴露可修改的对象，并用`同步措施`来充分保护它。
 
-2. 其次是使用高级的并发编程构件，如`TaskQueue`、`Producer-Consumer Queue`、`CountDownLatch`等等。
+2. 其次是使用`高级的并发编程构件`
+  如：`TaskQueue`、`Producer-Consumer Queue`、`CountDownLatch`（？？？）等等。
 
-3. 最后不得已必须使用`底层同步原语`(primitives)时，只用`非递归的互斥器`和`条件变量`，慎用`读写锁`，`不要用信号量`。
+3. 最后不得已必须使用`底层同步原语`(primitives)时，只使用： `非递归的互斥器`和`条件变量`， 慎用`读写锁`， `不要用信号量`。
 
 4. 除了使用`atomic整数之外`，`不自己编写lock-free代码`，也不要用`“内核级同步原语”`（不是由C++提供）。
   不凭空猜测“哪种做法性能会更好”，比如`spin lock` vs. `mutex`。
@@ -654,23 +663,24 @@ class SignalTrivial<RET(ARGS...)>
 
 
 ## 2.1 互斥器
-`互斥器(mutex)`恐怕是使用得最多的同步原语，粗略地说，它保护了临界区，**任何一个时刻最多只能有一个线程在此mutex划出的临界区内活动**。
+`互斥器(mutex)`恐怕是使用得最多的同步原语。
+粗略地说，它保护了临界区，**任何一个时刻最多只能有一个线程在此mutex划出的临界区内活动**。
 单独使用mutex时，我们主要为了`保护共享数据`。
 我个人的原则是:
 * 用`RAII手法`封装mutex的`创建`、`销毁`、`加锁`、`解锁`这四个操作。
 用RAII封装这几个操作是通行的做法，这几乎是 C++ 的标准实践，后面我会给出具体的代码示例，相信大家都已经写过或用过类似的代码了
 。Java 里的synchronized语句和C#的using语句也有类似的效果，即保证锁的生效期间等于一个作用域(scope)，不会因异常而忘记解锁。
 
-* 只用非递归的mutex(即不可重入的mutex)。
+* 只用`非递归的mutex`(即不可重入的mutex)。
 
 * 不手工调用`lock()`和`unlock()`函数，一切交给栈上的Guard对象的`构造和析构函数`负责。
-`Guard 对象的生命期`正好等于临界区(分析对象在什么时候析构是C++程序员的基本功)。
+`Guard 对象的生命期`正好等于临界区(分析对象在什么时候析构，是C++程序员的基本功)。
 这样我们保证始终在`同一个函数`、`同一个scope`里对某个mutex加锁和解锁。
 避免在foo()里加锁，然后跑到bar()里解锁;
 也避免在不同的语句分支中分别加锁、解锁。
 这种做法被称为`Scoped Locking`。
 在每次构造Guard 对象的时候，思考一路上(`调用栈上`)`已经持有的锁`，防止因加锁顺序不同而导致`死锁`(deadlock)。
-由于Guard 对象是栈上对象，看函数调用栈就能分析用锁的情况，非常便利。
+由于Guard对象是栈上对象，看函数调用栈就能分析用锁的情况，非常便利。
 
 
 次要原则有:
@@ -678,17 +688,240 @@ class SignalTrivial<RET(ARGS...)>
 * `加锁、解锁在同一个线程`，线程a不能去unlock线程b已经锁住的mutex(RAII自动保证)。
 * 别忘了解锁(RAII自动保证)。
 * 不重复解锁(RAII自动保证)。
-* 必要的时候可以考虑用`PTHREAD_MUTEX_ERRORCHECK`来排错。
+* 必要的时候可以考虑用`PTHREAD_MUTEX_ERRORCHECK`（是互斥量的属性之一，自动检测死锁）来排错。
 mutex恐怕是最简单的同步原语，按照上面的几条原则，几乎不可能用错。
 我自已从来没有违背过这些原则，编码时出现问题都很快能定位并修复。
 
 
 
+### 2.1.1 只使用非递归的mutex
+谈谈我坚持使用非递归的互斥器的个人想法mutex分为递归(recursive)和非递归(non-recursive)两种，
+这是POSIX的叫法，另外的名字是可重入(reentrant)与非可重入。
+这两种mutex作为线程间(inter-thread)的同步工具时没有区别，它们的唯一区别在于：**同一个线程可以重复对recursive mutex加锁，但是不能重复对non-recursive mutex加锁**。
+
+首选非递归mutex，绝对不是为了性能，而是为了**体现设计意图**。
+non-recursive和recursive 的性能差别其实不大，因为少用一个计数器，前者略快一点点而已。
+在同一个线程里多次对non-recursive mutex加锁会立刻导致死锁，我认为这是它的优点，能帮助我们思考代码对锁的期求，并且及早(在编码阶段)发现问题。
+毫无疑问recursive mutex使用起来要方便一些，因为不用考虑一个线程会自己把自已给锁死了，我猜这也是Java和Windows 默认提供recursive mutex的原因。
+
+
+正因为它方便，recursive mutex可能会隐藏代码里的一些问题。
+典型情况是你以为拿到一个锁就能修改对象了，没想到外层代码已经拿到了锁，正在修改(或读取)同一个对象呢。
+来看一个具体的例子(recipes/thread/test/NonRecursiveMutex test.cc):
+```cpp
+  MutexLock mutex;
+  std::vector<Foo> foos;
+
+  void post(const Foo& f)
+  {
+    MutexLockGuard lock(mutex);
+    foos.push_back(f);
+  }
+
+  void traverse()
+  {
+  MutexLockGuard lock(mutex);
+  for (std::vector<Foo>::const_iterator it = foos.begin(); it != foos.end(); ++it)
+  {
+    it->doit();
+  }
+  }
+```
+
+post()加锁，然后修改 foos 对象;
+traverse() 加锁，然后遍历 foos 向量。这些都是正确的。
+
+
+将来有一天，`Foo::doit()`间接调用了`post()`，那么会很有戏剧性的结果:
+1. mutex 是非递归的，于是死锁了。
+2. mutex是递归的，由于push_back()可能(但不总是)导致vector 选代器失效（因为被修改了），程序偶尔会crash。
+
+这时候就能体现non-recursive 的优越性：**把程序的逻辑错误暴露出来**。
+死锁比较容易 debug，把各个线程的调用栈打出来，只要每个函数不是特别长，很容易看出来是怎么死的，见2.1.2的例子9。
+或者可以用`PTHREAD_MUTEX_ERRORCHECK`一下子就能找到错误(前提是 MutexLock 带 debug 选项)。
+程序反正要死，不如死得有意义点，留个“全尸”，让验尸(post-mortem)更容易些。
+如果确实需要在遍历的时候修改 vector，有两种做法：
+1. 一是把修改推后，记住循环中试图添加或删除哪些元素，**等循环结束了再依记录修改 foos**;
+2. 二是用**copy-on-write**，见2.8的例子。
+
+如果一个函数既可能在已加锁的情况下调用，又可能在未加锁的情况下调用，那么就拆成两个函数:
+1. 跟原来的函数同名，函数加锁，转而调用第2个函数。
+2. 给函数名加上后缀 withLockHold，不加锁，把原来的函数体搬过来。
+（总之就是两份实现）
+
+就像这样:
+```cpp
+void post(const Foo& f){
+  MutexLockGuard lock(mutex);
+  postwithLockHold(f); // 不用担心函数调用的开销，编译器会自动内联的
+}
+
+//引入这个函数是为了体现代码作者的意图，尽管 push_back 通常可以手动内联
+void postWithLockHold(const Foo& f)
+{
+  foos.push_back(f);
+}
+```
+
+这有可能出现两个问题(感谢水网友 ovecpp 提出):
+1. 误用了加锁版本，死锁了。
+2. 误用了不加锁版本，数据损坏了。
+
+
+对于1，仿造2.1.2的办法能比较容易地排错。
+对于2，如果Pthreads提供`isLockedByThisThread()`就好办，可以写成:
+```cpp
+void postWithLockHold(const Foo& f)
+{
+  assert(mutex.isLockedByThisThread()); // muduo::MutexLock 提供了这个成员函数
+  // ...
+}
+```
+
+另外，withLockHold这个显眼的后缀也让程序中的误用容易暴露出来。
+
+我还没有遇到过需要使用recursive mutex的情况，我想将来遇到了都可以借助wrapper改用non-recursive mutex，代码只会更清晰
+
+Pthreads的权威专家，《Programming with POSIX Threads》的作者 David Butenhof 也排斥使用recursive mutex。他说:
+***First, implementation of efficient and reliable threaded code revolves around one simple and basic principle: follow your design. That implies, of course, that you have a design, and that you understand it. A correct and well understood design does not require recursive mutexes.***
+回到正题。本文这里只谈了 mutex本身的正确使用，在C++里多线编程还会遇到其他一些 race condition，请参看第1章
+
+性能注脚:Linux的Pthreads mutex 采用`futex(2)`？？？实现，不必每次加锁、解锁都陷入系统调用，效率不错。
+Windows 的CRITICAL_SECTION 也是类似的，不过它可以嵌人一小段spin lock。在多CPU系统上，如果不能立刻拿到锁，它会先 spin 小段时间，如果还不能拿到锁，才挂起当前线程。
+
+### 2.1.2 死锁
+前面说过，如果坚持只使用`Scoped Locking`（在同一个函数、同一个作用域，加解锁），那么在出现死锁的时候很容易定位。
+考虑下面这个线程自己与自已死锁的例子(recipes/thread/test/SelfDeadLock.cc)。
+
+```cpp
+
+
+class Request
+{
+public:
+void process() // __attribute_- ((noinline))
+{
+    muduo::MutexLockGuard lock(mutex_);
+    // ...
+    print(); // 原本没有这行，某人为了调试程序不小心添加了。
+}
+
+void print() const // -_attribute_- ((noinline))
+{
+  muduo::MutexLockGuard lock(mutex_);   // 重复获取锁，导致死锁
+  // ...
+}
+private:
+  mutable muduo::MutexLock mutex_;
+};
+
+int main()
+{
+  Request req;
+  req.process0;
+}
+```
+
+`死锁示例`
+有一个Inventory(清单)class，记录当前的 Request 对象。
+容易看出，下面这个Inventory class 的 add()和 remove()成员函数都是线程安全的，
+它使用了mutex来保护共享数据requests_
+
+```cpp
+class Inventory
+{
+public:
+  void add(Request* req)
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    requests_.insert(req);
+  }
+
+  void remove(Request* req) // -_attribute_- ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    requests_.erase(req);
+  }
+
+  void printAll() const;
+private:
+  mutable muduo::MutexLock mutex_;
+  std::set<Request*> requests_;
+};
+
+Inventory g_inventory; //为了简单起见，这里使用了全局对象。
+```
+Request class 与 Inventory class 的交互逻辑很简单：
+* 在处理 (process)请求的时候，往g_inventory中添加自己。
+* 在析构的时候，从g_inventory 中移除自己。
+目前看来，整个程序还是线程安全的。
+
+```cpp
+class Request
+{
+public:
+  void process() // __attribute_- ((noinline))
+  {
+  muduo::MutexLockGuard lock(mutex_);
+  g_inventory.add(this);
+  // ...
+  }
+
+  ~Request() __attribute_- ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    sleep(1);//为了容易复现死锁，这里用了延时
+    g_inventory.remove(this);
+  }
+
+void print() const _attribute_- ((noinline))
+{
+  muduo::MutexLockGuard lock(mutex_);
+  // ...
+}
+
+private:
+  mutable muduo::MutexLock mutex_;
+};
+
+```
 
 
 
+Inventory class还有一个功能是打印全部已知的 Request 对象。
+`Inventory::printAll()`里的逻辑单独看是没问题的，但是它有可能引发死锁。
+```cpp
+void Inventory::printAll() const
+{
+muduo::MutexLockGuard lock(mutex_);
+sleep(1); //为了容易复现死锁，这里用了延时
+for (std::set<Request*>::const_iterator it = requests_.begin(); it != requests_.end(); ++it)
+{
+  (*it)->print(); // 需要得到request对象的锁
+}
+printf("Inventory::printAll() unlocked\n");
+}
+```
+下面这个程序运行起来发生了死锁:
 
+```cpp
+void threadFunc()
+{
+Request* req = new Request;
+req->process();
+delete req;
+}
 
+int main()
+{
+  muduo::Thread thread(threadFunc);
+  thread.start();
+  //为了让另一个线程等在前面第 14 行的 sleep()上
+  usleep(500 *1000):
+  g_inventory.printAll();
+  thread.join();
+}
+```
 
 
 

@@ -1781,3 +1781,24 @@ __gnu_cxx::__aligned_buffer<_Tp> _M_storage;
 
 
 
+# `std::thread`必须通过`join()`显示地销毁
+
+在C++中，当一个`std::thread`对象执行完任务后，并不会立刻销毁，而是会等待主线程调用`join()`或`detach()`方法来显式地销毁线程。这是因为C++的`std::thread`对象的析构函数会检查线程是否已经被加入（joined）或分离（detached），如果没有，则会调用`std::terminate`来终止程序的执行。因此，为了避免出现未定义行为，C++要求在主线程中显式地调用`join()`或`detach()`方法来销毁线程。这种设计可以确保程序的稳定性和可靠性，避免出现潜在的线程相关问题。
+
+
+
+
+
+# 继承关系中的this指针
+当基类构造函数被调用时，`this指针`指向的是`整个派生类对象的起始地址`
+
+
+
+# 关于移动构造
+```cpp
+    Test destination = std::move(source); // 不是直接调用移动赋值
+```
+
+
+
+
