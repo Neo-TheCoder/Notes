@@ -250,6 +250,7 @@ Java的intrinsiclock是可重入的，因为要允许synchronized方法相互调
 如果要从多个线程读写同一个shared_ptr对象，那么需要加锁。
 请注意，以上是shared_ptr对象本身的线程安全级别，不是它管理的对象的线程安全级别。
 
+以下代码的临界区很小，只有简单的赋值操作，读操作很快
 ```cpp
 // globalPtr能被多个线程看到，那么它的读写需要加锁。注意我们不必用读写锁
 // 而只用最简单的互斥锁，这是为了性能考虑。
@@ -257,11 +258,13 @@ Java的intrinsiclock是可重入的，因为要允许synchronized方法相互调
 // 为了拷贝 globalPtr，需要在读取它的时候加锁，即:
 void read()
 {
-  shared_ptr<Foo> localPtr;
-  MutexLockGuard lock(mutex);
-  localPtr = globalPtr; // read globalPtr
-  // use localPtr since here，读写 ocalPtr 也无须加锁，因为localPtr显然是个定义在栈上的局部变量
-  doit(localPtr);
+  std::shared_ptr<Foo> localPtr;
+  {
+    MutexLockGuard lock(mutex);
+    localPtr = globalPtr; // read globalPtr
+  }
+  // use localPtr since here，读写 localPtr 也无须加锁
+  doit(localPtr);   // 假设不对shared_ptr指向的对象做操作
 }
 
 // 写入的时候也要加锁:
@@ -271,9 +274,9 @@ void write()
   {
     MutexLockGuard lock(mutex);
     globalPtr = newPtr; // write to globalPtr
-    //use newPtr since here，读写 newPtr 无须加锁
-    doit(newPtr);
   }
+  //use newPtr since here，读写 newPtr 无须加锁
+  doit(newPtr);
 }
 ```
 注意到上面的`read()`和`write()`在临界区之外都没有再访问globalPtr，
@@ -281,15 +284,12 @@ void write()
 下面会谈到，只要有这样的local copy存在，shared_ptr作为函数参数传递时不必复制，用`reference to const`作为参数类型即可。
 
 另外注意到上面的`new Foo`是在临界区之外执行的，这种写法通常比在临界区内写`globalPtr.reset(new Foo)`要好，因为缩短了临界区长度。
-
 如果要销毁对象，我们固然可以在临界区内执行`globalPtr.reset()`，但是这样往往会让对象析构（有一定的性能开销）发生在临界区以内，增加了临界区的长度。
-
 一种改进办法是像上面一样定义一个`localPtr`，用它在临界区内与`globalPtr`交换(`swap()`)，
 这样能保证把对象的销毁推迟到临界区之外。
 
 练习：在`write()`函数中，`globalPtr = newPtr;`
-这一句有可能会在临界区内销毁原来globalptr指向的Foo对象（`operator=`可能导致引用计数减一为0），设法将销行为移出临界区。
-
+这一句有可能会在临界区内销毁原来globalptr指向的Foo对象（`operator=`可能导致引用计数减一为0），设法将销毁行为移出临界区。
 
 
 ## 1.10 shared_ptr技术与陷阱
@@ -720,11 +720,11 @@ non-recursive和recursive 的性能差别其实不大，因为少用一个计数
 
   void traverse()
   {
-  MutexLockGuard lock(mutex);
-  for (std::vector<Foo>::const_iterator it = foos.begin(); it != foos.end(); ++it)
-  {
-    it->doit();
-  }
+    MutexLockGuard lock(mutex);
+    for (std::vector<Foo>::const_iterator it = foos.begin(); it != foos.end(); ++it)
+    {
+      it->doit();
+    }
   }
 ```
 
@@ -732,7 +732,7 @@ post()加锁，然后修改 foos 对象;
 traverse() 加锁，然后遍历 foos 向量。这些都是正确的。
 
 
-将来有一天，`Foo::doit()`间接调用了`post()`，那么会很有戏剧性的结果:
+将来有一天，`Foo::doit()`间接调用了`post()`（重复获取锁），那么会很有戏剧性的结果:
 1. mutex 是非递归的，于是死锁了。
 2. mutex是递归的，由于push_back()可能(但不总是)导致vector 选代器失效（因为被修改了），程序偶尔会crash。
 
@@ -887,19 +887,18 @@ private:
 ```
 
 
-
 Inventory class还有一个功能是打印全部已知的 Request 对象。
 `Inventory::printAll()`里的逻辑单独看是没问题的，但是它有可能引发死锁。
 ```cpp
 void Inventory::printAll() const
 {
-muduo::MutexLockGuard lock(mutex_);
-sleep(1); //为了容易复现死锁，这里用了延时
-for (std::set<Request*>::const_iterator it = requests_.begin(); it != requests_.end(); ++it)
-{
-  (*it)->print(); // 需要得到request对象的锁
-}
-printf("Inventory::printAll() unlocked\n");
+  muduo::MutexLockGuard lock(mutex_);
+  sleep(1); //为了容易复现死锁，这里用了延时
+  for (std::set<Request*>::const_iterator it = requests_.begin(); it != requests_.end(); ++it)
+  {
+    (*it)->print(); // 需要得到request对象的锁
+  }
+  printf("Inventory::printAll() unlocked\n");
 }
 ```
 下面这个程序运行起来发生了死锁:
@@ -907,9 +906,9 @@ printf("Inventory::printAll() unlocked\n");
 ```cpp
 void threadFunc()
 {
-Request* req = new Request;
-req->process();
-delete req;
+  Request* req = new Request;
+  req->process(); // 获取Request对象的锁
+  delete req;   // 获取Inventory对象的锁
 }
 
 int main()
@@ -918,10 +917,320 @@ int main()
   thread.start();
   //为了让另一个线程等在前面第 14 行的 sleep()上
   usleep(500 *1000):
-  g_inventory.printAll();
+  g_inventory.printAll();   // 获取Inventory对象的锁，内部还要获取Request对象的锁
   thread.join();
 }
 ```
+
+注意到两个操作获取锁的顺序相反，导致循环等待
+一个线程正在析构Request()，另一个线程正在调用Print()
+
+解决死锁的办法很简单：
+要么把print()移出printAll()的临界区，这可以用2.8介绍的办法;
+要么把remove()移出~Request()的临界区，比如交换p.37中C13和C15两行代码的位置。
+```cpp
+
+  ~Request() __attribute_- ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    sleep(1);//为了容易复现死锁，这里用了延时
+    g_inventory.remove(this);
+  }
+
+    g_inventory.remove(this);
+
+  muduo::MutexLockGuard lock(mutex_);
+```
+
+当然这没有解决对象析构的race condition，留给读者当做练习吧。
+思考:Inventory::printAll- Request::print 有没有可能与 Request::process Inventory::add 发生死锁?
+* Inventory::printAll- Request::print
+  获取Inventory对象的锁、获取Request对象的锁
+* Request::process Inventory::add
+  获取Request对象的锁，获取Inventory对象的锁
+
+死锁会让程序行为失常，其他一些锁使用不当则会影响性能，
+例如潘爱民老师写的《Lock Convoys Explained》15 详细解释了一种性能衰退的现象。
+除此之外，编写高性能多线程程序至少还要知道 false sharing 和CPU cache 效应，可看这儿篇入门文章
+
+
+
+## 2.2 条件变量
+`互斥器(mutex)`是加锁原语，用来`排他性地访问共享数据`，它不是等待原语。
+在使用mutex的时候，我们一般都会期望：**锁不要阻塞，总是能立刻拿到锁。然后尽快访问数据，用完之后尽快解锁，这样才能不影响并发性和性能**。
+如果需要等待某个条件成立，我们应该使用条件变量(condition variable)。
+条件变量顾名思义是`一个或多个线程等待某个布尔表达式为真，即等待别的线程“唤醒”它`。
+条件变量的学名叫`管程(monitor)`。
+Java object 内置的 wait()、notify()、notifyAl1()是条件变量。
+条件变量只有一种正确使用的方式，几乎不可能用错。
+### 对于`wait端`：
+1. 必须与`mutex`一起使用，该布尔表达式的读写需受此mutex保护
+2. 在`mutex`已上锁的时候才能调用`wait()`。
+3. 把`判断布尔条件`和`wait`放到`while`循环中
+
+
+写成代码是:
+```cpp
+muduo::MutexLock mutex;
+muduo::Condition cond(mutex);
+std::deque<int> queue;
+int dequeue()
+{
+  MutexLockGuard lock(mutex); // 上锁
+  while (queue.empty()) // 必须用循环 必须在判断之后再wait()
+  {
+    cond.wait();  // 这一步会原子地 unlock mutex 并进入等待，不会与 enqueue 死锁
+    // wait()执行完毕时会自动重新加锁
+  }
+  assert(!queue.empty());
+  int top = queue.front();
+  queue.pop_front();
+  return top;
+}
+```
+
+上面的代码中必须用 while 循环来等待条件变量，而不能用if 语句，原因是`虚假唤醒`。
+这也是面试多线程编程的常见考点。
+
+### 对于`signal/broadcast端`
+1. 不一定要在mutex已上锁的情况下调用signal(理论上)。
+2. 在signal之前一般要修改布尔表达式。
+3. 修改布尔表达式通常要用mutex保护(至少用作full memory barrier)。
+4. 注意区分signal与broadcast:
+  `broadcast`通常用于表明`状态变化`
+    通知到所有等待该条件变量的线程：条件已经发生变化，让它们重新检查条件决定是否继续执行
+  `signal`通常用于表示`资源可用`
+    表示资源可用，通知至少一个线程
+
+  (broadcast should generally be used to indicate state change rather than resource availability。) 
+写成代码是：
+```cpp
+void enqueue(int x)
+{
+  {
+    MutexLockGuard lock(mutex);
+    queue.push_back(x);
+  }
+  cond.notify_one(); //可以移出临界区之外，因为对临界资源的修改已经完成，可以把锁释放了
+}
+```
+上面的`dequeue()/enqueue()`实际上实现了一个简单的容量无限的(unbounded)`BlockingQueue`
+
+思考:
+`enqueue()`中每次添加元素都会调用`condition::notify()`，如果改成：只在`queue.size()`从0变1的时候才调用 Condition::notify()，会出现什么后果？
+--> 入队线程1进行入队，通知了所有出队线程，入队线程2也进行入队，但不进行通知，某一个出队线程拿到锁，进行出队
+假如入队速度很快，就一直堆积了，可能只有一个出队线程一直工作（毕竟notify_one只执行了一次），导致其他的出队线程都饥饿了
+假如出队速度很快，出队线程都有机会被唤醒
+
+**条件变量是非常底层的同步原语，很少直接使用**，一般都是用它来实现高层的同步措施，如`BlockingQueue<T>`或`CountDownLatch`。
+
+`倒计时(CountDownLatch)`是一种常用且易用的同步手段。
+它主要有两种用途:
+1. 主线程发起多个子线程，等这些子线程各自都完成一定的任务之后，主线程才继续执行。
+通常用于**主线程等待多个子线程完成初始化**。
+
+2. 主线程发起多个子线程，子线程都等待主线程，**主线程完成其他一些任务之后，通知所有子线程开始执行**。
+通常用于**多个子线程等待主线程发出“起跑”命令**。
+
+当然我们可以直接用条件变量来实现以上两种同步。
+不过如果用CountDownLatch的话，程序的逻辑更清晰。
+CountDownLatch的接口很简单：
+```cpp
+class CountDownLatch : boost:noncopyable
+{
+public:
+  explicit CountDownLatch(int count);   // 倒数几次
+  void wait();                          // 等待计数值变为0
+  void countDown();                     // 计数减一
+
+private:
+  mutable MutexLock mutex_;
+  Condition condition_;
+  int count_;
+};
+
+// CountDownLatch的实现同样简单，几乎就是条件变量的教科书式应用
+//构造函数见第48页
+void CountDownLatch::wait()
+{
+  MutexLockGuard lock(mutex_);
+  while (count_ > 0)
+    condition_.wait();
+}
+
+void CountDownLatch::countDown()
+{
+  MutexLockGuard lock(mutex_);
+  --count_;
+  if (count_ == 0)
+    condition_.notifyAll();
+}
+```
+
+注意到`CountDownLatch::countDown()`使用的是`Condition::notifyAll()`，而前面p.41的enqueue()使用的是`Condition::notify_one()`，
+这都是有意为之。请读者思考，如果交换两种用法会出现什么情况?
+--> broadcast是状态变化，需要通知所有的signal端，wait端的状态发生了变化
+    signal是资源可用，每次唤醒一个线程即可
+
+
+`互斥器`和`条件变量`构成了多线程编程的全部必备同步原语，用它们即可完成任何多线程同步任务，二者不能相互替代。
+我认为应该精通这两个同步原语的用法，先学会编写正确的、安全的多线程程序，再在必要的时候考虑用其他“高技术”手段提高性能，如果确实能提高性能的话。
+千万不要连 mutex 都还没学会、用好，一上来就考虑lock-free设计。
+
+
+## 2.3 不要用读写锁和信号量
+`读写锁(Readers-Writer lock，简写为rwlock)`是个看上去很美的抽象，它明确区分了read和write两种行为。
+初学者常干的一件事情是，一见到某个共享数据结构频繁读而很少写，就把mutex替换为rwlock。
+甚至首选rwlock来保护共享状态，这不见得是正确的。
+从正确性方面来说，**一种典型的易犯错误是在持有 read lock 的时候修改了共享数据**。
+这通常发生在程序的维护阶段，为了新增功能，程序员不小心在原来readlock 保护的函数中调用了会修改状态的函数。
+这种错误的后果跟无保护并发读写共享数据是一样的。
+**从性能方面来说，读写锁不见得比普通mutex更高效**。
+无论如何reader lock加锁的开销不会比mutex lock小，因为它要`更新当前reader的数目`。
+如果临界区很小，锁竞争不激烈，那么mutex 往往会更快。见1.9 的例子。
+reader lock可能允许提升(upgrade)为writer lock，也可能不允许提升。
+考虑2.1.1的 post()和traverse()示例，如果用读写锁来保护 foos 对象，那么post()应该持有写锁，而traverse()应该持有读锁。
+```cpp
+  MutexLock mutex;
+  std::vector<Foo> foos;
+
+  void post(const Foo& f)
+  {
+    MutexLockGuard lock(mutex);
+    foos.push_back(f);
+  }
+
+  void traverse()
+  {
+    MutexLockGuard lock(mutex);
+    for (std::vector<Foo>::const_iterator it = foos.begin(); it != foos.end(); ++it)
+    {
+      it->doit();
+    }
+  }
+
+  // 假设traverse()的doit调用到post()
+```
+如果允许把读锁提升为写锁，后果跟使用recursive mutex一样，会造成迭代器失效（递归锁会导致迭代器失效），程序崩溃。（在使用读写锁时，可以先获取读锁，然后在需要写操作时，尝试升级为写锁。）
+如果不允许提升，后果跟使用non-recursive mutex一样，会造成死锁（重复获取锁）。
+我宁愿程序死锁，留个“全尸”好查验。
+
+
+通常**reader lock 是可重入的**，**writer lock 是不可重入的**。
+但是为了防止writer饥饿，writer lock通常会阻塞后来的reader lock，因此reader lock在重入的时候可能死锁。？？？
+--> 补充一下rwlock死锁的问题，线程1获取了读锁，在临界区执行代码；这时，线程2获取写锁，在该锁上等待线程1完成读操作，同事线程2阻塞了后续的读操作；线程1仍在进行剩余读操作，但是它通过函数调用等间接方式，再次获取那个读锁，此时，线程1阻塞，因为线程2已经上了写锁；同时，线程2也在等待线程1释放读锁，才能进行写操作。因此发生了死锁，原因就在于，读锁是可重入的。
+
+
+
+
+
+另外，在追求低延迟读取的场合也不适用读写锁，见 p.55 muduo线程库有意不提供读写锁的封装，因为我还没有在工作中遇到过用rwlock 替换普通mutex 会显著提高性能的例子。相反，我们一般建议首选mutex。
+遇到并发读写，如果条件合适，我通常会用2.8的办法，而不用读写锁，同时避免reader 被 writer 阻塞。
+如果确实对并发读写有极高的性能要求，可以考虑`read-copy-update信号量(Semaphore)`:
+我没有遇到过需要使用信号量的情况，无从谈及个人经验。
+我认为信号量不是必备的同步原语，因为条件变量配合互斥器可以完全替代其功能，而且更不易用错。
+除了[RWC]指出的“semaphore has no notion ofownership”之外，信号量的另一个问题在于它有自己的计数值，而通常我们自己的数据结构也有长度值，这就造成了**同样的信息存了两份**，**需要时刻保持一致**，这增加了程序员的负担和出错的可能。如果要控制并发度，可以考虑用`muduo::ThreadPool`。
+
+说一句不知天高地厚的话，如果程序里需要解决如`“哲学家就餐”`之类的复杂IPC问题，我认为应该首先检讨这个设计：
+为什么线程之间会有如此复杂的资源争抢(一个线程要同时抢到两个资源，一个资源可以被两个线程争夺)？
+如果在工作中遇到，我会把“想吃饭”这个事情专门交给一个为各位哲学家分派餐具的线程来做，然后每个哲学家等在一个简单的condition variable 上，到时间了有人通知他去吃饭。
+**从哲学上说，教科书上的解决方案是平权，每个哲学家有自己的线程，自己去拿筷子;我宁愿用集权的方式，用一个线程专门管餐具的分配，让其他哲学家线程拿个号等在食堂门口好了**。
+这样不损失多少效率，却让程序简单很多。
+虽然Windows的WaitForMultipleobjects 让这个问题trivial化，但在Linux下正确模拟WaitForMultipleObjects 不是普通程序员该干的。
+Pthreads还提供了barrier这个同步原语，我认为不如CountDownLatch实用
+
+
+
+## 2.4 封装`MutexLock`、`MutexLockGuard`、`Condition`
+这几个类都不允许拷贝构造/赋值
+
+```cpp
+class CAPABILITY("mutex") MutexLock : noncopyable
+{
+ public:
+  MutexLock()
+    : holder_(0)
+  {
+    MCHECK(pthread_mutex_init(&mutex_, NULL));
+  }
+
+  ~MutexLock()
+  {
+    assert(holder_ == 0);
+    MCHECK(pthread_mutex_destroy(&mutex_));
+  }
+
+  // must be called when locked, i.e. for assertion
+  bool isLockedByThisThread() const
+  {
+    return holder_ == CurrentThread::tid();
+  }
+
+  void assertLocked() const ASSERT_CAPABILITY(this)
+  {
+    assert(isLockedByThisThread());
+  }
+
+  // internal usage
+
+  void lock() ACQUIRE()
+  {
+    MCHECK(pthread_mutex_lock(&mutex_));
+    assignHolder();
+  }
+
+  void unlock() RELEASE()
+  {
+    unassignHolder();
+    MCHECK(pthread_mutex_unlock(&mutex_));
+  }
+
+  pthread_mutex_t* getPthreadMutex() /* non-const */
+  {
+    return &mutex_;
+  }
+
+ private:
+  friend class Condition;
+
+  class UnassignGuard : noncopyable
+  {
+   public:
+    explicit UnassignGuard(MutexLock& owner)
+      : owner_(owner)
+    {
+      owner_.unassignHolder();
+    }
+
+    ~UnassignGuard()
+    {
+      owner_.assignHolder();
+    }
+
+   private:
+    MutexLock& owner_;
+  };
+
+  void unassignHolder()
+  {
+    holder_ = 0;
+  }
+
+  void assignHolder()
+  {
+    holder_ = CurrentThread::tid();
+  }
+
+  pthread_mutex_t mutex_;
+  pid_t holder_;
+};
+```
+
+
+
+
+
+
 
 
 

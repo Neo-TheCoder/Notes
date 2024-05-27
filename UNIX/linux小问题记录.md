@@ -379,6 +379,44 @@ ELF文件包含了程序的代码、数据以及一些元数据，这些元数�
 
 
 
+# 文件操作接口
+```cpp
+// 递归地查找某一路径下所有后缀名为xxx的文件，塞进set中
+
+static bool GetOrderedFilesWithExtension(const std::string& base_path, const std::string& extension, std::set<std::string>& ordered_files)
+{
+  char path[512];
+  struct dirent *dp;
+  struct stat st; 
+  DIR* dir = opendir(base_path.c_str());
+
+  if (dir == nullptr) {
+    return false;
+  }
+  while ((dp = readdir(dir)) != nullptr) {   // readdir返回指向struct dirent的指针
+    if (strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0) {
+      sprintf(path, "%s/%s", base_path.c_str(), dp->d_name);
+      ::stat(path, &st);
+      if (S_ISDIR(st.st_mode)) {
+        GetOrderedFilesWithExtension(path, extension, ordered_files);
+      } else {
+        int len = strlen(dp->d_name);
+        int ext_len = strlen(extension.c_str());
+        if (len > ext_len && strcmp(dp->d_name + len - ext_len, extension.c_str()) == 0) {
+          ordered_files.insert(path);
+        }   
+      }   
+    }   
+  }
+  ::closedir(dir);
+  return true;
+}
+```
+
+
+
+
+
 
 
 
