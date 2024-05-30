@@ -1144,6 +1144,9 @@ Pthreads还提供了barrier这个同步原语，我认为不如CountDownLatch实
 ## 2.4 封装`MutexLock`、`MutexLockGuard`、`Condition`
 这几个类都不允许拷贝构造/赋值
 
+其实就是封装`pthread系列接口`
+
+`MutexLock`
 ```cpp
 class CAPABILITY("mutex") MutexLock : noncopyable
 {
@@ -1161,7 +1164,7 @@ class CAPABILITY("mutex") MutexLock : noncopyable
   }
 
   // must be called when locked, i.e. for assertion
-  bool isLockedByThisThread() const
+  bool isLockedByThisThread() const   // ！！！可用于assert
   {
     return holder_ == CurrentThread::tid();
   }
@@ -1186,14 +1189,14 @@ class CAPABILITY("mutex") MutexLock : noncopyable
   }
 
   pthread_mutex_t* getPthreadMutex() /* non-const */
-  {
+  { // 用户代码不会调用此处，仅供Condition调用
     return &mutex_;
   }
 
  private:
   friend class Condition;
 
-  class UnassignGuard : noncopyable
+  class UnassignGuard : noncopyable   // 辅助类，用于在构造时解除MutexLock对象的持有者，析构时重新分配持有者，确保在作用域内正确管理MutexLock对象的持有者
   {
    public:
     explicit UnassignGuard(MutexLock& owner)
@@ -1227,8 +1230,299 @@ class CAPABILITY("mutex") MutexLock : noncopyable
 ```
 
 
+`MutexLockGuard`，直接封装`MutexLock`，无法中途加解锁，生命周期和锁的有效区域绑定
+```cpp
+class MutexLockGuard : boost::noncopyable
+{
+ public:
+  explicit MutexLockGuard(MutexLock& mutex) : mutex_(mutex)
+  {
+    mutex_.lock();
+  }
+
+  ~MutexLockGuard()
+  {
+    mutex_.unlock();
+  }
+
+ private:
+
+  MutexLock& mutex_;
+};
+
+#define MutexLockGuard(x) static_assert(false "missing mutex guard var name")
+```
+
+注意上面代码的最后一行定义了一个宏，这个宏的作用是防止程序里出现如下错误:
+```cpp
+void doit()
+{
+  MutexLockGuard(mutex);// 遗漏变量名，产生一个临时对象又马上销毁了
+  // 结果没有锁住临界区。
+  // 正确写法是：
+  MutexLockGuard lock(mutex);
+  //临界区...
+}
+```
+我见过有人把MutexLockGuard 写成template，
+我没有这么做是因为**它的模板类型参数只有 MutexLock 一种可能，没有必要随意增加灵活性**，
+于是我手工把模板具现化(instantiate)了。
+此外一种更激进的写法是，把lock/unlock 放到 private 区（不让外部加解锁），然后把MutexLockGuard设为 MutexLock 的friend。
+我认为在注释里告知程序员即可，另外check-in（释放所有权）之前的code review 也很容易发现误用的情况 (grep getPthreadMutex)。
 
 
+这段代码没有达到工业强度:
+* mutex创建为`PTHREAD_MUTEX_DEFAULT`类型，而不是我们预想的`PTHREAD_MUTEX_NORMAL`类型(实际上这二者很可能是等同的)，
+严格的做法是用mutexattr来显式指定mutex的类型。
+* 没有检查返回值。
+这里不能用 `assert()`检查(pthread_mutex_lock等操作的)返回值，因为`assert()`在release build 里是空语句。
+我们检查返回值的意义在于：防止ENOMEM之类的资源不足情况，这一般只可能在负载很重的产品程序中出现。
+一旦出现这种错误，程序必须立刻清理现场并主动退出，否则会莫名其妙地崩溃，给事后调查造成困难。
+这里我们需要 non-debug 的assert，或许 google-glog 的 CHECK()宏是个不错的思路。
+PS: 此处摘抄的代码进行了返回值的检查
+```cpp
+#define MCHECK(ret) ({ __typeof__ (ret) errnum = (ret);         \
+                       assert(errnum == 0); (void) errnum;})
+
+#endif // CHECK_PTHREAD_RETURN_VALUE
+```
+
+以上两点改进留作练习。
+
+muduo库的一个特点是只提供最常用、最基本的功能，特别有意避免提供多种功能近似的选择。
+muduo不是“杂货铺”，不会不分青红皂白地把各种有用的、没用的功能全铺开摆出来。muduo 删繁就简，举重若轻;减少选择余地，生活更简单。
+
+MutexLock 没有提供`trylock()`函数，它可能用于观察多线程竞争同一个锁的情况。
+Condition class 的实现有点意思。
+`Pthreads condition variable`允许在`wait()`的时候指定mutex，但是我想不出有什么理由一个condition variable会和不同的mutex 配合使用。
+Java的intrinsic condition和Condition class 都不支持这么做，因此我觉得可以放弃这一灵活性，老老实实地一对一好了。
+
+相反，boost::thread的condition_variable 是在 wait 的时候指定mutex，请参观其同步原语的庞杂设计:
+* Concept有四种 Lockable、TimedLockable、SharedLockable、UpgradeLockable。
+* Lock 有六种: lock_guard、unique_lock、shared_lock、upgrade_lock、up grade_to_unique_lock、scoped_try_lock。
+* Mutex 有七种: mutex、try_mutex、timed_mutex、recursive_mutex、recursive_try_mutex、recursive_timed_mutex、shared_mutex。
+恕我愚钝，见到 boost::thread 这样如 Rube Goldberg Machine一样让人眼花缭乱的库，我只得三揖绕道而行。
+很不幸 C++11的线程库也采纳了这套方案。这些class名字也很无厘头，为什么不老老实实用 readers_writer_lock 这样的通俗名字呢?非得增加精神负担，自己发明新名字。我不愿为这样的灵活性付出代价，宁愿自
+已做个简简单单的一看就明白的 class 来用，这种简单的几行代码的“轮子”造造也无妨。提供灵活性固然是本事，然而在不需要灵活性的地方把代码写死，更需要大智慧。
+下面这个muduo::Condition class 简单地封装了 Pthreads condition variable，用起来也容易，见本节前面的例子。这里我用notify/notifyA11作为函数名，因为signal有别的含义，C++里的signal/slot、C里的signalhandler 等等。就别overload这个术语了。
+
+`Condition`，直接和`MutexLock`绑定
+```cpp
+class Condition : noncopyable
+{
+ public:
+  explicit Condition(MutexLock& mutex)
+    : mutex_(mutex)
+  {
+    MCHECK(pthread_cond_init(&pcond_, NULL));
+  }
+
+  ~Condition()
+  {
+    MCHECK(pthread_cond_destroy(&pcond_));
+  }
+
+  void wait()
+  {
+    MutexLock::UnassignGuard ug(mutex_);
+    MCHECK(pthread_cond_wait(&pcond_, mutex_.getPthreadMutex())); // 使用到mutex，释放锁并且阻塞等待
+  }
+
+  // returns true if time out, false otherwise.
+  bool waitForSeconds(double seconds);
+
+  void notify()
+  {
+    MCHECK(pthread_cond_signal(&pcond_)); // 唤醒一个阻塞等待当前条件变量的线程
+  }
+
+  void notifyAll()
+  {
+    MCHECK(pthread_cond_broadcast(&pcond_)); // 唤醒所有阻塞等待当前条件变量的线程
+  }
+
+ private:
+  MutexLock& mutex_;
+  pthread_cond_t pcond_;
+};
+```
+
+如果一个 class 要包含 MutexLock 和 Condition，请注意它们的声明顺序和初始化顺序，**mutex_应先于condition_构造，并作为后者的构造参数**:
+```cpp
+class CountDownLatch
+{
+  public:
+  CountDownLatch(int count)
+  : mutex_(),
+  // 初始化顺序要与成员声明保持一致
+  condition_(mutex_),
+  count_(count)
+  {}
+
+  private:
+  mutable MutexLock mutex_; // 顺序很重要，先 mutex后 condition
+  Condition condition_;
+  int count_;
+};
+```
+
+请允许我再次强调，虽然本章花了大量篇幅介绍如何正确使用 mutex 和 condition variable，但并不代表我鼓励到处使用它们。
+这两者都是非常底层的同步原语，主要用来实现更高级的并发编程工具。**一个多线程程序里如果大量使用 mutex 和condition variable来同步，基本跟用铅笔刀锯大树(孟岩语)没啥区别**。
+
+在序里使用 Pthreads 库有一个额外的好处:分析工具认得它们，懂得其语意线程分析工具如IntelThread Checker 和 Valgrind-Helgrind34等能识别 Pthreads 调用，
+并依据happens-before 关系，分析序有无data race。
+
+
+
+## 2.5 线程安全的Singleton实现
+
+研究Singleton的线程安全实现的历史会发现很多有意思的事情，人们一度认为`double checked locking(缩写为DCL)`是王道，兼顾了效率与正确性。
+---
+### PS：`double checked locking`
+`传统的单例模式`
+```cpp
+class Singleton
+{
+private:
+    Singleton(){}
+public:
+    static Singleton* instance()
+    {
+        if(_instance == 0)
+        {
+            _instance = new Singleton();
+        }
+ 
+        return _instance;
+    }
+private:
+    static Singleton* _instance;
+ 
+public:
+    int atestvalue;
+};
+ 
+Singleton* Singleton::_instance = 0;
+```
+这样的代码可能存在问题：
+1. 线程A执行到`if(_instance == 0)`，尚未创建对象，就挂起了
+2. 线程B进来，发现尚未创建对象，主动创建对象，但是如果此处线程A也继续执行的话，它也会创建对象
+
+解决办法之一是，每次函数调用都请求锁：
+```cpp
+Singleton* Singleton::instance() {
+    Lock lock; // acquire lock (params omitted for simplicity)
+    if (_instance == 0) {
+        _instance = new Singleton;
+    }
+    return _instance;
+} // release lock (via Lock destructor)
+```
+但是这样显然不必，只要第一次使用上锁就行了
+可以用`DCLP`解决
+`Double-Checked Locking Pattern`，双重检测
+```cpp
+Singleton* Singleton::instance() {
+    if (_instance == 0) { // 1st test
+        Lock lock;
+        if (_instance == 0) { // 2nd test
+            _instance = new Singleton;  // 1. 分配内存空间 2. 构造对象 3. 指针赋值
+        }
+    }
+    return _instance;
+}
+```
+
+注意！
+其中：`_instance = new Singleton;`需要分为以下三步：
+1. 分配内存空间
+2. 构造对象
+3. 指针赋值
+**编译器并不是严格按照上面的顺序来执行的。可以交换2和3**（因为只要分配完内存空间，就可以进行指针赋值了）
+考虑以下情况：
+1. 线程A执行了， 1，3然后挂起，也就是说，尚未构造对象，就返回了一个空悬指针
+2. 线程B检查发现指针不为空，直接`return _instance`
+
+解决办法之一是`volatile`关键字
+`volatile`告诉编译器不要对变量的读取和写入进行优化
+
+有“神牛”指出由于`乱序执行`的影响，DCL是靠不住的。
+Java开发者还算幸运，可以借助内部静态类的装载来实现。
+C++ 就比较惨，要么次次锁，要么`eager initialize`(**指的是在程序运行时立即初始化对象，而不是延迟到对象首次被使用时再初始化**)，
+或者动用`memory barrier`这样的“大杀器”。
+
+接下来Java5修订了内存模型，并给 volatile 赋予了acquire/release 语义，这下DCL (with volatile)又是安全的了。
+然而C++的内存模型还在修订中41，C++的volatile目前还不能(将来也难说)保证DCL的正确性(只在VisualC++2005及以上版本有效)。
+其实没那么麻烦，在实践中用`pthread_once`就行:
+```cpp
+template<typename T>
+class Singleton : boost::noncopyable
+{
+public:
+static T& instance()
+{
+  pthread_once(&ponce_，&Singleton::init);  // 关键调用，确保只调用一次
+  return *value_;
+}
+private:
+  Singleton();
+  ~Singleton();
+static void init()
+{
+  value_ = new T();
+}
+
+private:
+  static pthread_once_t ponce_;
+  static T* value_;
+};
+
+template<typename T>
+pthread_once_t Singleton<T>::ponce_ = PTHREAD_ONCE_INIT;
+
+template<typename T>
+T* Singleton<T>::value_ = NULL;
+```
+
+上面这个Singleton没有任何花哨的技巧，它用`pthread_once_t`来保证`lazy-initialization`(首次调用才初始化)的线程安全。
+线程安全性由Pthreads库保证，如果系统的Pthreads 库有bug，那就认命吧，多线程程序反正也不可能正确执行了
+使用方法也很简单:
+```cpp
+Foo& foo = Singleton<Foo>::instance();
+```
+这个 Singleton 没有考虑对象的销毁。
+在长时间运行的服务器程序里，这不是一个问题，反正进程也不打算正常退出(9.2.2)。
+在短期运行的程序中，**程序退出的时候自然就释放所有资源了**(前提是程序里不使用不能由操作系统自动关闭的资源，比如跨进程的 mutex)。
+在实际的`muduo::Singleton class`中，通过`atexit(3)`（C标准库函数，当程序通过exit()退出时，调用注册的清理函数，释放资源，关闭文件）提供了销毁功能，聊胜于无罢了。
+另外，这个Singleton 只能调用默认构造函数，如果用户想要指定T的构造方式我们可以用`模板特化(template specialization)`*(特化出模板的一个版本来特殊处理)技术来提供一个定制点，这需要引入另一层间接(another level ofindirection)。
+
+
+## 2.6 sleep(3)不是同步原语
+我认为`sleep()/usleep()/nanosleep()`只能出现在测试代码中，比如`写单元测试`的时候;
+或者用于`有意延长临界区，加速复现死锁`的情况，就像 S2.1.2示范的那样。
+**sleep 不具备memory barrier语义，它不能保证内存的可见性**，见Page 84的例子
+**生产代码中线程的等待可分为两种**:
+* 一种是`等待资源可用`
+(要么等在`select/ poll/epoll_wait`上，要么等在`条件变量`上);
+
+* 一种是等着进入`临界区`(等在mutex上)以便读写共享数据。
+后一种等待通常极短，否则程序性能和伸缩性就会有问题。
+
+在程序的正常执行中，如果需要等待一段已知的时间，应该往event loop 里注册一个`timer`，然后在 timer 的回调函数里接着干活，因为**线程是个珍贵的共享资源，不能轻易浪费(阻塞也是浪费)**。
+如果等待某个事件发生，那么应该采用条件变量或IO事件回调，不能用 sleep 来轮询。
+不要使用下面这种业余做法:
+```cpp
+while (true) {
+if (!dataAvailable)
+  sleep(some_time);
+else
+  consumeData();
+}
+```
+
+如果多线程的安全性和效率要靠代码主动调用 sleep 来保证，这显然是设计出了问题。
+**等待某个事件发生，正确的做法是用 select()等价物或Condition，抑或(更理想地)高层同步工具**;
+**在用户态做轮询(polling)是低效的**。
 
 
 

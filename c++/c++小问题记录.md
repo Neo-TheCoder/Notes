@@ -1796,8 +1796,107 @@ __gnu_cxx::__aligned_buffer<_Tp> _M_storage;
 
 # 关于移动构造
 ```cpp
-    Test destination = std::move(source); // 不是直接调用移动赋值
+    Test destination = std::move(source); // 为什么不是直接调用移动赋值？？？
 ```
+
+
+# `printf`支持可变参数的原理
+```c
+int printf(const char *format, ...);
+
+// 使用
+const char *str = "hello , world\n";
+printf(str);//直接传入字符串地址
+
+int year = 2023;
+printf("%d%s", year, "abc");//传入格式控制字符串地址和参数
+```
+
+`printf`源码
+```c
+//acenv.h
+typedef char *va_list;
+#define  _AUPBND        (sizeof (acpi_native_int) - 1)
+#define  _ADNBND        (sizeof (acpi_native_int) - 1)
+                        
+#define _bnd(X, bnd)    (((sizeof (X)) + (bnd)) & (~(bnd)))   // 获取类型A的内存对齐的大小
+#define va_arg(ap, T)   (*(T *)(((ap) += (_bnd (T, _AUPBND))) - (_bnd (T,_ADNBND))))
+#define va_end(ap)      (void) 0
+#define va_start(ap, A) (void) ((ap) = (((char *) &(A)) + (_bnd (A,_AUPBND))))
+//start.c
+static char sprint_buf[1024];
+int printf(char *fmt, ...)//格式控制字符串 和 C的函数多参数
+{
+        va_list args; //va_list就是char * 的typedef
+        int n;
+        va_start(args, fmt);
+        n = vsprintf(sprint_buf, fmt, args);
+        va_end(args);
+        write(stdout, sprint_buf, n);
+        return n;
+}
+//unistd.h
+static inline long write(int fd, const char *buf, off_t count)
+{
+        return sys_write(fd, buf, count);
+}
+```
+
+
+在C语言中，可变参数是通过`stdarg.h头文件`中的`宏定义`来实现的
+在printf函数中，参数列表中的省略号"..."表示接受可变数量的参数。
+**在函数内部，通过stdarg.h头文件中定义的宏来访问这些可变参数**。
+其中，主要使用了三个宏：`va_start`、`va_arg`和`va_end`。
+* `va_start`：该宏用于初始化一个指向参数列表的指针，使其指向第一个可变参数的位置。
+* `va_arg`：该宏用于访问参数列表中的下一个参数，并指定参数的类型。
+* `va_end`：该宏用于结束对参数列表的访问。
+通过这些宏的配合，printf函数可以按照格式化字符串中的格式符号来逐个访问并输出可变参数的值。
+
+重点在于，**函数调用时，参数的实参会压入函数调用栈中**，和函数签名的形参的顺序是相反的，最右侧的参数先入栈
+函数调用时，需要操作堆栈指针
+那么我们只需要设计一种算法，对栈中的元素进行某种方式的遍历，从而把我们希望的打印结果按顺序显示即可。
+
+
+
+
+`std::shared_future`
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
