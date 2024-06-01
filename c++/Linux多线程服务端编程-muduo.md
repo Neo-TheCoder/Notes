@@ -734,15 +734,16 @@ traverse() 加锁，然后遍历 foos 向量。这些都是正确的。
 
 将来有一天，`Foo::doit()`间接调用了`post()`（重复获取锁），那么会很有戏剧性的结果:
 1. mutex 是非递归的，于是死锁了。
-2. mutex是递归的，由于push_back()可能(但不总是)导致vector 选代器失效（因为被修改了），程序偶尔会crash。
+2. mutex是递归的，由于push_back()可能(但不总是)导致`vector选代器失效`（因为被修改了），程序偶尔会crash。
 
 这时候就能体现non-recursive 的优越性：**把程序的逻辑错误暴露出来**。
 死锁比较容易 debug，把各个线程的调用栈打出来，只要每个函数不是特别长，很容易看出来是怎么死的，见2.1.2的例子9。
 或者可以用`PTHREAD_MUTEX_ERRORCHECK`一下子就能找到错误(前提是 MutexLock 带 debug 选项)。
 程序反正要死，不如死得有意义点，留个“全尸”，让验尸(post-mortem)更容易些。
-如果确实需要在遍历的时候修改 vector，有两种做法：
+
+如果确实需要在遍历的时候修改vector，有两种做法：
 1. 一是把修改推后，记住循环中试图添加或删除哪些元素，**等循环结束了再依记录修改 foos**;
-2. 二是用**copy-on-write**，见2.8的例子。
+2. 二是用`copy-on-write`，见2.8的例子。
 
 如果一个函数既可能在已加锁的情况下调用，又可能在未加锁的情况下调用，那么就拆成两个函数:
 1. 跟原来的函数同名，函数加锁，转而调用第2个函数。
@@ -1525,9 +1526,158 @@ else
 **在用户态做轮询(polling)是低效的**。
 
 
+## 2.7 归纳与总结
+前面几节内容归纳如下:
+* 线程同步的四项原则，尽量用`高层同步设施(线程池、队列、倒计时)`;
+* 使用`普通互斥器`和`条件变量`完成剩余的同步任务，采用`RAII惯用手法(idiom)`和`Scoped Locking`。
+
+用好这几样东西，基本上就能应付多线程服务端开发的各种场合。
+或许有人会觉得性能没有发挥到极致。我认为，应该先把程序写正确(并尽量保持清晰和简单)，然后再考虑性能优化，如果确实还有必要优化的话。
+这在多线程下仍然成立。让一个正确的程序变快，远比“让一个快的程序变正确”容易得多。
+
+在现代的多核计算背景下，多线程是不可避免的。
+尽管在一定程度上可以通过framework来屏蔽，让你感觉像是在写单线程程序，比如Java Servlet。了解under the hood 发生了什么对于编写这种程序也会有帮助。
+多线程编程是一项重要的个人技能，不能因为它难就本能地排斥，现在的软件开发比起 10年、20年前已经难了不知道多少倍。掌握多线程编程，才能更理智地选择用还是不用多线程，因为你能预估多线程实现的难度与收益，在一开始做出正确的选择。
+要知道把一个单线程程序改成多线程的，往往比从头实现一个多线程的程序更困难。
+要明白多线程编程中哪些是能做的，哪里是一般程序员应该避开的雷区。
+
+掌握同步原语和它们的适用场合是多线程编程的基本功。
+以我的经验，熟练使用文中提到的同步原语，就能比较容易地编写线程安全的程序。本文没有考虑 signal对多线程编程的影响(S4.10)，Unix的 signal在多线程下的行为比较复杂，一般要靠底层的网络库(如Reactor)加以屏蔽，避免干扰上层应用程序的开发
+
+通篇来看，“效率”并不是我的主要考虑点，我提倡正确加锁而不是自己编写lock-free 算法(使用原子整数除外)，更不要想当然地自己发明同步设施。
+在没有实测数据支持的情况下，妄谈哪种做法效率更高是靠不住的，不能听信传言或凭感觉“优化”。
+很多人误认为用锁会让程序变慢，**其实真正影响性能的不是锁，而是锁争用(lock contention)**。
+在程序的复杂度和性能之前取得平衡，并考虑未来两三年扩容的可能(无论是CPU 变快、核数变多，还是机器数量增加、网络升级)。
+我认为在分布式系统中，多机伸缩性(scale out)比单机的性能优化更值得投入精力。
+本章内容记录了我目前对多线程编程的理解，用文中介绍的手法，我能化繁为简，编写容易验证其正确性的多线程程序，解决自己面临的全部多线程编程任务。
+如果本章的观点与你的经验不合，比如你使用了我没有推荐使用的技术或手法(共享内存、信号量等等)，只要你理由充分，但行无妨。
 
 
 
+## 2.8 借`shared_ptr`实现`copy-on-write`
+本节解决2.1的几个未决问题
+* 2.1.1 post()、traverse()死锁
+* 2.1.2 把Request::print()移出Inventory::printAll() 临界区。
+* 2.1.2 解决Request 对象析构的race condition。
+然后再示范用普通 mutex 替换读写锁。
+解决办法都基于同一个思路，那就是用shared_ptr来管理共享数据。
+原理如下:
+* shared_ptr是引用计数型智能指针，如果当前只有一个观察者，那么引用计数的值为1。
+* 对于 write 端，如果发现引用计数为1，说明就自己在使用，这时可以安全地修改共享对象，不必担心有人正在读它。
+* 对于 read 端，在读之前把引用计数加1，读完之后减1，这样保证在读的期间其引用计数大于 1，可以阻止并发写。
+* 比较难的是，对于 write 端，如果发现用计数大于1，该如何处理？
+
+
+先来看一个简单的例子，解决2.1.1中的post()和traverse()死锁。
+PS: `前情提要`
+```cpp
+MutexLock mutex;
+std::vector<Foo> foos;
+
+void post(const Foo& f)
+{
+  MutexLockGuard lock(mutex);
+  foos.push_back(f);
+}
+
+void traverse()
+{
+  MutexLockGuard lock(mutex);
+  for ( std::vector<Foo>::const_iterator it = foos.begin(); it != foos.end(); ++it )
+  {
+    it->doit();   // 如果在doit()中调用post，对于非递归锁会导致死锁以及迭代器失效
+  }
+}
+```
+数据结构改成:
+```cpp
+typedef std::vector<Foo> FooList;
+typedef boost::shared_ptr<FooList> FooListPtr;
+MutexLock mutex;
+FooListPtr g_foos;
+```
+
+### 在read端
+用一个栈上局部`FooListPtr`变量当做“观察者”，它使得g_foos的引用计数增加。
+临界区内只读了一次共享变量g_foos(这里多线程并发读写 shared_ptr，因此必须用mutex 保护)，
+比原来的写法大为缩短。
+而且多个线程同时调用traverse()也不会相互阻塞。
+`遍历操作没有加锁！所以其中的doit()调用post()不会发生死锁！？？？但是这操作不会导致迭代器失效吗？--> 如果要在doit里做写操作，就假设它不会导致迭代器失效，可能不一定是push_back，而是修改某个元素`
+```cpp
+void traverse()
+{
+  FooListPtr foos;    // 指向vector<Foo>的指针
+  { // 这段{}内是临界区
+    MutexLockGuard lock(mutex);
+    foos = g_foos;    // 拷贝shared_ptr，实现：只要有人读取了，引用计数就加1
+    assert(!g_foos.unique());   // 判断是否是资源的唯一拥有者, assert中返回false则终止
+  }
+
+  // assert(!foos.unique()); 这个断言不成立
+  for ( std::vector<Foo>::const_iterator it = foos->begin(); it != foos->end(); ++it )
+  {
+    it->doit();
+  }
+}
+```
+
+### write端的`post()`
+按照前面的描述，如果`g_foos.unique()`为 true，
+我们可以放心地在原地 (in-place)修改 FooList。
+如果g_foos.unique()为false，说明这时别的线程正在读取FooList，我们**不能原地修改，而是复制一份，在副本上修改**。这样就避免了死锁。
+```cpp
+void post(const Foo& f)
+{
+  printf("post \n");
+  { // ---临界区开始---
+    MutexLockGuard lock(mutex);
+    if (!g_foos.unique()) // 说明别的线程正在读，我们不能原地修改，而是在副本上修改，避免死锁
+    {
+      g_foos.reset(new FooList(*g_foos));   // 最为核心！！！这样就不影响原来对象的读取，因为至少还有两个shared_ptr实例，不会调用析构函数，等到读操作结束，shared_ptr析构。那么读时的对象也被析构了
+      printf("copy the whole list \n");  //练习:将这话移出临界区
+    }
+    assert(g_foos.unique());
+    g_foos->push_back(f); // 在副本上进行修改
+  } // ---临界区结束---
+}
+```
+
+以下是几种错误写法：
+```cpp
+//错误一:直接修改 g_foos 所指的 FooList，     因为对应的读操作没加锁，所以会导致读写不一致
+void post(const Foo& f)
+{
+  MutexLockGuard lock(mutex);
+  g_foos->push_back(f);
+}
+
+// 错误二:试图缩小临界区，把 copying 移出临界区       多写者则会出错，线程1，2同时在副本上push_back了，那么二者就不同步了
+void post(const Foo& f)
+{
+  FooListPtr newFoos(new FooList(*g_foos));
+  newFoos->push_back(f);  // traverse()里的doit，可能调用post
+  {
+    MutexLockGuard lock(mutex);
+    g_foos = newFoos;// 或者 g_foos.swap(newFoos);
+  }
+}
+
+// 错误三:把临界区拆成两个小的，把 copying 放到临界区之外     和错误二同样的问题
+void post(const Foo& f)
+{
+  FooListPtr oldFoos;
+  {
+    MutexLockGuard lock(mutex);
+    oldFoos = g_foos;
+  }
+  FooListPtr newFoos(new FooList(*oldFoos));
+  newFoos->push_back(f);
+  {
+    MutexLockGuard lock(mutex);
+    g_foos = newFoos;//或者 g_foos.swap(newFoos);
+  }
+}
+```
 
 
 
