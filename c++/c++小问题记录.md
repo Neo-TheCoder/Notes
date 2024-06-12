@@ -1920,21 +1920,76 @@ printf("%d, %d, %d", 1.0, 20., 3.0);
 
 
 
-
 # `std::map`
 注意，使用`operator[]`，进行查找时，若找不到，则会调用Value的默认构造函数进行插入（编译时也会检测是否含有默认构造函数）
 
 
+# `std::future`
+通过`future`默认构造函数构造出的future，对其调用`valid()`，返回false
+
+
+# `std::sort`
+接收一个可调用对象，返回bool，按照true的情况来对容器进行重新排序
+```cpp
+bool customCompare(int a, int b) {
+    // 自定义排序规则，比如按照绝对值大小排序
+    return std::abs(a) < std::abs(b);
+}
+
+std::vector<int> numbers = {3, -1, 4, -1, 5, 9, -2, 6};
+std::sort(numbers.begin(), numbers.end(), customCompare);
+```
+
+```cpp
+std::vector<int> numbers = {3, -1, 4, -1, 5, 9, -2, 6};
+std::sort(numbers.begin(), numbers.end(), [](int a, int b) {
+    return std::abs(a) < std::abs(b);
+  }
+);
+```
+
+
+# `std::set_intersection`
+用于找到两个`有序序列`的交集，并将结果存储到另一个序列中
+
+
+
+
+# `static`函数
+* 作用域限制：
+  static修饰的全局函数只能在定义它的源文件中可见，无法被其他源文件访问。这样可以避免与其他文件中具有相同名称的全局函数发生命名冲突。
+C中的静态函数表示此函数作用于整个文件中，表示此函数仅供于此文件使用。
+因而静态函数名仅可见于其所在的文件中，这就允许在不同的文件中存在同名的静态函数。
+
+
+* 链接属性：
+  static修饰全局函数具有内部链接属性，意味着它们只能在当前源文件中使用，无法被其他源文件引用。
 
 
 
 
 
+# 不能直接在类的定义中初始化非静态成员变量，需要在构造函数中进行初始化
 
+为什么合法：
+```cpp
+    std::shared_ptr<linearx::concurrency::TinyThreadPool> thread_pool_{
+        linearx::concurrency::TinyThreadPool::NewThreadPool(5)
+    };
+```
 
+为什么不合法：
+```cpp
 
+class Test {
 
+private:
+  int val;
+  int& ref{val};
 
+};
+
+```
 
 
 

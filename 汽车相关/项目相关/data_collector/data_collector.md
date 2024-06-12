@@ -336,6 +336,44 @@ timeout: 5000   # ms
 
 
 
+
+## 操作日志
+```cpp
+写操作日志的子模块建议使用依赖注入的方式将全局对象作为参数传递给需要使用它的方法或对象，从而保持对象之间的松散耦合。
+
+// 全局日志记录器
+class Logger {
+public:
+    void log(const std::string& message) {
+        std::cout << message << std::endl;
+    }
+};
+
+std::shared_ptr<Logger> globalLogger = std::make_shared<Logger>();
+
+// 依赖注入方式的示例类
+class MyClass {
+private:
+    std::shared_ptr<Logger> logger;
+
+public:
+    MyClass(std::shared_ptr<Logger> logger) : logger(logger) {}
+
+    void doSomething() {
+        logger->log("Doing something");
+    }
+};
+
+int main() {
+    // 通过依赖注入传递全局日志记录器
+    MyClass myObject(globalLogger);
+    myObject.doSomething();
+    return 0;
+}
+```
+
+
+
 # 后记
 ## RAM Disk && UFS Disk
 RAM Disk（RAM盘）和 UFS Disk（通用闪存存储盘）是两种不同的存储技术，它们在计算机和移动设备中扮演着重要的角色。

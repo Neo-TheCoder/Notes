@@ -1460,11 +1460,11 @@ template<typename T>
 class Singleton : boost::noncopyable
 {
 public:
-static T& instance()
-{
-  pthread_once(&ponce_，&Singleton::init);  // 关键调用，确保只调用一次
-  return *value_;
-}
+  static T& instance()
+  {
+    pthread_once(&ponce_，&Singleton::init);  // 关键调用，确保只调用一次
+    return *value_;
+  }
 private:
   Singleton();
   ~Singleton();
@@ -1556,9 +1556,9 @@ else
 
 ## 2.8 借`shared_ptr`实现`copy-on-write`
 本节解决2.1的几个未决问题
-* 2.1.1 post()、traverse()死锁
-* 2.1.2 把Request::print()移出Inventory::printAll() 临界区。
-* 2.1.2 解决Request 对象析构的race condition。
+* 2.1.1 `post()、traverse()死锁`
+* 2.1.2 `把Request::print()移出Inventory::printAll() 临界区`
+* 2.1.2 `解决Request 对象析构的race condition`
 然后再示范用普通 mutex 替换读写锁。
 解决办法都基于同一个思路，那就是用shared_ptr来管理共享数据。
 原理如下:
@@ -1678,6 +1678,464 @@ void post(const Foo& f)
   }
 }
 ```
+
+
+
+希望读者先吃透上面举的这个例子，再来看如何用相同的思路解决剩下的问题。
+
+### 解决2.1.2
+**前情提要**
+Inventory记录当前的Request对象，内部维护一个`std::set<Request*> requests_;`对象，对外提供add()，remove()接口，他们都是线程安全的
+而Request类对外提供process()接口，把自己添加到add()接口中，而在Request的析构中，把自己从Inventory的set中删除。
+printAll()接口可能引起死锁
+```cpp
+
+class Inventory
+{
+public:
+  void add(Request* req)
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    requests_.insert(req);
+  }
+
+  void remove(Request* req) // -_attribute_- ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    requests_.erase(req);
+  }
+
+  void printAll() const;
+private:
+  mutable muduo::MutexLock mutex_;
+  std::set<Request*> requests_;
+};
+
+Inventory g_inventory; //为了简单起见，这里使用了全局对象。
+
+void Inventory::printAll() const
+{
+  muduo::MutexLockGuard lock(mutex_);
+  sleep(1); //为了容易复现死锁，这里用了延时
+  for (std::set<Request*>::const_iterator it = requests_.begin(); it != requests_.end(); ++it)
+  {
+    (*it)->print(); // 需要得到request对象的锁
+  }
+  printf("Inventory::printAll() unlocked\n");
+}
+```
+注意：print()操作是Request中的接口，是要加锁的，因为要考虑是多线程环境，另外有个线程可能在运行这样的函数：
+```cpp
+void threadFunc()
+{
+  Request* req = new Request;
+  req->process(); // 获取Request对象的锁
+  delete req;   // 获取Inventory对象的锁
+}
+```
+这样出现了死锁的经典场景之一：上锁顺序不一致导致死锁
+
+
+把Request::print()移出Inventory::printAll()临界区有两个做法。
+其实很简单，**把requests_复制一份， 在临界区之外遍历这个副本**。
+```cpp
+void Inventory: : printAll() const
+{
+  std: :set<Request*> requests;
+  {
+      muduo::MutexLockGuard lock(mutex_);
+      requests = requests_;
+  }   // 拷贝需要加锁
+  //遍历局部变量requests,调用Request::print()
+  // ...
+}
+```
+这么做有一个明显的缺点，它复制了整个std::set中的每个元素，开销可能会比较大。
+如果遍历期间没有其他人修改requests_,那么我们可以减小开销，这就引出了第二种做法（当没有线程修改requests_时，做修改不需要拷贝）。
+
+**第二种做法的要点是用`shared_ptr`管理`std::set`，`在遍历的时候先增加引用计数，阻止并发修改`**。
+当然`Inventory::add()`和`Inventory::remove()`也要相应修改，采用本节前面post()和traverse()的方案。
+完整的代码见recipes/thread/test/RequestInventory_test.cc
+`Inventory`持有`boost::shared_ptr<std::set<Request*>>`
+
+`Inventory::add()`和`Inventory::remove()`以及`printAll()`
+```cpp
+  void add(Request* req)
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    {
+      if (!requests_.unique())
+      {
+        requests_.reset(new RequestList(*requests_));
+        printf("Inventory::add() copy the whole list\n");
+      }
+      assert(requests_.unique());
+      requests_->insert(req);
+    }
+  }
+
+  void remove(Request* req) // __attribute__ ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    {
+      if (!requests_.unique())
+      {
+        requests_.reset(new RequestList(*requests_));
+        printf("Inventory::remove() copy the whole list\n");
+      }
+      assert(requests_.unique());
+      requests_->erase(req);
+    }
+  }
+
+void Inventory::printAll() const
+{
+  RequestListPtr requests = getData();  // 返回指向set<Request*>的指针，拷贝了一个std::shared_ptr，通过引用计数
+  sleep(1);
+  for (std::set<Request*>::const_iterator it = requests->begin(); it != requests->end(); ++it)
+  {
+    (*it)->print();   // 不用加锁，因为
+  }
+}
+```
+
+注意`目前的方案仍然没有解决Request对象析构的race condition`，这点还是留作练习吧。
+一种可能的答案见recipes/thread/test/Requestnventory_test2.c。
+
+
+**在`Request`定义中，增加标志位**
+```cpp
+class Request : public boost::enable_shared_from_this<Request>
+{
+ public:
+  Request() : x_(0)
+  {
+  }
+
+  ~Request()
+  {
+    x_ = -1;
+  }
+
+  void cancel() __attribute__ ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    x_ = 1;
+    sleep(1);
+    printf("cancel()\n");
+    g_inventory.remove(shared_from_this());
+  }
+
+  void process() // __attribute__ ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    g_inventory.add(shared_from_this());
+    // ...
+  }
+
+  void print() const __attribute__ ((noinline))
+  {
+    muduo::MutexLockGuard lock(mutex_);
+    // ...
+    printf("print Request %p x=%d\n", this, x_);
+  }
+
+ private:
+  mutable muduo::MutexLock mutex_;
+  int x_;
+};
+```
+
+
+外层调用：
+```cpp
+void threadFunc()
+{
+  RequestPtr req(new Request);
+  req->process();
+  req->cancel();
+}
+```
+
+
+
+
+
+# 第三章 多线程服务器的适用场景与常用编程模型
+“`进程` (process)”是操作里最重要的两个概念之一(另一个是`文件`)，粗略地讲，一个进程是“内存中正在运行的程序”。
+本书的进程指的是Linux操作系统通过`fork()`调用产生的
+
+每个进程有自已独立的地址空间(address space)，**“在同一个进程”还是“不在同一个进程”是系统功能划分的重要决策点**。
+《Erlang 程序设计》[ERL]把“进程比喻为“人”，我觉得十分精当，为我们提供了一个思考的框架每个人有自己的记忆(memory)，人与人通过谈话(消息传递)来交流，
+谈话既可以是面谈(同一台服务器)，也可以在电话里谈(不同的服务器，有网络通信)。
+面谈和电话谈的区别在于，面谈可以立即知道对方是否死了 (crash, SIGCHLD)，而电话谈只能通过周期性的心跳来判断对方是否还活着。
+有了这些比喻，设计分布式系统时可以采取“角色扮演”，团队里的几个人各自扮演一个进程，人的角色由进程的代码决定(管登录的、管消息分发的、管买卖的等等)。
+每个人有自己的记忆，但不知道别人的记忆，要想知道别人的看法，只能通过交谈(暂不考虑共享内存这种 IPC)。然后就可以思考:
+* 容错 万一有人突然死了
+* 扩容 新人中途加进来
+* 负载均衡 把甲的活儿挪给乙做
+* 退休 甲要修复bug，先别派新任务，等他做完手上的事情就把他重启
+
+“线程”这个概念大概是在1993 年以后才慢慢流行起来的，距今不到20年，比不得有40年光辉历史的Unix操作系统。
+线程的出现给Unix添了不少乱，
+很多C库函数(`strtok()`、`ctime()`)不是线安全的，需要重新定义(4.2);
+signal 的语意也大为复杂化。
+据我所知，最早支持多线程编程的(民用)操作系统是 Slaris 2.2和WindowsNT3.1，它们均发布于1993年。
+随后在1995 年，POSIX threads标准确立。
+**线程的特点是共享地址空间，从而可以高效地共享数据**。
+一台机器上的多个进程能高效地共享代码段(操作系统可以映射为同样的物理内存)，但不能共享数据。
+如果多个进程大量共享内存，等于是把多进程程序当成多线程来写，掩耳盗铃。
+“多线程”的价值，我认为是为了更好地发挥多核处理器(multi-cores)的效能。
+在单核时代，多线程没有多大价值。Alan Cox说过:“Acomputer is a state machine. Threads are for people who can't program state machines”
+ (计算机是一台状态机线程是给那些不能编写状态机程序的人准备的。)
+ 如果只有一块 CPU、一个执行单元，那么确实如 Alan Cox 所说，按状态机的思路去写程序是最高效的，这正好也是下一节展示的编程模型。
+
+
+## 3.2 单线程服务器的常用编程模型
+高性能的网络程序中，最常用的是`非阻塞式IO + IO复用`模型，即`Reactor模型`
+相反，`Boost.Asio`和`Windows I/O Completion Ports`实现了`Proactor 模式`，应用面似乎要窄一些。
+PS: `Proactor`模式：异步IO模型
+
+此外，ACE 也实现了 Proactor 模式。
+在`non-blocking IO + IO multiplexing`这种模型中，
+**程序的基本结构是一个事件循环(event loop)，以事件驱动(event-driven)和事件回调的方式实现业务逻辑**
+```cpp
+// 代码仅为示意，没有完整考虑各种情况
+while (!done)
+{
+  int timeout_ms = max(1000，getNextTimedCallback());
+  int retval = ::poll(fds, nfds, timeout_ms);
+  if (retval < 0) {
+    // 处理错误，回调用户的 error handler
+  }
+  else {
+    // 处理到期的 timers，回调用户的 timer handler
+    if (retval > 0) {
+    // 处理IO事件，回调用户的IO event handler
+    }
+}
+}
+```
+
+这里`select(2)/poll(2)`有伸缩性方面的不足，Linux下可替换为`epoll(4)`，
+其他操作系统也有对应的高性能替代品。
+
+## Reactor模型的优点
+Reactor模型的优点很明显，编程不难，效率也不错。
+不仅可以用于**读写socket连接的建立**(`connect(2)` / `accept(2)`)
+甚至DNS解析都可以用非阻塞方式进行，以提高并发度和吞吐量 (throughput)，
+对于IO密集的应用是个不错的选择。
+
+## Reactor模型的缺点
+基于事件驱动的编程模型也有其本质的缺点，它要求`事件回调函数必须是非阻塞的`。
+对于涉及网络IO的请求响应式协议，它容易割裂业务逻辑，使其散布于多个回调函数之中，相对不容易理解和维护。现代的语言有一些应对方法(例如协程).
+
+
+
+
+
+
+
+
+
+
+
+## 3.3 多线程服务器的常用编程模型
+这方面我能找到的文献不多，大概有这么几种：
+1. 每个请求创建一个线程，使用阻塞式IO操作。
+  在Java 1.4引入NIO之前，这是Java网络编程的推荐做法。可惜伸缩性不佳。
+
+2. 使用线程池，同样使用阻塞式IO操作。
+  与第1种相比，这是提高性能的措施。
+
+3. 使用non-blocking IO + IO multiplexing。
+  即Java NIO 的方式。
+
+4. Leader/Follower 等高级模式。
+在默认情况下，我会使用第3种，即`non-blocking IO` + `one loop per thread`模式来编写多线程C++网络服务程序。
+
+### 3.3.1 one loop per thread
+此种模型下，程序里的`每个IO线程`有一个`event loop`(或者叫`Reactor`)，
+用于处理读写和定时事件(无论周期性的还是单次的)，代码框架跟3.2一样。
+libev的作者说: 
+***One loop per thread is usually a good model. Doing this is almost never wrong, sometimes a better-performance model exists, but it is always a good start.***
+
+这种方式的**好处**是:
+* 线程数目基本固定，可以在程序启动的时候设置，不会频繁创建与销毁
+* 可以很方便地在线程间调配负载。
+* IO事件发生的线程是固定的，同一个 TCP 连接不必考虑事件并发。
+
+Eventloop代表了线程的主循环，需要让哪个线程干活，就把timer或IO channel(如TCP连接)注册到哪个线程的 loop 里即可。
+
+**什么时候单启线程**
+对`实时性`有要求的 connection 可以`单独用一个线程`;
+`数据量大`的connection可以`独占一个线程`，
+并把`数据处理任务`分摊到另几个计算线程中(用`线程池`);
+其他要的辅助性connections可以共享一个线程。
+
+对于专业的服务端程序，一般会采用`non-blocking IO + IO multiplexing`，
+每个connection/acceptor都会注册到某个event loop上，程序里有多个event loop，
+每个线程至多有一个event loop，多线程程序对event loop 提出了更高的要求，那就是“线程安全”。
+要允许一个线程往别的线程的 loop 里塞东西，这个loop 必须得是线安全的。
+如何实现一个优质的多线程 Reactor？可参考第8章。
+
+
+
+
+### 3.3.2 线程池
+不过，对于`没有IO`，而光有`计算任务`的线程，使用event loop 有点浪费，
+我会用一种补充方案，即用`blocking queue`实现的任务队列(TaskQueue):
+```cpp
+typedef boost::function<void()> Functor;
+BlockingQueue<Functor> taskQueue; // 线程安全的阻塞队列
+
+void workerThread() {
+  while(running) // running 变量是个全局标志
+  {
+    Functor task = taskQueue.take();  // 空则阻塞
+    task(); //在产品代码中需要考虑异常处理
+  }
+}
+```
+
+
+用这种方式实现线程池特别容易，以下是启动容量(并发数)为N的线程池：
+```cpp
+  int N = num_of_computing_threads;
+  for (int i = 0; i < N; ++ i)
+  {
+    create_thread(&workerThread); //伪代码:启动线程
+  }
+
+  // 使用起来也很简单:
+  Foo foo;// Foo 有 calc() 成员函数
+  boost::function<void()> task = boost::bind(&Foo::calc，&foo);
+  taskQueue.post(task);
+```
+
+除了任务队列，还可以用`BlockingQueue<T>`实现数据的生产者消费者队列，
+即T是`数据类型`而非`函数对象`，queue的消费者(s)从中拿到数据进行处理。
+
+`BlockingQueue<T>`是多线程编程的利器，它的实现可参照Java util.concurrent里的(ArraylLinked)BlockingQueue。
+这份Java代码可读性很高，代码的基本结构和教科书一致(1个mutex，2个condition variables)，健壮性要高得多。
+如果不想自己实现，用现成的库更好。
+**muduo 里有一个基本的实现，包括无界的 BlockingQueue 和 有界的 BoundedBlockingQueue 两个class**。
+有兴趣的读者还可以试试Intel Threading Building Blocks里的concurrent_queue<T>，性能估计会更好。
+
+
+
+### 3.3.3 推荐模式
+总结起来，我推荐的C++多线程服务端编程模式为:  `one(event) loop per thread + thread pool`。
+* event loop(也叫IO loop)用作IOmultiplexing，配合non-blocking IO和定时器。
+* thread pool用来做计算，具体可以是`任务队列`或`生产者消费者队列`。
+以这种方式写服务器程序，需要一个优质的基于 Reactor 模式的网络库来支撑muduo正是这样的网络库。
+
+程序里具体用**几个loop、线程池的大小等参数需要根据应用来设定**，基本的原则是“`阻抗匹配`”，
+使得 CPU 和IO 都能高效地运作，具体的例子见p.80.
+此外，程序里或许还有个别执行特殊任务的线程，比如 logging，
+这对应用程序来说基本是不可见的，但是在分配资源(CPU 和IO)的时候要算进去，以免高估了系统的容量。
+
+
+
+
+## 3.4 进程间通信只用TCP
+Linux下进程间通信(IPC)的方式数不胜数，
+光[UNPv2] 列出的就有:
+`匿名管道(pipe)、具名管道(FIFO)、POSIX 消息队列、共享内存、信号(signals)`等等，更不必说`Sockets`了。
+
+同步原语(synchronization primitives)也很多:
+`如互斥器(mutex)、条件变量(condition variable)、读写锁(reader-writer lock)、文件锁record locking)、信号量(semaphore)`等等。
+
+如何选择呢？
+根据我的个人经验，贵精不贵多，认真挑选三四样东西就能完全满足我的工作需要，而且每样我都能用得很熟，不容易犯错。
+
+进程间通信我首选`Sockets` (主要指 TCP，我没有用过 UDP，也不考虑Unix domain 协议)，
+其**最大的好处**在于：
+可以跨主机，具有伸缩性。
+反正都是多进程了，如果一台机器的处理能力不够，很自然地就能用多台机器来处理。
+把进程分散到同一局域网的多台机器上，程序改改 host:port 配置就能继续用。
+相反，前面列出的其他IPC都不能跨机器，这就限制了延展性。
+
+在编程上，TCPsockets 和 pipe 都是操作`文件描述符`，用来收发字节流，都可以`read/write/fcntl/select/poll`等。
+不同的是，TCP是双向的，Linux的pipe是单向的，进程间双向通信还得开两个文件描述符，不方便，
+而且**进程要有父子关系才能用 pipe，这些都限制了 pipe 的使用**。
+在收发字节流这一通信模型下，没有比 Sockets/TCP 更自然的IPC了。
+当然，pipe 也有一个经典应用场景:
+  那就是`写Reactor/event loop`时用来`异步唤醒 select (或等价的 poll/epoll_wait)`调用
+
+TCP port由一个进程独占，且**操作系统会自动回收**
+(listening port和已建立连接的TCP socket 都是文件描述符，在进程结束时操作系统会关闭所有文件描述符)
+这说明，即使程序意外退出，也不会给系统留下垃圾，程序重启之后能比较容易地恢复，而不需要重启操作系统(用跨进程的 mutex 就有这个风险)。
+还有一个好处，既然 port 是独占的，那么可以防止程序重复启动，后面那个进程抢不到 port，自然就没法初始化了，避免造成意料之外的结果。
+
+两个进程通过 TCP通信，如果一个崩溃了，操作系统会关闭连接，另一个进程几乎立刻就能感知，可以快速 failover。
+当然应用层的心跳也是必不可少的 (9.3)。
+
+并且TCP**可记录、可重现**。可抓包分析性能。TCP还能够**跨语言**。
+
+另外，如果网络库带“连接重试”功能的话，我们可以不要求系统里的进程以特定的顺序启动，任何一个进程都能单独重启。
+换句话说，**TCP 连接是可再生的**，连接的任何一方都可以退出再启动，重建连接之后就能继续工作，这对开发牢靠的分布式系统意义重大。
+
+使用TCP这种字节流(bytestream)方式通信，会有`marshal/unmarshal`的开销，这要求我们选用合适的消息格式，准确地说是 wire format，目前我推荐Google Protocol Buffers。
+见S9.6关于分布式系统消息格式的讨论。
+有人或许会说，具体问题具体分析，如果两个进程在同一台机器，就用共享内存，否则就用TCP，比如MS SQL Server 就同时支持这两种通信方式。
+试问，是否值得为那么一点性能提升而让代码的复杂度大大增加呢？
+何况TCP的local吞吐量一点都不低，见6.5.1 的测试结果。
+* TCP 是字节流协议，只能顺序读取，有写缓冲;
+* 共享内存是消息协议，a进程填好一块内存让b进程来读，基本是“停等(stop wait)”方式。
+**要把这两种方式揉到一个程序里，需要建一个抽象层，封装两种IPC**。
+这会带来不透明性，并且增加测试的复杂度。
+而且万一通信的某一方崩溃，状态 reconcile 也会比 sockets 麻烦。
+ (数据刚写到一半，怎么办?)为我所不取。再说了，你舍得让几万块买来的SOLServer 和其他应用程序分享机器资源吗?
+生产环境下的数据库服务器往往是独立的高配置服务器，一般不会同时运行其他占资源的程序。
+
+
+TCP 本身是个数据流协议，除了直接使用它来通信外，还可以在此之上构建`RPC/HTTP/SOAP`之类的上层通信协议，这超过了本章的范围。
+另外，除了点对点的通信之外，应用级的广播协议也是非常有用的，可以方便地构建可观可控的分布式系统，见S711。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 第11章 反思C++面向对象与虚函数
+
+## 11.7 值语义与数据抽象
+**值语义(value semantics)**
+指的是`对象的拷贝与原对象无关`，就像拷贝int一样。
+C++的内置类型 (`bool/int/double/char`)都是值语义，
+标准库里的`complex<>、pair<>、vector<>、map<>、string`等等类型也都是`值语意`，拷贝之后就与原对象脱离关系
+
+与值语义对应的是“`对象语义(object semantics)`”，或者叫做`引用语义`(reference semantics)，
+
+由于“引用”一词在 C++里有特殊含义，所以我在本文中使用“对象语义”这个术语。
+**对象语义指的是面向对象意义下的对象，对象拷贝是禁止的**。
+`例如 muduo里的 Thread 是对象语义，拷贝 Thread 是无意义的，也是被禁止的:因为Thread代表线程，拷贝一个Thread 对象并不能让系统增加一个一模一样的线程`。
+
+同样的道理，拷贝一个Employee对象是没有意义的，一个雇员不会变成两个雇员，他也不会领两份薪水。
+拷贝 Tcp Connection 对象也没有意义，系统中只有一个TCP连接，拷贝Tcp Connection 对象不会让我们拥有两个连接。
+Printer 也是不能拷贝的，系统只连接了一个打印机，拷贝 Printer 并不能凭空增加打印机。
+凡此总总面向对象意义下的“对象”是`non-copyable`。
+
+
+
+
+
+
+
 
 
 
