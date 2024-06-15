@@ -1953,8 +1953,6 @@ std::sort(numbers.begin(), numbers.end(), [](int a, int b) {
 用于找到两个`有序序列`的交集，并将结果存储到另一个序列中
 
 
-
-
 # `static`函数
 * 作用域限制：
   static修饰的全局函数只能在定义它的源文件中可见，无法被其他源文件访问。这样可以避免与其他文件中具有相同名称的全局函数发生命名冲突。
@@ -1968,9 +1966,7 @@ C中的静态函数表示此函数作用于整个文件中，表示此函数仅�
 
 
 
-
-# 不能直接在类的定义中初始化非静态成员变量，需要在构造函数中进行初始化
-
+# 不能直接在类的定义中初始化非静态成员变量，需要在构造函数中进行初始化？？？
 为什么合法：
 ```cpp
     std::shared_ptr<linearx::concurrency::TinyThreadPool> thread_pool_{
@@ -1978,18 +1974,156 @@ C中的静态函数表示此函数作用于整个文件中，表示此函数仅�
     };
 ```
 
-为什么不合法：
+不合法：
 ```cpp
+class Base {
+public:
+    Base(int t){}
+};
 
 class Test {
 
-private:
-  int val;
-  int& ref{val};
+public:
+    Test() : b(12) {} // 需要这样初始化（定义成员变量时不赋初值）
 
+    int val;
+    Base b(12);   // 编译报错：必须使用初始化列表，使用{}
 };
-
 ```
+
+关键在于是否使用`花括号`来初始化
+PS: 使用花括号是`统一初始化`的一种表现
+在C++11以前，程序员，或者初学者经常会感到疑惑关于怎样去初始化一个变量或者是一个对象。
+这么多的对象初始化方式，不仅增加了学习成本，也使得代码风格有较大出入，影响了代码的可读性和统一性。
+
+从C++11开始，`对列表初始化（List Initialization）的功能进行了扩充，可以作用于任何类型对象的初始化`，至此，列表初始化方式完成了天下大一统。
+
+```cpp
+  std::vector<std::string> cities{
+    "Beijing", "Nanjing", "Shanghai", "Hangzhou"
+  };
+```
+这种初始化的原理是：
+编译器看到`{t1, t2, …, tn}`便会做出一个initializer_list，它关联到一个`array<T, n>`。
+调用构造函数的时候，该array内的元素会被编译器分解逐一传给函数。
+但若函数的参数就是initializer_list，则不会逐一分解，而是直接调用该参数的函数。
+**如果没有以initializer_list类型为参数的构造函数，花括号也能起作用，但是要和实际的构造函数接收实参的个数匹配**
+
+
+**所有的标准容器的构造函数都有以initializer_list为参数的构造函数。**
+
+
+
+
+
+
+
+列表初始化比原有的初始化方式具有更严格的安全要求。下面是例子：
+```cpp
+long double ld = 3.1415926536；
+
+int a {ld} ， b = {ld};   // 编译器报错，存在丢失信息的风险
+
+int c (ld), d = ld;    //正确
+```
+
+`std::vector`的构造函数有重载了初始化器的版本，所以可以使用花括号进行初始化
+```cpp
+      /**
+       *  @brief  Builds a %vector from an initializer list.
+       *  @param  __l  An initializer_list.
+       *  @param  __a  An allocator.
+       *
+       *  Create a %vector consisting of copies of the elements in the
+       *  initializer_list @a __l.
+       *
+       *  This will call the element type's copy constructor N times
+       *  (where N is @a __l.size()) and do no memory reallocation.
+       */
+      vector(initializer_list<value_type> __l,
+	     const allocator_type& __a = allocator_type())
+      : _Base(__a)
+      {
+	_M_range_initialize(__l.begin(), __l.end(),
+			    random_access_iterator_tag());
+      }
+```
+
+总之，本质上来说，这是一种语法规定：
+**在C++11中，允许使用`等号=`或者`花括号{}`进行就地的非静态成员变量初始化**
+补充：
+* 由于类成员初始化总在构造函数执行之前，编译器总是确保所有成员对象在构造函数体执行之前初始化
+
+* 初始化列表的效果总是优先于就地初始化（优先级更高，存在覆盖效果）
+* 对于非常量的静态成员变量，C++11与C++98保持一致：
+  **仍然还是要在头文件以外的位置定义它，这会保证编译时，类静态成员的定义最后只存在于一个目标文件中**。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# `std::find` & `std::find_if`
+```cpp
+#include <iostream>
+#include <algorithm>
+#include <vector>
+
+int main() {
+    std::vector<int> numbers = {1, 2, 3, 4, 5};
+
+    auto it = std::find(numbers.begin(), numbers.end(), 3);
+    if (it != numbers.end()) {
+        std::cout << "Found at index: " << std::distance(numbers.begin(), it) << std::endl;
+    } else {
+        std::cout << "Not found" << std::endl;
+    }
+
+    return 0;
+}
+```
+
+```cpp
+#include <iostream>
+#include <algorithm>
+#include <vector>
+
+bool isGreaterThanThree(int num) {
+    return num > 3;
+}
+
+int main() {
+    std::vector<int> numbers = {1, 2, 3, 4, 5};
+
+    auto it = std::find_if(numbers.begin(), numbers.end(), isGreaterThanThree);
+    if (it != numbers.end()) {
+        std::cout << "Found at index: " << std::distance(numbers.begin(), it) << std::endl;
+    } else {
+        std::cout << "Not found" << std::endl;
+    }
+
+    return 0;
+}
+```
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -363,18 +363,63 @@ PS: int *p[4]   // 先形成数组
 注意：()优先级比[\]高，[]的优先级比*高
 
 
-6.26 含有可变形参的函数
+### 6.2.6 含有可变形参的函数？？？
+有时我们无法预知应该向函数传递几个实参
 场景：想要编写代码输出程序产生的错误信息，最好用同一个函数实现该功能
-如果所有的实参类型相同，可以传递一个名为initializer_list的标准库类型
-如果实参类型不同，可使用可变参数模板
-eg initializer_list<int>li;
-其中元素永远是常量值，无法改变其值
-这个initializer_list可用作函数形参
 
-省略符形参
+* 如果所有的实参类型相同，可以传递一个名为`initializer_list`的标准库类型
+* 如果实参类型不同，可使用可变参数模板
+
+#### `initializer_list`形参
+如果函数的实参数量未知但是全部实参的类型都相同，我们可以使用initializer_list类型的形参。initializer_list 是一种标准库类型，**用于表示某种特定类型的值的数组**。
+
+```cpp
+initializer_list<int> li;
+
+initializer_list<string> ls;
+```
+
+相比`vector`，`其中元素永远是常量值，无法改变其值`
+上面提到的输出错误信息的函数可以这么写：
+```cpp
+void error_msg(initializer_list<string> il)
+{
+    for (auto beg = il.begin(); beg != il.end(); ++beg)
+        cout << *beg << " ";
+    cout << endl;
+}
+```
+如果想向`initializer_list`形参中传递一个值的序列，则必须把序列放在`一对花括号`内:
+```cpp
+// expected和actual是string对象
+if (expected != actual)
+    error_msg({"functionX", expected, actual});
+else
+    error_msg({"fnfunctionX"，"okay"});
+```
+在上面的代码中我们调用了同一个函数error msg,但是两次调用传递的参数数量不同:
+第一次调用传入了三个值，第二次调用只传入了两个。
+
+
+
+
+#### `省略符形参`
+省略符形参是为了便于 C++程序访问某些特殊的C代码而设置的，这些代码使用了名为varargs的C标准库功能。
+通常，省略符形参不应用于其他目的。
+你的C编译器文档会描述如何使用varargs。
+
+
 只能出现在形参列表的最后一个位置
-void foo(parm_list,...);
+```cpp
+void foo(parm_list, ...);
 void foo(...);
+```
+第一种形式指定了 foo 函数的部分形参的类型，对应于这些形参的实参将会执行正常的类型检查。
+**省略符形参所对应的实参无须类型检查**。
+在第一种形式中，形参声明后面的逗号是可选的。
+
+
+
 
 ## 6.3 返回类型和return语句
 *** 不要返回局部对象的引用或指针 ***
@@ -490,13 +535,43 @@ void (*pf1)(unsigned int) = ff;
 
 ### 7.1.4 构造函数
 只要类的对象被创建，就会执行构造函数。
-不能是const的，构造函数在const对象的构造过程中可以向其写入值，因为直到构造函数完成初始化过程，对象才能真正取得常量属性。
+构造函数不能是`const`的：
+当我们创建类的一个const对象时，直到构造函数完成初始化过程，对象才能真正取得常量属性。
+所以构造函数可以在const对象的构造过程中向其写入值，而`const声明的意义是：某个类成员函数不会修改类的成员变量`，两者相违背了。
+
+**只有当类没有声明任何构造函数时，编译器才会自动地生成默认构造函数**
+默认构造函数的初始化成员变量的逻辑：
+* 如果存在类内的初始值，用它来初始化成员
+* 否则，默认初始化该成员（`对于内建类型如int，就是随机值`）
 
 默认构造函数是有缺陷的：没有赋给成员初值
 
+#### 构造函数初始值列表
+```cpp
+Sales_data(const std::string &s, unsigned n, double p) : book(s), units_sold(n), revenue(p*n) {}
+```
 
-*** 初始值列表 ***
-Sales_data(const std::string &s,unsigned n,double p):book(s),units_sold(n),revenue(p*n) {}
+通常情况下，`构造函数使用类内初始值不失为一种好的选择`，
+因为只要这样的初始值存在我们就能确保为成员赋予了一个正确的值。
+不过，如果你的编译器不支持类内初始值，则所有构造函数都应该显式地初始化每个内置类型的成员。
+
+构造函数不应该轻易覆盖掉类内的初始值，除非新赋的值与原值不同。
+如果你不能使用类内初始值，则所有构造函数都应该显式地初始化每个内置类型的成员。
+
+有一点需要注意，在上面的两个构造函数中函数体都是空的。
+这是因为这些构造函数的唯一目的就是为数据成员赋初值，一旦没有其他任务需要执行，函数体也就为空了。
+
+
+**在类的外部定义构造函数**
+与其他几个构造函数不同，以istream为参数的构造函数需要执行一些实际的操作。
+在它的函数体内，调用了read函数以给数据成员赋以初值:
+```cpp
+Sales data::Sales data(std::istream &is)
+{
+    read(is，*this);    // read 函数的作用是从is中读取一条交易信息然后
+                        //存入this对象中
+}
+```
 
 
 局部对象会在创建它的块结束时被销毁
@@ -597,6 +672,61 @@ r = Account::rate();
 
 
 # 第八章 IO库
+
+
+## 8.3 string流
+sstream头文件定义了三个类型来支持`内存IO`，这些类型可以向string写入数据，从string读取数据，就像string是一个IO流一样。
+* `istringstream`从 string 读取数据，
+* `ostringstream`向 string 写入数据。
+* 而头文件`stringstream`既可从string读数据，也可向string写数据。
+与fstream类型类似，头文件sstream中定义的类型都继承自我们已经使用过的iostream头文件中定义的类型。
+除了继承得来的操作，sstream 中定义的类型还增加了一些成员来管理与流相关联的string。
+
+### 8.3.1 使用istringstream
+当我们的某些工作是对整行文本进行处理，而其他一些工作是处理行内的单个单词时，可使用
+考虑这样一个例子，假定有一个文件，列出了一些人和他们的电话号码。
+某些人只有一个号码，而另一些人则有多个一一家庭电话、工作电话、移动电话等。
+我们的输入文件看起来可能是这样的:
+```sh
+morgan 2015552368 8625550123
+drew 9735550130
+lee 609555013220155501758005550000
+```
+文件中每条记录都以一个人名开始，后面跟随一个或多个电话号码。
+我们首先定义一个简单的类来描述输入数据:
+```cpp
+//成员默认为公有:参见7.2节(第240页)
+struct PersonInfo {
+    string name;
+    vector<string> phones;
+    };
+```
+
+如下处理数据：
+```cpp
+string line, word;  //分别保存来自输入的一行和单词
+vector<PersonInfo> people;  // 保存来自输入的所有记录
+
+// 逐行从输入读取数据，直至cin 遇到文件尾(或其他错误)
+while (getline(cin, line)) {    // 从文件流中，逐行读取数据，每一行的数据存储到line字符串
+    // 创建一个保存此记录数据的对象
+    PersonInfo info;
+    istringstream record(line); //将记录绑定到刚读入的行
+    // 读取名字
+    record >> info.name;    // ！string流的意义所在：每次>>调用移动内部的字符指针
+    // 读取电话号码
+    while (record >> word)
+        info.phones.push_back(word); // 保持它们
+    people.push_back(info);     //  将此记录追加到 people 末尾
+}
+```
+
+
+
+
+
+
+
 
 
 
@@ -819,17 +949,6 @@ rfind()
 
 
 
-
-
-
-
-
-
-
-
-
-
-# 第十章 泛型算法
 
 
 
@@ -1256,6 +1375,7 @@ map的value_type是pair
 
 
 
+## 11.4 无序容器？？？
 
 
 

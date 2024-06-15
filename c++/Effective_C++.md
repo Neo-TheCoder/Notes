@@ -1241,14 +1241,14 @@ int loseHealthQuickly(const GameCharacter&);    // 计算函数1
 int loseHealthSlowly(const GameCharacter&);     // 计算函数2
 
 EvilBadGuy ebg1(loseHealthQuickly); // 相同类型人物可以调用不同的健康计算函数
-EvilBadGuy ebg2(loseHealthSlowly);
+EvilBadGuy ebg2(loseHealthSlowly);  // 选择哪个健康计算函数在对象构造时传入
 ```
 而且调用哪个函数是可以在运行期变更的。
 这种设计之下，健康计算函数不再是GameCharacter继承体系内的成员函数，因为健康计算函数甚至根本不访问非共有成分。
 如果人物的健康需要由非公有成分计算得来，那么这个设计就有问题了。
 --> 解决办法是：弱化class的封装，比如class可以声明对应的非成员函数为友元函数，或者为其实现的某一部分提供public访问函数。
 
-## 借助std::function完成Strategy模式
+## 借助`std::function`完成Strategy模式
 玩明白template以及它们对隐式接口的使用的话，函数指针就显得死板了。
 ```cpp
 class GameCharacter;    // 前置声明
@@ -1266,8 +1266,8 @@ private:
 };
 // 其中的std::function对象可以保存任何与函数签名兼容的可调用对象（兼容的意思是：入参和出参都可以隐式转换）
 ```
-准确来说，相比函数指针，std::function包装的产物可称为是一个指向函数的泛化指针。重点就在于：**入参和出参都可以隐式转换**，显然灵活多了
-甚至可以接收这种可调用对象：std::bind(&GameLevel::health, currentLevel, _1);
+准确来说，相比函数指针，`std::function`包装的产物可称为是一个指向函数的泛化指针。重点就在于：**入参和出参都可以隐式转换**，显然灵活多了：
+因为它甚至可以接收这种可调用对象：`std::bind(&GameLevel::health, currentLevel, _1)`;
 当调用这个函数对象时，它会调用currentLevel对象的health成员函数，并将一个参数传递给health函数，这个参数将会被放置在占位符_1的位置。
 
 
