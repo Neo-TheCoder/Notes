@@ -2115,6 +2115,128 @@ int main() {
 ```
 
 
+# `CRTP(Curiously Recurring Template Pattern)技术`: 奇异递归模板
+**派生类会把自己本身作为模板参数传递给基类。**
+```cpp
+template <typename D>
+class Base {/*...*/};
+
+class Derived: public Base<Derived> {/*...*/};
+```
+
+该模式最大的用处之一是在`编译期间模拟虚函数`。
+
+如果采用`虚函数`：运行时多态
+```cpp
+// 实现数学库中的向量类
+template<typename Type, unsigned Len>
+struct VectorBase{
+    virtual void someFunction() {...}
+    ...
+};
+struct Vector3: VectorBase<float, 3>{
+    virtual void someFunction() override {...}
+};
+```
+
+调用一个虚函数，需要查询对象头部的虚函数表来得到实际函数地址，这个寻址的开销对于一个数学库而言是非常巨大的，因为需要太多次
+
+```cpp
+#include<iostream>
+
+using namespace std;
+
+template<typename T> 
+class Base {
+public:
+  void foo() {
+        static_cast<T*>(this)->internal_foo();
+    }
+};
+
+class Derived1 : public Base<Derived1> {
+public:
+  void internal_foo() { cout << "Derived1 foo" << endl; }
+};
+
+class Derived2 : public Base<Derived2> {
+public:
+  void internal_foo() { cout << "Derived2 foo" << endl; }
+};
+int main() {
+    Derived1 d1;
+    d1.internal_foo();
+
+    Derived2 d2;
+    d2.internal_foo();
+}
+```
+可以通过`模板`实现类似`多态`的效果，每个派生类自定义自己的函数
+
+PS：C++中：派生类会覆盖基类的同名函数
+
+
+
+
+# 关于C++编译
+`#include`指令使另外一个文件被编译：
+预处理器先删除这条指令，并用包含文件的内容替换。
+这样一个文件被包含10次，那就实际被编译10次。
+头文件在多个编译单元展开是无所谓的
+每个编译单元都会被独立地编译成目标文件（.o文件）
+
+
+
+## gcc编译器
+四大类文件：
+- .o文件
+即目标文件。一般通过.c或者.cpp文件编译而来
+
+- .so文件
+shared object 共享库(对象)，相当于windows下的dll
+
+- .a文件
+archive 归档包，即静态库。
+其实质是`多个.o`文件`打包`的结果，相当于VC下的.lib文件
+
+- .la文件
+libtool archive 文件，是libtool自动生成的共享库文件
+
+## C++编译的过程
+- 预处理
+  展开头文件，宏定义，条件编译处理等。通过`gcc -E source.c -o source.i`或者cpp source.c生成。
+- 编译
+  这里是一个狭义的编译意义，指的是将预处理后的文件翻译成汇编代码的过程。通过`gcc -S source.i`生成。默认生成source.s文件。
+- 汇编
+汇编即将上一步生成的汇编代码翻译成对应的二进制机器码的过程。通过`gcc -c source.s`来生成source.o文件。
+- 链接
+链接是将生成目标文件和其引用的各种符号等生成一个完整的可执行程序的过程。`链接的时候会进行虚拟内存的重定向操作`。
+
+
+## 动态库的查找路径
+  对于程序需要链接的动态库xxx.so，如果它在`当前目录`下有，那么链接当前目录下的。
+  如果没有，那么就链接系统文件`/etc/ld.so.cache`(可通过`ldconfig`来更新)中查找xxx.so的路径，如果都没有，那么就会报错啦。
+
+其实在链接的时候，我们可以通过`-Wl,-rpath=sopath`来指定运行时加载动态库的路径。
+这样做的好处是：可以把一些动态库的位置信息不加入到`/etc/ld.so.cache`中，已经避免和系统已有动态库产生冲突的情况。
+（例如目标机器的`glibc库`版本太低，而编译程序的时候使用的高版本的，而出现”libc.so.6: version `GLIBC_2.14’ not found”类似的错误的情况）
+
+有一种办法，比添加环境变量`LD_LIBRARY_PATH`更好使，也更具有可移植性：
+  那就是`编译的时候`，`指定运行的时候共享库的加载路径`。
+  gcc使用`-Wl,-rpath=sopath`来指定，其中sopath是共享库放置的路径(可以是绝对路径，也可以是相对路径)。
+
+
+## 动态库的编译
+`-share`
+  该选项指定生成动态连接库（让连接器生成T类型的导出符号表，有时候也生成弱连接W类型的导出符号），不用该标志外部程序无法连接。相当于一个可执行文件。
+
+`-fPIC`表示编译为`位置独立`的代码
+  不用此选项的话，编译后的代码是位置相关的，所以动态载入时是通过 代码拷贝 的方式来满足不同进程的需要，而不能达到真正代码段共享的目的。
+
+没有指定`-fPIC`的时候出错了，原因是针对`可迁移R_X86_64_32平台`，只读数据段`.rodata`不能创建成`共享对象`，
+原因是：在动态链接动态库的时候，如果没有编译成位置无关代码，那么链接的时候可能因为某些代码的位置具有相关性，而在执行时出现错误。
+可执行文件在链接时就知道每一行代码、每一个变量会被放到线性地址空间的什么位置，因此这些地址可以都作为常数写到代码里面。对于动态库，只有加载的时候才知道。
+
 
 
 

@@ -1119,8 +1119,10 @@ int pthread_attr_destroy(pthread_attr_t *attr);
 
 ## 15.7 消息队列
 本质上是**消息的链表**，存储在内核中，由消息队列的标识符标识
-**msgget**用于创建一个新队列或打开一个现有队列，**msgsnd**用于将新消息添加到队列尾端。**msgrcv**用于从队列中取消息。
-每个队列都有一个msqid_ds结构与其关联，用于表示队列的当前状态
+`msgget`用于 创建一个 新队列 或 打开一个 现有队列
+`msgsnd`用于将 新消息 添加到 队列尾端
+`msgrcv`用于 从队列中 取消息。
+每个队列都有一个`msqid_ds`结构与其关联，用于表示队列的当前状态
 
 ```cpp
 #include<sys/msg.h>
