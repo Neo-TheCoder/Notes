@@ -181,11 +181,18 @@ ssize_t write(int fd, void* buf, size_t nbytes);
 
 
 ## 3.11 原子操作
+### 1. 追加到一个文件
+
 举例:
-AB进程对同一文件追加,可能存在这种情况,A先定位(lseek),B定位,写,A再写,A就把B写的内容覆盖了
-追加的write操作是先定位到文件尾端,再写,本质上是两个分开的函数调用,应该要合成原子操作
-任何要求多于一个函数调用的操作都不是原子操作,因为两个调用之间,内核可能挂起进程
-对于以上情况,内核提供原子操作:打开文件时设置O_APPEND标志,这样内核在每次写操作之前,都将进程的当前偏移量设置到结尾,不用每个进程调用lseek
+AB进程对同一文件追加,
+可能存在这种情况:   
+    A先定位(lseek)，
+    B定位，写
+    A再写, A就把B写的内容覆盖了（因为多次定位之间信息不同步）
+追加的write操作是先定位到文件尾端，再写，本质上是两个分开的函数调用，应该要合成原子操作
+`任何要求多于一个函数调用的操作都不是原子操作`，因为`两个调用之间,内核可能挂起进程`
+对于以上情况,内核提供`原子操作`:
+    打开文件时设置`O_APPEND`标志,这样`内核在每次写操作之前`，都将进程的`当前偏移量`设置到`结尾`，不用每个进程调用`lseek`
 
 ### 3.11.2 函数pread和pwrite
 pread 等价于 lseek read
@@ -248,6 +255,179 @@ I/O操作的杂物箱
 该目录的目录项时名为0,1,2等的文件
 打开文件/dev/fd/n等价于复制描述符n
 主要由shell使用
+
+
+
+
+# 第四章 文件和目录
+## 4.2 函数`stat`、`fstat`、`fstatat`和`lstat`
+```c
+#include <sys/stat.h>
+int stat(const char *restrict pathname, struct stat *restrict bu);
+int fstat(int fd, struct stat *bu);
+int stat(const char *restrict pathname, struct stat *restrict buf);
+int fstatat(int fd, const char *restrict palame, struct stat *restrict buf, int flag);
+```
+所有4 个函数的返回值:   若成功，返回0;若出错，返回-1
+
+
+
+
+### `stat`
+一旦给出pathname，stat函数将返回与此`命名文件`有关的`信息结构`。
+```sh
+
+
+```
+
+
+### `fstat`
+已在描述符fd上打开文件的有关信息。
+
+
+### `fstatat`
+`fstatat`函数为一个`相对于当前打开目录`(由fd参数指向)的路径名返回文件统计信息
+flag参数控制着是否跟随着一个符号链接
+当`AT_SYMLINK NOFOLLOW`标志被设置时，fstatat不会跟随符号链接，而是返回符号链接本身的信息。
+否则，在默认情况下，返回的是符号链接所指向的实际文件的信息。
+如果fd参数的值是`ATFDCWD`，并且pathname 参数是一个相对路径名
+fstatat会计算相对于当前目录的pathname参数。
+如果pathname 是一个绝对路径d参数就会被忽略。
+这两种情况下，根据 flag 的取值，fstatat 的作用就跟 stat 或lstat--样
+
+
+### `lstat`
+`lstat`函数类似于`stat`，
+但是当命名的文件是一个符号链接时，`lstat`返回`该符号链接`的有关信息，而不是由该符号链接引用的文件的信息。
+
+
+
+第2个参数 bu是一个指针，它指向一个我们必须提供的结构。函数来填充由 buf指向的结
+构。
+结构的实际定义可能随具体实现有所不同，但其基本形式是:
+```c
+#ifdef __USE_LARGEFILE64
+/* Note stat64 has the same shape as stat for x86-64.  */
+struct stat64
+  {
+    __dev_t st_dev;             /* Device.  */
+# ifdef __x86_64__
+    __ino64_t st_ino;           /* File serial number.  */
+    __nlink_t st_nlink;         /* Link count.  */
+    __mode_t st_mode;           /* File mode.  */
+# else
+    unsigned int __pad1;
+    __ino_t __st_ino;                   /* 32bit file serial number.    */
+    __mode_t st_mode;                   /* File mode.  */
+    __nlink_t st_nlink;                 /* Link count.  */
+# endif
+    __uid_t st_uid;             /* User ID of the file's owner. */
+    __gid_t st_gid;             /* Group ID of the file's group.*/
+# ifdef __x86_64__
+    int __pad0;
+    __dev_t st_rdev;            /* Device number, if device.  */
+    __off_t st_size;            /* Size of file, in bytes.  */
+# else
+    __dev_t st_rdev;                    /* Device number, if device.  */
+    unsigned int __pad2;
+    __off64_t st_size;                  /* Size of file, in bytes.  */
+# endif
+    __blksize_t st_blksize;     /* Optimal block size for I/O.  */
+    __blkcnt64_t st_blocks;     /* Nr. 512-byte blocks allocated.  */
+# ifdef __USE_XOPEN2K8
+    /* Nanosecond resolution timestamps are stored in a format
+       equivalent to 'struct timespec'.  This is the type used
+       whenever possible but the Unix namespace rules do not allow the
+       identifier 'timespec' to appear in the <sys/stat.h> header.
+       Therefore we have to handle the use of this header in strictly
+       standard-compliant sources special.  */
+    struct timespec st_atim;            /* Time of last access.  */
+    struct timespec st_mtim;            /* Time of last modification.  */
+    struct timespec st_ctim;            /* Time of last status change.  */
+# else
+    __time_t st_atime;                  /* Time of last access.  */
+    __syscall_ulong_t st_atimensec;     /* Nscecs of last access.  */
+    __time_t st_mtime;                  /* Time of last modification.  */
+    __syscall_ulong_t st_mtimensec;     /* Nsecs of last modification.  */
+    __time_t st_ctime;                  /* Time of last status change.  */
+    __syscall_ulong_t st_ctimensec;     /* Nsecs of last status change.  */
+# endif
+# ifdef __x86_64__
+    __syscall_slong_t __glibc_reserved[3];
+# else
+    __ino64_t st_ino;                   /* File serial number.          */
+# endif
+  };
+#endif
+```
+注意，`stat`结构中的大多数成员都是基本系统数据类型(见2.8 节)我们将说明此结构的每个成员以了解文件属性。
+使用 stat 函数最多的地方可能就是`ls -l`，用其可以获得有关一个文件的所有信息。
+
+## 4.3 文件类型
+至此我们已经介绍了两种不同的文件类型: `普通文件`和`目录`。
+UNIX 系统的大多数文件是普通文件或目录，但是也有另外一些文件类型。
+文件类型包括如下几种
+1. `普通文件(regular file)`
+这是最常用的文类型，这种文件含了某种形式的数据。
+至于这种数据是文本还是二进制数据，对于 UNIX 内核而言并无区别。
+`对普通文件内容的解释由处理该文件的应用程序进行`。
+
+一个值得注意的例外是`二进制可执行文件`。
+为了执行程序，内核必须理解其格式。
+所有二进制可执行文件都遵循一种标准化的格式，这种格式使内核能够确定程序文本和数据的加载位置。
+
+2. `目录文件(directory fle)`
+这种文件含了`其他文件的名字`以及`指向与这些文件有关信息的指针`。
+对一个目录文件具有`读权限`的任一进程都可以读该目录的内容，但`只有内核`可以直接`写目录文件`。
+进程必须使用本章介绍的函数才能更改目录
+
+3. `块特殊文件 (block special file)`
+这种类型的文件提供对`设备(如磁盘)带缓冲的访问`，每次访问以`固定长度`为单位进行
+注意，FreeBSD不再支持块特殊文件。对设备的所有访问需要通过字符特殊文件进行。
+
+4. `字符特殊文件 (character special file)`
+这种类型的文件提供`对设备不带缓冲的访问`，`每次访问长度可变`。
+系统中的`所有设备`要么是`字符特殊文件`，要么是`块特殊文件`。
+
+5. `FIFO`
+这种类型的文件用于`进程间通信`，有时也称为`命名管道(namedpipe)`
+15.5节将对其进行说明。
+
+6. `套接字 (socket)`
+这种类型的文件用于`进程间的网络通信`。
+套接字也可用于在一台宿主机上进程之间的非网络通信。
+第 16 章将用套接字进行进程间的通信。
+
+7. `符号链接(symbolic link)`
+这种类型的文件指向另一个文件。
+4.17 节将更多地描述符号链接。
+
+文件类型信息包含在`stat结构`的`st_mode成员`中。
+可以用图4-1中的宏确定文件类型。
+这些宏的参数都是 stat 结构中的 st mode 成员。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
