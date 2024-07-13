@@ -37,7 +37,7 @@ IP可以配置为`INADDR_ANY`
 
 #### 服务发布与Method通信
 服务的发布流程即某个服务上线后，可以在运行时动态的通知到大家，然后需要使用该服务的客户遍可以请求该服务了。
-someip协议对于服务的发布规定使用ofer报文来表示。服务的发布，往往也伴随着服务的寻找(或者说发现)流程，这里的服务的寻找流程主要是为了催促能提供服务的一方，尽快提供服务，在someip协议中规定使用find报文来表示。
+someip协议对于服务的发布规定使用offer报文来表示。服务的发布，往往也伴随着服务的寻找(或者说发现)流程，这里的服务的寻找流程主要是为了催促能提供服务的一方，尽快提供服务，在someip协议中规定使用find报文来表示。
 
 有了上述的服务寻找与发现流程后，就可以method通信.
 1. Client端需要某个服务，那么就可以通过find报文广播出去：Client一般不知道服务到底是谁能提供，所以广发英雄帖(组播)，谁能提供服务Client不需要关心(该部分由SD管理)。
@@ -222,7 +222,31 @@ In SOME/IP daemon an event is only allowed to be referenced by multiple eventgro
 
 
 
+# 为什么service instance to machine mapping的port，provided端和required端可以一样？
+## `SWS_CM_10310`
+### Source of a SOME/IP response message
+The SOME/IP response message shall use the `unicast IP address` defined in the Manifest by the Ipv4Configuration/Ipv6Configuration attribute of the NetworkEndpoint that is referenced (in role unicastNetworkEndpoint) by the EthernetCommunicationConnector of a Machine which in turn is mapped to the ProvidedSomeipServiceInstance by means of a `SomeipServiceInstanceToMachineMapping` as source address for the transmission.
+The port number configured via `udpPort` shall be used to `derive the source port` for the transmission in case the selected transport protocol (see [SWS_CM_10309]) is UDP.
+If this port number is configured to `0`, an ephemeral port shall be used.
+If the port number is configured to a value different from 0 exactly that port shall be used.
+The port number configured via `tcpPort` shall be used to derive the source port for the transmission in case the selected transport protocol (see [SWS_CM_10309]) is TCP.
+If this port number is configured to `0`, an ephemeral port shall be used.
+If the port number is configured to a value different from 0 exactly that port shall be used.c(RS_CM_00204, RS_CM_00212, RS_CM_00213, RS_SOMEIP_00007, RS_SOMEIP_00010)
 
+
+## someipd记录
+```log
+[1720856823116766][VSOM vssd][DEBUG] [18959: RemoteClient (ServiceId: 0x7EA, InstanceId: 0x178A, Version: 0x1.0x0, Local Address: 127.0.0.2)]Start:178: 
+[1720856823116807][VSOM vssd][VERBOSE] [18959: TcpServer(127.0.0.2:56026)]StartAcceptingConnections:80: Start accepting connections
+[1720856823116815][VSOM vssd][VERBOSE] [18959: TcpEndpoint(127.0.0.2:56026)]AcquireServer:492: Users 1
+[1720856823116830][VSOM vssd][VERBOSE] [18959: UnicastUdpEndpoint(127.0.0.2:56026)]OpenSocket:573: Address:port: 127.0.0.2:56026, multicast: false
+[1720856823117002][VSOM vssd][VERBOSE] [18959: UnicastUdpEndpoint(127.0.0.2:56026)]RegisterReadEventHandler:701: using event based bulk read:
+```
+
+```log
+UdpConnection(127.0.0.2:56026,127.0.0.2:56026)
+
+```
 
 
 

@@ -895,7 +895,7 @@ std::unique_ptr<int> destPtr = std::move(sourcePtr);
 
 
 ## VECTOR代码中
-**size()返回实际作为payload的元素个数，capacity()返回实际申请的内存空间大小**
+**`size()`返回实际作为payload的元素个数，`capacity()`返回实际申请的内存空间大小**
 
 (错误的调用)
 reactor_cache_是一个`StaticList<std::unique_ptr<IpcSampleCacheEntry<SampleType>>>`类型的变量
@@ -910,13 +910,12 @@ reactor_cache_是一个`StaticList<std::unique_ptr<IpcSampleCacheEntry<SampleTyp
 更多：在上一次`GetSamples`中，部分samples被处理了，并且当前调用请求更少的samples（比起上一次调用时未被处理的samples）
 
 #### 关于实现细节：
-
 （正确的调用）
 reactor_cache_是一个`StaticList<std::unique_ptr<SomeIpSampleCacheEntry>`类型的变量
 
 先对`reactor_cache_.size()`和`app_cache.size()`求和，计算`total_cache_size`，
 然后是一个for循环：
-  `InvisibleSampleCache`中，有一个`std::size_t`类型的成员`capacity_`，记录invisible cache存储的events的最大数量。
+  `InvisibleSampleCache`中，有一个`std::size_t`类型的成员`capacity_`，记录`invisible cache`存储的events的最大数量。
   在for遍历的过程中，不断增加`drop_index`（初始化为`capacity`）
   PS：对于超出buffer capacity的samples直接丢弃
   直到：drop_index == total_cache_size
@@ -933,9 +932,10 @@ reactor_cache_是一个`StaticList<std::unique_ptr<SomeIpSampleCacheEntry>`类�
   ```cpp
   app_cache_.push_back(std::move(reactor_cache_.size()));
   reactor_cache_.pop_front();
-  将samples移动到application cache
-  （application cache可能仍然储存上一次GetSamples调用的samples，只需从reactor_cache中移动差值即可达到请求的样本数）
   ```
+  将samples移动到`application cache`
+（`application cache`可能仍然储存上一次`GetSamples`调用的`samples`，只需从reactor_cache中移动差值即可达到请求的样本数）
+
 循环的起始位置是应用程序缓存中已经存在的样本数量，因为这些样本不需要从reactor缓存中获取。
 循环的终止条件是达到请求的样本数量或者reactor缓存中的样本已经全部移动到应用程序缓存中。循环的每一次迭代都将reactor缓存中的第一个样本移动到应用程序缓存的末尾，并从reactor缓存中删除该样本。
 
@@ -1024,7 +1024,8 @@ void caller()
 修改smart_w又是什么含义？正常来说，应该是**换掉里面的Widget**（因为unique ptr内容就一个指针，指向Widget）。比如：smart_w不再指向当前的Widget对象，而是另外一个Widget对象（或者清空为nullptr也可以，anyway，我们必须修改之）。
 
 但是实际生产应用中，上面的逻辑几乎看不到。通过上面的分析，我们发现实践中，这样做的可能性不大。我们为什么要换掉一个unique pointer里指向的Widget呢？
-所以，结论：By non-const l-value reference理论上可以用，但几乎看不到这样的实际案例。如果我是code viewer，如果有程序员这样用了l-value reference for unique ptr，第一时间，我会怀疑他/她用错了，然后仔细检查callee()的逻辑代码。
+所以，结论：By non-const l-value reference理论上可以用，但几乎看不到这样的实际案例。
+如果我是code viewer，如果有程序员这样用了l-value reference for unique ptr，第一时间，我会怀疑他/她用错了，然后仔细检查callee()的逻辑代码。
 
 
 ## By const l-value reference: callee(const unique_ptr<Widget> &smart_w)
@@ -1066,6 +1067,7 @@ void caller()
   callee2(smart_w.get());
 
   // 可以继续用smart_w，也可以随便抛出异常
+  // ...
 }   // guarantee: 当caller退出后，smart_w的析构函数会销毁Widget资源，不管发生任何异常 --> 而不造成资源泄露：因为抛出异常而没能释放资源
 
 void callee1(Widget *w)

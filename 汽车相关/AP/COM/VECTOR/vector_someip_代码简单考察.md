@@ -1,21 +1,23 @@
 # 一些关键逻辑
-当someipd收到控制信息，调用相应的Handler
+当someipd收到`控制信息`，根据类型，调用相应的`Handler`（就是简单的switch-case逻辑）
 
-client app通过IPC向someipd发送两种消息，其发送的时机是这样的：
-# find service
+`client app`通过IPC向someipd发送两种消息，其发送的时机是这样的：
+# `find service`
 ## client app
-StartFindService() -> ... -> send control message
+`StartFindService`() -> ... -> `send control message`
 
 ## someipd
-OnControlMessage()
+`OnControlMessage()`
+someipd得知client app想要find service，发送`源IP是单播，目的IP是多播的SD--Find消息`
 
 # request service
 ## client app
-proxy obejct creation -> ... -> Proxy(), and then Preconstruct() -> CreateBackend() -> CreateClient() -> RequestService(), send control message
+`proxy obejct creation` -> ... -> `Proxy()`, and then `Preconstruct()` -> `CreateBackend()` -> `CreateClient()` -> `RequestService()`, `send control message`
+是method的请求
 
 ## someipd
-OnControlMessage() -> RequestService() (当`IsOffered()`为true，才执行往下执行) -> Connect() -> ConnectTCP()，当socket可写，触发回调，改变状态机状态，设置为Connected
-
+`OnControlMessage()` -> `RequestService()`
+(当`IsOffered()`为true，才执行往下执行) -> `Connect()` -> `ConnectTCP()`，当`socket可写`，触发`回调`，改变`状态机状态`，设置为`Connected`
 
 # 关于someip_config.json的解析
 ```cpp
@@ -153,7 +155,7 @@ network endpoint   **IpAddress（实际是string类型）**  、  **TCP Port**  
 
 
 ## **Initialize**  ()
-### SomeIpDaemonClass的Initialize()
+### SomeIpDaemonClass的`Initialize()`
 ```cpp
  /*!
    * \brief      Initializes the SOME/IP daemon.
@@ -1186,7 +1188,6 @@ auto Send(NativeHandle native_handle, ara::core::Span<ConstIOBuffer> buffer) noe
 
 
 #### 问题记录
-
 ![image.png](https://atlas.pingcode.com/files/public/6546358a3a27284c5ca1288b/origin-url)
 
 此处的message为什么是3？根据调用栈发现是一个元素数量为3的数组，应该是对应三个  **topic**  （代码逻辑中和  **kMaximumNumberOfIoBuffers**  (  **32**  )比较）
@@ -3333,11 +3334,10 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
   }
 ```
 
-然后调用SOME/IP binding类型的someip_binding_client_manager_的SubscribeEvent(kServiceId, instance_id_, kEventId)方法：
+然后调用SOME/IP binding类型的someip_binding_client_manager_的`SubscribeEvent(kServiceId, instance_id_, kEventId)`方法：
 
 **重点是向SomeIP Daemon发送订阅请求**
-
-```
+```cpp
 /*!
    * \brief       Lets the SOME/IP binding know that a proxy wishes to receive an event of a service instance.
    * \details     This function will abort in case the connection to the SOME/IP daemon has not been established.
@@ -3393,10 +3393,7 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
     }
   }
 ```
-
-**SomeIpPosix**  &的  **SubscribeEvent**  ()，是通过  **CommandController**  的  **SubscribeEvent**  ()，它是真正发送SOME/IP控制消息
-
-
+`SomeIpPosix&`的`SubscribeEvent()`，是通过`CommandController`的`SubscribeEvent()`，它是真正发送SOME/IP控制消息
 
 
 
@@ -3460,39 +3457,29 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 # Proxy端接收数据
-
 通过`Unix Domain Socket`和Someipd通信，接收来自skeleton的消息
 
 **调用顺序：**
+任务类`*EventNotificationTask`（嵌套于class`ProxyEventBase`中）
 
-**EventNotificationTask**  （嵌套于class   **ProxyEventBase**  中）
+线程池中线程调用该任务类的`operator()`函数，
+其中调用`ProxyEventBase&`成员的`NotifySync()`函数，
+其中调用了注册的receive handler（出于性能考虑，只在处理程序自上次调用后发生变化时才copy handler？？？）
 
-线程池中线程调用其  **operator()**  函数，调用  **ProxyEventBase&**  成员的  **NotifySync**  ()函数，其中调用了注册的receive handler（出于性能考虑，只在处理程序自上次调用后发生变化时才copy handler）
 
 
+## 接收`event`类型的数据
+**`ReceiveHandlerService1Event1()`的实现**
 
-## *接收event类型的数据*
-
-**ReceiveHandlerService1Event1()的实现**
-
-调用  **parameter_service_interfaceProxy**  类型的指针指向对象的  **ParameterNotificationEvent**  成员的  **GetCachedSamples**  ()，得到cache（vector）对象的引用。
+调用  **parameter_service_interfaceProxy**  类型的指针指向对象的  **ParameterNotificationEvent**  成员的`GetCachedSamples()`，得到cache（vector）对象的引用。
 
 
 ### 何时触发？
-在初始化时创建了  **ThreadPool**  ::  **WorkerThread**  （默认线程池的线程，名为  **vComDef**  ，在  **runtime**  中创建），  **EventNotificationTask**  对象被分配给线程池，调用函数调用运算符  **operator()**  时，调用  **ProxyEventBase**  对象的  **NotifySync()**  ，其中调用了设置的  **receive_handler_**
+在初始化时创建了**ThreadPool**::**WorkerThread**
+（`默认线程池`的线程，名为`vComDef`，
+在`runtime`中创建）， 
+**EventNotificationTask**  对象被分配给线程池，调用函数调用运算符  **operator()**  时，调用  **ProxyEventBase**  对象的  **NotifySync()**  ，其中调用了设置的  **receive_handler_**
 
 该任务何时分配？
 分配任务的直接原因是此处的代码，往线程池添加任务。是接收到event数据时，通过一系列调用触发的函数。
