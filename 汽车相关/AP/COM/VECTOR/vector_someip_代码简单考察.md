@@ -3470,6 +3470,617 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 
 
 ## 接收`event`类型的数据
+每个app的com模块代码中，会创建reactor线程，专门处理unix domain socket读写事件。
+当可读事件发生时，触发初始化阶段注册的回调：
+```cpp
+      case ConnectionState::kConnected:
+        if (events.HasReadEvent()) {
+          reader_.OnReactorEvent(native_handle_);
+        }
+```
+经过一系列调用
+`StartReceiving()`
+```cpp
+    osabstraction::io::ipc1::ReceiveCompletionCallback completion_callback{
+        [this](ara::core::Result<std::size_t>&& receive_complete_result) {
+          OnReceiveCompletion(std::move(receive_complete_result));
+        }};
+```
+`OnReceiveCompletion`
+```cpp
+      // Verify that we received at least generic header and specific header
+      if (received_length >= kHeaderLength) {
+        ProcessReceivedMessage();
+
+        // Trigger an asynchronous reception again.
+        StartReceiving();
+      }
+```
+`OnSomeIpRoutingMessage`
+```cpp
+        someip_daemon_client_.OnSomeIpRoutingMessage(routing_someip_header.instance_id_,
+                                                     std::move(reception_buffer_.receive_message_body));
+```
+
+```cpp
+client_manager_->HandleReceive(instance_id, someip_header, std::move(someip_message));
+```
+
+`HandleReceive`
+```cpp
+  void HandleReceive(::amsr::someip_protocol::internal::InstanceId const instance_id,
+                     ::amsr::someip_protocol::internal::SomeIpMessageHeader const& header,
+                     MemoryBufferPtr packet) override {
+    logger_.LogDebug([](ara::log::LogStream const&) {}, __func__, __LINE__);
+
+    ::amsr::someip_protocol::internal::SomeIpReturnCode const error_code{DoInfrastructuralChecks(header)};
+    if (error_code == ::amsr::someip_protocol::internal::SomeIpReturnCode::kOk) {
+      switch (header.message_type_) {
+        case ::amsr::someip_protocol::internal::kNotification: {
+          RouteEventNotification(instance_id, header, std::move(packet));  // delegate to concrete proxy-binding
+          break;
+        }
+```
+
+```cpp
+      it->second->OnEvent(std::move(packet));
+```
+
+`SomeipProxyEventBackend`的`OnEvent`
+！！！和proxy event的`sample cache`相关联了，`sample cache`是多级的，分为用户可见 和 用户不可见
+
+该回调是为了把新读取到的数据存储到`invisible_sample_cache_`
+需要记录序号(从0开始自增)，用于更新策略
+为每一个`event_manager`调用`HandleEventNotification()`
+同时维护一个`last_event_entry_`，只存储最新的条目
+
+```cpp
+  void OnEvent(MemoryBufferPtr packet) override {
+    // Create Entry
+    // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOMEIPBINDING_AutosarC++17_10-A18.5.8_Large_packets_allocated_on_stack
+    SomeIpSampleCacheEntrySharedPtr entry{std::make_shared<SomeIpSampleCacheEntry<SampleType>>(std::move(packet))};
+
+    // Store a shared pointer of event sample in an invisible cache and removes the oldest cache element if full.
+    if (cache_capacity_ != 0U) {  // 即Subscribe(...)的输入，当前为1
+      std::lock_guard<std::mutex> const guard{sample_cache_lock_};
+      assert(invisible_sample_cache_.size() <= cache_capacity_);  // invisible_sample_cache_的size被限制在cache_capacity_下
+      if (invisible_sample_cache_.size() == cache_capacity_) {  // 说明invisible_sample_cache_满了
+        invisible_sample_cache_.pop_front();
+      }
+      invisible_sample_cache_.push_back(entry);
+
+      last_event_sequence_ = EventSequenceUtil::GetNextSequence(last_event_sequence_);
+    }
+
+    // Call HandleEventNotification for all event managers in the list
+    for (ServiceProxySomeIpEventInterface* const event_manager : subscriber_list_) {
+      event_manager->HandleEventNotification();
+    }
+
+    // Update last received entry
+    last_event_entry_.emplace(entry);
+  }
+```
+
+`HandleEventNotification()`
+```cpp
+  void HandleEventNotification() override {
+    if (subscribed_) {
+      // Notify EventReceiveHandler
+      service_event_->Notify();
+    }
+  }
+```
+
+`Notify()`，异步调用到`receive handler`
+```cpp
+  void Notify() noexcept override {
+    /* Only schedule an event notification task, if a receive handler is set, indicated by
+    receive_handler_set_ equals true. This is done for performance reasons. */
+    if (receive_handler_set_.load()) {
+      ara::com::Runtime& runtime{ara::com::Runtime::getInstance()};
+
+      ThreadPool& pool{runtime.RequestThreadPoolAssignment()};
+      // VECTOR NC AutosarC++17_10-A0.1.2: MD_SOCAL_AutosarC++17_10-A0.1.2_Notify
+      // VECTOR NC AutosarC++17_10-M0.3.2: MD_SOCAL_AutosarC++17_10-M0.3.2_Notify
+      pool.AddTask(vac::language::make_unique<EventNotificationTask>(*this));
+    }
+  }
+```
+注意到，检测到set了receive handler，就构造`EventNotificationTask`对象，`AddTask()`
+`EventNotificationTask`嵌套在`ProxyEventBase`类中
+`EventNotificationTask`
+其构造函数，先构造基类对象，再将引用成员绑定到入参
+`operator()`只不过是调用`NotifySync()`
+```cpp
+  class EventNotificationTask final : public Task {
+   public:
+    /*!
+     * \brief Initialize the functor to call on event notification.
+     *
+     * \param[in] event The event to notify.
+     */
+    explicit EventNotificationTask(ProxyEventBase& event) : Task{&event}, event_{event} {}
+
+    /*!
+     * \brief Execute the event notification handler.
+     * \details     Called in the context of the Default Thread Pool.
+     * \pre -
+     * \context     Callback
+     * \threadsafe  FALSE
+     * \reentrant   FALSE
+     * \synchronous TRUE
+     */
+    void operator()() override { event_.NotifySync(); }
+
+   private:
+    /*!
+     * \brief The event to notify.
+     */
+    ProxyEventBase& event_;
+  };
+```
+
+！！！从而调用到了注册的`Receive handler`
+注意，客户在应用层代码可能多次调用`SetReceiveHandler`，
+而`receive_handler_`这个函数对象由`ProxyEventBase`对象来维护，在调用前通过标志位判断receive handler是否有更新
+`It is set once Set/UnsetReceiveHandler is called, and reset once NotifySync is being called.`
+`NotifySync()`如果不调用，就不重新为`receive_handler_`赋值，毕竟客户可能连续调用`SetRcvHandler`，只取最后一次即可
+
+```cpp
+  /*!
+   * \brief Notify event receive handler on reception of a new event sample. Internal use only.
+   * \details     Called in the context of the Default Thread Pool.
+   * \pre         -
+   * \context     Callback
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   * \trace       SPEC-4980082, SPEC-4980117, SPEC-4980378
+   *
+   * \internal
+   * - Lock mutex.
+   * - If the receive handler has changed since last call
+   *   - Set receive handler to the new handler.
+   * - If receive handler is valid
+   *   - Call the handler.
+   *
+   * Calls "std::terminate()" if:
+   * - Mutex acquisition fails.
+   * \endinternal
+   */
+  void NotifySync() noexcept {
+    std::lock_guard<std::recursive_mutex> const guard{receive_handler_lock_};
+    /* For performance reason we copy handler only if it is changed since last call */
+    const bool& receive_handler_changed{new_receive_handler_pair_.first}; // SetReceiveHandler中会置为true
+
+    if (receive_handler_changed) {
+      receive_handler_ = new_receive_handler_pair_.second;
+      new_receive_handler_pair_.first = false;
+    } // 接收了receive_handler_后就置位false, 如果再次调用set receive handler则receive_handler_changed重新置为true
+
+    /* We call receive handler within the receive_handler_lock_ just to make it deterministic,
+     that once the user call returns from Set/Unset-ReceiveHandler, old receive_handler_ is no more used. */
+    if (receive_handler_ != nullptr) {
+      /* Do not use receive_handler_ after call of handler. Due to recursive mutex the handler could replace itself.
+       */
+      receive_handler_();
+    }
+  }
+```
+总之，，每次该proxy event有可读事件时，就最终触发到客户注册的`Receive Handler`，可以看作是同步的
+
+```cpp
+void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
+  log_.LogInfo() << "[Service1] [Event1] Receive handler was called.";
+  log_.LogInfo() << "[Service1] [Event1] Update cache and get new samples.";
+  service1_proxy_->StartApplicationEvent1.Update();
+  const service1::proxy::events::StartApplicationEvent1::SampleContainer& samples =
+      service1_proxy_->StartApplicationEvent1.GetCachedSamples();
+  for (std::size_t sample_idx{0}; sample_idx < samples.size(); ++sample_idx) {
+    log_.LogInfo() << "[Service1] [Event1] Received value " << *samples[sample_idx] << ".";
+  }
+}
+```
+
+## `ReceiveHandlerService1Event1`
+### `Update()`, 后续被取消
+`ProxyEvent`的接口，调用了更底层的`Update`，注意IPC SOME/IP都有自己的Update()实现
+更新用户可见的内存
+```cpp
+  /*!
+   * \brief Updates the event cache container visible to the user via GetCachedSamples()
+   * \details Calling Update() will invalidate any reference to a SampleContainer that has been acquired via
+   *          GetCachedSamples() API before, after that GetCachedSamples has to be called again to get a new valid
+   *          reference to the SampleContainer.
+   * \param[in] filter A function that indicates whether an event should be copied to the event cache
+   * \return true if at least one new event was transferred to the event cache
+   * \pre Subscribe has been called, but Unsubscribe has not been called yet.
+   * \context App, Callback
+   * \threadsafe TRUE
+   * \reentrant FALSE
+   * \vpublic
+   * \synchronous TRUE
+   * \trace SPEC-8053568
+   *
+   * \internal
+   * - Lock mutex.
+   * - Get the binding-related proxy implementation.
+   * - Call Update() on the event manager.
+   *
+   * Calls "ara::core::Abort()" if:
+   * - Mutex locking fails.
+   * - Construction of a new shared pointer fails.
+   * - Any exception derived from "std::exception" is caught.
+   * - An unknown exception is caught.
+   * \endinternal
+   */
+  bool Update(const ara::com::FilterFunction<SampleType>& filter = {}) noexcept {
+    bool result{false};
+    try {
+      if (is_subscribed_.load()) {
+        // Protect concurrent modification of visible_sample_cache_ by Update(), GetCachedSamples(), Cleanup() APIs.
+        std::lock_guard<std::mutex> const guard(visible_sample_cache_lock_);
+        result = (proxy_ptr_->GetServiceProxyImplInterface().get()->*GetEventManagerMethod)()->Update(
+            filter, event_cache_update_policy_, visible_sample_cache_);
+      }
+    }
+    // VECTOR NC AutosarC++17_10-A15.3.4: MD_SOCAL_AutosarC++17_10-A15.3.4_Caught_exception_is_too_general
+    // VECTOR NC AutosarC++17_10-M0.3.1: MD_SOCAL_AutosarC++17_10-M0.3.1_Dead_exception_handler
+    catch (std::exception const& e) {
+      ::ara::core::Abort(e.what());
+    }
+    // VECTOR NC AutosarC++17_10-A15.3.4: MD_SOCAL_AutosarC++17_10-A15.3.4_Using_catch_all
+    // VECTOR NC AutosarC++17_10-M0.3.1: MD_SOCAL_AutosarC++17_10-M0.3.1_Dead_exception_handler
+    catch (...) {
+      ::ara::core::Abort("ProxyEvent::Update: Unknown exception.");
+    }
+    return result;
+  }
+```
+以SOME/IP为例
+#### 更新策略`kNewestN`: 
+在这种策略下，每次调用 "更新 "时，缓存都会首先被清除，然后填入新的可用事件。
+即使自上次调用`Update`后没有任何事件发生，缓存也会被清除。
+```cpp
+  /*!
+   * \brief       Transfers the received events to the passed event container taking into account the current policy
+   *              and the passed filter function
+   *
+   * \param[in]   filter                    A filter function indicating whether an event should be copied.
+   * \param[in]   event_cache_update_policy The event cache update policy.
+   * \param[out]  visible_cache             An event container which will receive events.
+   *
+   * \return      true if at least one new event has been copied into the visible cache
+   *
+   * \pre         -
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   */
+  bool Update(FilterFunction const& filter, ara::com::EventCacheUpdatePolicy const event_cache_update_policy,
+              SampleContainer& visible_cache) override {
+    std::lock_guard<std::mutex> const guard{subscription_lock_};
+    bool result;
+
+    if (event_cache_update_policy == ara::com::EventCacheUpdatePolicy::kNewestN) {
+      result = UpdateNewest(filter, visible_cache);
+    } else {
+      result = UpdateLast(filter, visible_cache);
+    }
+
+    return result;
+  }
+```
+
+`SomeipProxyEventManager`的`UpdateNewest`
+```cpp
+  /*!
+   * \brief        Apply the filter provided with the first argument to the last cache_capacity_
+   *               samples in the invisible cache and copy all those which pass the filter into
+   *               the cache provided with the second argument.
+   * \details      The 'last cache_capacity_  samples' only refers to those events which arrived EITHER
+   *               after the current subscription became effective OR after the previous call to Update(),
+   *               depending on which of these two occurred later. Samples which had already arrived before
+   *               the call to Subscribe() or before a previous call to Update() will neither be passed
+   *               to the filter nor copied.
+   *
+   * \param[in]    filter        The filter function to pass or nullptr
+   * \param[out]   visible_cache The cache to copy into. The samples are ordered by age with the sample
+   *                             at the highest position being the one which arrived last among all samples copied.
+   *
+   * \return       If at least one sample has been copied into the cache provided with the
+   *               second argument, return true. Otherwise, return false.
+   *
+   * \pre          -
+   * \context      App
+   * \threadsafe   FALSE
+   * \reentrant    FALSE
+   * \synchronous  TRUE
+   */
+  bool UpdateNewest(FilterFunction const& filter, SampleContainer& visible_cache) {
+    bool result{false};
+
+    // Clear the visible cache
+    visible_cache.clear();
+
+    std::size_t const last_known_sequence{
+        backend_->GetSamples(filter, last_known_sequence_, visible_cache, cache_capacity_)};
+
+    if (visible_cache.size() > 0) {
+      result = true;
+    }
+    last_known_sequence_ = last_known_sequence;
+    return result;
+  }
+```
+该策略确保数据是最新的，使得`GetCachedSamples`时`Get`到的数据绝不重复
+
+##### `kNewestN`的具体实现
+注意到：
+```cpp
+    std::size_t const last_known_sequence{
+        backend_->GetSamples(filter, last_known_sequence_, visible_cache, cache_capacity_)};
+```
+`UpdateNewest`不断维护`last_known_sequence_`，并且将其传入`GetSamples`
+
+
+
+
+
+
+
+
+#### 更新策略`kLastN`
+`SomeipProxyEventManager`的`UpdateLast`
+通过`SomeipProxyEventBackend<EventConfig>`的`GetSamples()`得到`last_known_sequence_`，
+将其与`base_sequence_`作差
+`base_sequence_`是`活动订阅（如果有）生效前到达的最后一个事件的序列号。该值仅在更新策略为 EventCacheUpdatePolicy::kLastN 时使用。`
+`last_known_sequence_`是`该 SomeipProxyEventManager 已"知道"的最高指定序列号`
+更新`base_sequence_`和`last_known_sequence_`（经过观察，发现这两个序号一直凝固在最后两位(如果`Subscribe(1)`)）
+
+
+```cpp
+  /*!
+   * \brief       Apply the filter provided with the first argument to the last cache_capacity_
+   *              samples in the invisible cache and copy all those which pass the filter into
+   *              the cache provided with the second argument.
+   * \details     The 'last cache_capacity_  samples' only refers to those events which arrived after
+   *              the current subscription became effective. Samples which had already arrived before
+   *              the call to Subscribe() will neither be passed to the filter nor copied.
+   * \param[in]   filter         The filter function to pass or nullptr
+   * \param[out]  visible_cache  The cache to copy into. The samples are ordered by age with the sample at
+   *                             the highest position being the one which arrived last among all samples copied.
+   * \return      If at least one new event sample arrived between the previous call to Update() and
+   *              this one AND at least one sample has been copied into the cache provided with the
+   *              second argument, return true. Otherwise, return false.
+   * \pre         -
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \vprivate
+   * \synchronous TRUE
+   */
+  bool UpdateLast(FilterFunction const& filter, SampleContainer& visible_cache) {
+    bool result{false};
+
+    // Clear the visible cache
+    visible_cache.clear();
+
+    std::size_t const last_known_sequence{backend_->GetSamples(filter, base_sequence_, visible_cache, cache_capacity_)};
+
+    std::size_t const sequence_difference{
+        EventSequenceUtil::GetSequenceDifference(base_sequence_, last_known_sequence)};
+
+    if (last_known_sequence != last_known_sequence_) {
+      result = (visible_cache.size() > 0);
+      if (sequence_difference >= cache_capacity_) {
+        base_sequence_ = EventSequenceUtil::GetSequenceDifference(cache_capacity_, last_known_sequence);
+      }
+    }
+    last_known_sequence_ = last_known_sequence;
+    return result;
+  }
+```
+
+
+
+
+`SomeipProxyEventBackend<EventConfig>`的`GetSamples()`
+PS:
+从`invisible_sample_cache_`中取数据到`visible_cache`
+`newest_undesired_sequence`是被认为太旧的event中，最新的的序号
+(PS: 实际上，历史的历史的每一个event都需要有一个编号，这些序号都是用来作差的)
+比如说，skeleton先启动一顿狂发5个event，`invisible_sample_cache_`全存储下来了: 0, 1, 2, 3, 4, 5
+而`Subscribe`时设置的`visible_cache`大小为1，则只保留1个
+然后设置一个skip值，便于for循环，跳过不需要管的老的几个数据
+因为`invisible_sample_cache_`存储时，是新的在最后面
+`invisible_sample_cache_`中很可能是未经反序列化的数据，因此调用更底层的`GetSample`得到反序列化后的数据
+然后经过`filter`筛选，得到实际数据，经过筛选条件后塞入`visible_cache`(实际上是把`shared_ptr`塞进去了，塞进去可以延长生命周期)
+该函数的目的是得到一个序号
+```cpp
+  /*!
+   * \brief       Transfers the received events to the passed event container
+   * \param[in]   filter                    A filter function indicating whether an event should be copied.
+   * \param[in]   newest_undesired_sequence Sequence number of the newest among those events considered to be too old
+   * \param[out]  visible_cache             An event container which will receive events.
+   * \param[in]   max_samples               Maximum number of samples to transfer.
+   * \return      The sequence number of the last event received
+   * \pre         -
+   * \context     App
+   * \threadsafe  TRUE
+   * \reentrant   FALSE
+   * \vprivate
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Guard against parallel access to the invisible sample cache, e2e state and last event sequence
+   *   - Get the amount of new available samples
+   *   - Compute the amount of requested samples
+   *   - Skip to the newest events requested in the invisible cache
+   *   - For all the new events requested
+   *     - Get sample. This may do deserialization (log error in case of deserialization error)
+   *     - Apply filter
+   *     - If pass through filter
+   *       - Update E2E state
+   *       - Emplace sample pointer in the visible cache
+   * \endinternal
+   */
+  std::size_t GetSamples(FilterFunction const& filter, std::size_t const newest_undesired_sequence,
+                         SampleContainer& visible_cache, std::size_t max_samples) {
+    std::lock_guard<std::mutex> const guard{sample_cache_lock_};
+
+    std::size_t const nr_available_events{static_cast<std::size_t>(
+        EventSequenceUtil::GetSequenceDifference(newest_undesired_sequence, last_event_sequence_))};  // 后 - 前，简单作差
+    std::size_t const nr_requested_events{std::min(nr_available_events, max_samples)};
+
+    // Skip to the newest events requested
+    typename SomeIpSampleEntryContainer::size_type skip{0};
+    if (nr_requested_events < invisible_sample_cache_.size()) {
+      skip = invisible_sample_cache_.size() - nr_requested_events;
+    }
+
+    for (size_t it{skip}; it < invisible_sample_cache_.size(); ++it) {
+      // Get sample. This call may do deserialization
+      SomeIpSampleCacheEntryResult get_sample_result{GetSample(invisible_sample_cache_[it])};
+
+      // Case of sample successfully deserialized
+      if (get_sample_result.HasValue()) {
+        typename SomeIpSampleCacheEntryResult::value_type const& deserialization_result{get_sample_result.Value()};
+        // Apply filter
+        bool const have_filter{filter != nullptr};
+        bool relevant{};
+        if (have_filter) {
+          relevant = filter(*deserialization_result.sample_ptr);
+        } else {
+          relevant = true;
+        }
+        if (relevant) {
+          // Update E2E state
+          e2e_state_ = deserialization_result.e2e_result.GetState();
+          // Emplace sample pointer in the visible cache
+          visible_cache.emplace_back(deserialization_result.sample_ptr,
+                                     deserialization_result.e2e_result.GetCheckStatus());
+        }
+      } else {
+        logger_.LogError([](ara::log::LogStream& s) { s << "Deserialization error occurred."; }, __func__, __LINE__);
+      }
+    }
+    return last_event_sequence_;
+  }
+```
+
+`SomeIpSampleCacheEntry`的`GetSample()`
+`invisible_sample_cache_`存储的全是`std::shared_ptr`，`invisible_sample_cache_`这一`deque`持有的元素，什么时候`erase`？
+观察到序号一直增长，但是`invisible_sample_cache_`的size应该是限定在Subscribe的长度了(通过`assert`)，也就是一直为1，但是序号仍然在记录，是什么意思？
+
+
+
+```cpp
+  /*!
+   * \brief       Retrieves stored deserialized sample or performs deserialization
+   * \tparam      DeserializerConfiguration configuration for intializing the deserializer without E2E configuration
+   * \return      A pair holding the deserialized sample and E2E default result
+   * \pre         -
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \vprivate
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If event sample is serialized
+   *   - Deserialize event sample
+   *   - If deserialization is successful
+   *     - Return deserialized sample and default E2E result
+   *   - Else
+   *     - Reset deserialized sample container and return error
+   *   - Release memory of serialized sample
+   * - Else if event sample is deserialized
+   *   - Return deserialized sample and default E2E result
+   * - Else if deserialization error
+   *   - Return error
+   * \endinternal
+   */
+  template <typename DeserializerConfiguration,
+            std::enable_if_t<std::is_void<typename DeserializerConfiguration::E2eProfileConfigType>::value,
+                             std::uint8_t> = 0U>
+  auto GetSample() -> GetSampleResult {
+    GetSampleResult sample_data{DeserializationState::kDeserializationError};
+
+    ::amsr::e2e::Result const e2e_result{ara::com::E2E_state_machine::E2EState::NoData,
+                                         ara::com::E2E_state_machine::E2ECheckStatus::NotAvailable};
+
+    // Protect concurrent access to the shared resources
+    {
+      std::lock_guard<std::mutex>{deserialization_mutex_};
+      switch (state_) {
+        case DeserializationState::kSerialized: {
+          // Deserialize event sample
+          SampleDeserializationResult deserialization_result{DeserializeSample<DeserializerConfiguration>(
+              serialized_sample_->GetView(0U), serialized_sample_->size())};
+
+          if (deserialization_result.HasValue()) {
+            deserialized_sample_ = std::move(deserialization_result.Value());
+            sample_data.EmplaceValue(DeserializationResult{deserialized_sample_, e2e_result});
+            state_ = DeserializationState::kDeserialized;
+          } else {
+            state_ = DeserializationState::kDeserializationError;
+          }
+          // Release memory buffer of serialized sample
+          serialized_sample_.reset();
+          break;
+        }
+        case DeserializationState::kDeserialized: {
+          sample_data.EmplaceValue(DeserializationResult{deserialized_sample_, e2e_result});
+          break;
+        }
+        case DeserializationState::kDeserializationError:
+        default: {
+          // Return deserialization error.
+          break;
+        }
+      }
+    }
+    return sample_data;
+  }
+```
+
+
+
+
+
+
+
+
+
+
+
+### `GetCachedSamples()`
+直接就把`visible_sample_cache_`返回出去
+```cpp
+  // VECTOR NL VectorC++-V6.6.1: MD_SOCAL_VectorC++-V6.6.1_AbortWithSingleReturnStatement
+  const SampleContainer& GetCachedSamples() const noexcept {
+    // Protect concurrent modification of visible_sample_cache_ by Update(), GetCachedSamples(), Cleanup() APIs.
+    std::lock_guard<std::mutex> guard(visible_sample_cache_lock_);
+    return visible_sample_cache_;
+  }
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 **`ReceiveHandlerService1Event1()`的实现**
 
 调用  **parameter_service_interfaceProxy**  类型的指针指向对象的  **ParameterNotificationEvent**  成员的`GetCachedSamples()`，得到cache（vector）对象的引用。
