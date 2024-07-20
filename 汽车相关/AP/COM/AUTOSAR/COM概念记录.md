@@ -159,7 +159,7 @@ client收到新的offer service，取消计时器，直接进入`MAIN_PHASE`。�
 4. Main Phase
 1. `收到Offer Service`，如果是事件服务触发发送`Subscribe Eventgroup`(延迟一定时间)
 2. 如果收到`StopOfferService`，则停止所有计时器:
-    若有订阅，则发送`StopSubscribeEventgreup`
+    若有订阅，则发送`StopSubscribeEventgroup`
 
 ##### 服务端与client区别:
 Client状态机与Server状态机最大的不同就是一旦收到Offer后，会直接进入Main阶段。
@@ -223,6 +223,7 @@ In SOME/IP daemon an event is only allowed to be referenced by multiple eventgro
 
 
 # 为什么service instance to machine mapping的port，provided端和required端可以一样？
+因为socket由someipd统一持有
 ## `SWS_CM_10310`
 ### Source of a SOME/IP response message
 The SOME/IP response message shall use the `unicast IP address` defined in the Manifest by the Ipv4Configuration/Ipv6Configuration attribute of the NetworkEndpoint that is referenced (in role unicastNetworkEndpoint) by the EthernetCommunicationConnector of a Machine which in turn is mapped to the ProvidedSomeipServiceInstance by means of a `SomeipServiceInstanceToMachineMapping` as source address for the transmission.
@@ -249,6 +250,34 @@ UdpConnection(127.0.0.2:56026,127.0.0.2:56026)
 ```
 
 
+```sh
+linearx@linearx-virtual-machine:~/smart-phase-three$ sudo netstat -nap | grep someipd
+Active      Internet connections (servers and established)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name 
+tcp        0      0 127.0.0.2:56026         0.0.0.0:*               LISTEN      18959/./bin/someipd 
+tcp        0      0 127.0.0.2:56115         0.0.0.0:*               LISTEN      18959/./bin/someipd 
+tcp        0      0 127.0.0.1:58097         0.0.0.0:*               LISTEN      18959/./bin/someipd 
+tcp        0      0 127.0.0.2:44499         127.0.0.2:56115         ESTABLISHED 18959/./bin/someipd 
+tcp        0      0 127.0.0.2:56026         127.0.0.2:39893         ESTABLISHED 18959/./bin/someipd 
+tcp        0      0 127.0.0.2:56115         127.0.0.2:44499         ESTABLISHED 18959/./bin/someipd 
+tcp        0      0 127.0.0.2:39893         127.0.0.2:56026         ESTABLISHED 18959/./bin/someipd 
+udp        0      0 127.0.0.1:58097         0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 224.0.0.171:30490       0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 127.0.0.1:30490         0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 224.0.0.170:30490       0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 192.168.1.227:30490     0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 224.0.0.170:30490       0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 127.0.0.2:30490         0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 127.0.0.2:56026         0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 127.0.0.2:56062         0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 127.0.0.2:56084         0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 127.0.0.2:56102         0.0.0.0:*                           18959/./bin/someipd 
+udp        0      0 127.0.0.2:56119         0.0.0.0:*                           18959/./bin/someipd 
+unix  2      [ ACC ]     STREAM     LISTENING     277554   18959/./bin/someipd  /tmp/amsr_ipc_server-0000000042_0000000042
+unix  3      [ ]         STREAM     CONNECTED     264958   18959/./bin/someipd  /tmp/amsr_ipc_server-0000000042_0000000042
+unix  3      [ ]         STREAM     CONNECTED     264952   18959/./bin/someipd  /tmp/amsr_ipc_server-0000000042_0000000042
+unix  3      [ ]         STREAM     CONNECTED     259041   18959/./bin/someipd  /tmp/amsr_ipc_server-0000000042_0000000042
+```
 
 
 

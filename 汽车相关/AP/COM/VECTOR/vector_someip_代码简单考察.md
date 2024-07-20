@@ -3831,7 +3831,6 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
 
 
 
-
 #### 更新策略`kLastN`
 `SomeipProxyEventManager`的`UpdateLast`
 通过`SomeipProxyEventBackend<EventConfig>`的`GetSamples()`得到`last_known_sequence_`，
@@ -3883,8 +3882,6 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
     return result;
   }
 ```
-
-
 
 
 `SomeipProxyEventBackend<EventConfig>`的`GetSamples()`
@@ -4071,6 +4068,39 @@ PS:
 
 
 
+#### 总结
+首先，`OnEvent`接口每次调用维护队尾元素的序号`last_event_sequence_`。
+
+# New
+`UpdateNewest`不断维护一个`last_known_sequence_`
+
+# Last
+`UpdateLast`不断维护一个`base_sequence_{0}`和`last_known_sequence_{0}`
+
+二者都先通过`GetSamples`得到一个`last_known_sequence`，只不过传入函数的入参`newest_undesired_sequence`的含义不同
+
+# `GetSamples`
+`nr_available_events` = `last_event_sequence_` - `newest_undesired_sequence`
+表示**目前可用的events的个数**
+
+`nr_requested_events` = std::min(`nr_available_events` - `max_samples`)，毕竟最多只能提供`nr_available_events`个
+PS: `max_samples`是`Subscirbe()`的入参
+表示**实际需要的events的个数**
+
+因为要遍历`invisible_sample_cache_`
+设置循环的起点: `skip` = `invisible_sample_cache_.size()` - `nr_requested_events`
+把`[skip, invisible_sample_cache_.size()]`个元素塞到`visible_sample_cache_`
+
+最后返回`last_event_sequence_`
+
+## `Newest`
+简单地记录了上一批到`invisible_sample_cache_`的数据的最后一个序号
+永远是取没取过的数据
+
+## `Last`
+取的是当前`invisible`里面的`n`个数据(`n`为`Subscribe的入参`)
+
+**核心在于，给`OnEvent`接口收到的event数据每一个进行了编号**
 
 
 
@@ -4130,8 +4160,6 @@ PS:
 ```
 
 `ProcessReceivedMessage(); `  ->   `OnSomeIpRoutingMessage`  
-
-
 
 ## 发送method类型的数据
 是在自己创建的`Periodic线程中`，
