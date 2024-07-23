@@ -174,11 +174,187 @@ Result RunMachineInitApplication(vac::container::CStringView const &path_to_appl
 ```
 
 `CreateProcess`
+得到可执行文件的路径，调用`realpath（）`得到绝对路径
+调用`::fork()`
+父进程执行完fork直接就可以返回了
+子进程还要通过`cgroup`进行一些设置：首先向cgroup中添加pid。然后调用一系列系统调用
+设置cwd（当前工作目录）
+最后调用`execve`，加载可执行文件镜像，设置
 ```cpp
-
-
-
+      static_cast<void>(
+          execve(absolute_binary_path.data(), const_cast<char* const*>(argv), const_cast<char* const*>(envp)));
+// 2，3参数分别是：指向命令行参数列表的指针，指向环境变量字符串数组的指针
 ```
+
+
+
+```cpp
+// VECTOR Next Construct Metric-HIS.PATH: MD_OSA_Metric-HIS.PATH_CreateProcess
+/*!
+ * \internal
+ * - Try to resolve the absolute path to the executable image
+ * - If resolving the path failed
+ *   - Return an error.
+ * - Otherwise call fork.
+ * - If creating a child process failed
+ *   - Return an error.
+ * - If creating a child process succeeded
+ *   - In the parent process:
+ *     - Return the pid of the child.
+ *   - In the child process:
+ *     - If setting the Resource Group is required
+ *       - Try to assign the Process to the Resource Group. (apply before other settings to ensure assign permissions)
+ *       - If assign the Process failed
+ *         - End execution of the process as soon as possible.
+ *     - If setting scheduling policy and priority is required
+ *       - Try to change scheduling policy and priority of the process.
+ *       - If changing scheduling policy and priority failed
+ *         - End execution of the process as soon as possible.
+ *     - Try to change the working directory of the process.
+ *     - If changing the working directory failed
+ *       - End execution of the process as soon as possible.
+ *     - If setting CPU affinity is required
+ *       - Try to set the CPU affinity of the process.
+ *       - If setting the CPU affinity failed
+ *         - End execution of the process as soon as possible.
+ *     - If changing the secondary groups is required
+ *       - Try to change the secondary groups of the process.
+ *       - If changing the seconday groups failed
+ *         - End execution of the process as soon as possible.
+ *     - If changing the primary group ID is required
+ *       - Try to change the primary group ID of the process.
+ *       - If changing the primary group ID of the process failed
+ *         - End execution of the process as soon as possible.
+ *     - If changing the user ID is required
+ *       - Try to change the user ID of the process.
+ *       - If changing the user ID of the process failed
+ *         - End execution of the process as soon as possible.
+ *     - If execution of the process has not yet been ended
+ *       - Call execve.
+ *       - If execve failed
+ *         - End execution of the process as soon as possible.
+ * \endinternal
+ */
+ara::core::Result<ProcessId> OsProcess::CreateProcess(PathToExecutable const& executable_path,
+                                                      ExecutableName const& name, WorkingDirectory const& working_dir,
+                                                      OsProcessSettings& settings) {
+  char const* const* const argv{settings.GenerateArgv(name)};
+  char const* const* const envp{settings.GenerateEnvp()};
+
+  // kInvalidState will be overwritten by the real error, if not, the function does not work correctly.
+  ara::core::Result<ProcessId> result{ara::core::Result<ProcessId>::FromError(
+      MakeErrorCode(OsabErrc::kProcessCreationFailed, CreateProcessDetailedError::kInvalidInternalState, nullptr))};
+
+  std::array<char, PATH_MAX> absolute_binary_path{};
+  if (::realpath(executable_path.c_str(), absolute_binary_path.data()) == nullptr) {
+    // Image path does not exist.
+
+    result = ara::core::Result<ProcessId>::FromError(
+        MakeErrorCode(OsabErrc::kProcessCreationFailed, CreateProcessDetailedError::kImagePathInvalid, nullptr));
+  } else {
+    ProcessId pid{::fork()};
+    if (pid < 0) {
+      // Creating a child process failed.
+
+      result = ara::core::Result<ProcessId>::FromError(
+          MakeErrorCode(OsabErrc::kProcessCreationFailed, CreateProcessDetailedError::kGeneralInteralError, nullptr));
+    } else if (pid > 0) {
+      // Creating a child process succeeded - path for parent process.
+
+      result = ara::core::Result<ProcessId>::FromValue(pid);
+    } else {
+      // Creating a child process succeeded - path for child process.
+
+      if (settings.GetResourceGroup().has_value()) {
+        const ResourceGroup& resource_group{settings.GetResourceGroup().value()};
+        const osabstraction::process::internal::Cgroup cgroup{resource_group};
+
+        // Adding the calling process to resource group by calling AddPid with pid = 0
+        if (!cgroup.AddPid(pid)) {
+          ara::core::Abort("CreateProcess(): Invalid ResourceGroup configured.");
+        }
+      }
+
+      if (settings.GetSchedulingSettings().has_value()) {
+        if (!SetSchedulerSettings(settings.GetSchedulingSettings().value())) {
+          ara::core::Abort("CreateProcess(): SetSchedulerSettings() failed.");
+        }
+      }
+
+      if (settings.GetNiceValue().has_value()) {
+        if (!SetNiceValue(settings.GetNiceValue().value())) {
+          ara::core::Abort("CreateProcess(): SetNiceValue() failed.");
+        }
+      }
+
+      constexpr int32_t kSystemCallFailed{-1};
+
+      if (::chdir(working_dir.c_str()) == kSystemCallFailed) {
+        ara::core::Abort("CreateProcess(): chdir() system call failed.");
+      }
+
+      if (settings.GetCpuAffinity().has_value() && settings.GetCpuAffinity().value().any()) {
+        CpuAffinity const& cpu_affinity{settings.GetCpuAffinity().value()};
+        cpu_set_t cpu_set{};
+
+        for (std::size_t cpu_id{}; cpu_id < cpu_affinity.size(); ++cpu_id) {
+          if (cpu_affinity.test(cpu_id)) {
+            SetCpuId(cpu_id, cpu_set);
+          }
+        }
+
+        if (sched_setaffinity(0, sizeof(cpu_set), &cpu_set) == kSystemCallFailed) {
+          ara::core::Abort(
+              "CreateProcess(): sched_setaffinity() system call failed, probably because invalid cores are selected "
+              "for core affinity.");
+        }
+      }
+
+      if (settings.GetSecondaryGroups().has_value()) {
+        const std::vector<osabstraction::process::GroupId>& groups{settings.GetSecondaryGroups().value()};
+        if (::setgroups(static_cast<size_t>(groups.size()), groups.data()) == kSystemCallFailed) {
+          ara::core::Abort("CreateProcess(): setgroups() system call failed.");
+        }
+      }
+
+      if (settings.GetPrimaryGroupId().has_value()) {
+        GroupId const gid{settings.GetPrimaryGroupId().value()};
+        if (::setregid(gid, gid) == kSystemCallFailed) {
+          ara::core::Abort("CreateProcess(): setregid() system call failed.");
+        }
+      }
+
+      if (settings.GetUserId().has_value()) {
+        UserId const uid{settings.GetUserId().value()};
+        if (::setreuid(uid, uid) == kSystemCallFailed) {
+          ara::core::Abort("CreateProcess(): setreuid() system call failed.");
+        }
+      }
+
+      /* VECTOR Next Construct AutosarC++17_10-A5.2.3: MD_OSA_A5.2.3_ConstCastForExecvePosixSpawn */
+      static_cast<void>(
+          execve(absolute_binary_path.data(), const_cast<char* const*>(argv), const_cast<char* const*>(envp)));
+
+      // Execution only gets past execve if loading the other executable failed.
+
+      ara::core::Abort("CreateProcess(): unexpected path executed after execve() system call.");
+    }
+  }
+
+  return result;
+}
+```
+
+
+
+
+
+
+
+
+
+
+
 
 
 
