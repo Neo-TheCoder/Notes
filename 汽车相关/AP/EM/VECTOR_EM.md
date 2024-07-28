@@ -174,7 +174,7 @@ Result RunMachineInitApplication(vac::container::CStringView const &path_to_appl
 ```
 
 `CreateProcess`
-得到可执行文件的路径，调用`realpath（）`得到绝对路径
+得到可执行文件的路径，调用`realpath()`得到绝对路径
 调用`::fork()`
 父进程执行完fork直接就可以返回了
 子进程还要通过`cgroup`进行一些设置：首先向cgroup中添加pid。然后调用一系列系统调用
@@ -185,7 +185,6 @@ Result RunMachineInitApplication(vac::container::CStringView const &path_to_appl
           execve(absolute_binary_path.data(), const_cast<char* const*>(argv), const_cast<char* const*>(envp)));
 // 2，3参数分别是：指向命令行参数列表的指针，指向环境变量字符串数组的指针
 ```
-
 
 
 ```cpp

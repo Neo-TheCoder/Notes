@@ -1888,7 +1888,7 @@ array，list，tree，stack，queue，hash table，set，map
 根据`数据在容器中的排列`特性，这些数据结构分为`序列式`、`关联式`
 
 
-# 4.1 容器的概观与分类
+## 4.1 容器的概观与分类
 ### 4.1.1 序列式容器
 其中的元素可序，未必有序
 如`array`
@@ -2588,16 +2588,88 @@ if(n!= 0){
 
 #endif
 
-
 }
 
-
-
-
 }
-
 
 ```
+
+
+
+
+# 第五章 关联式容器
+标准的STL`关联式`容器分为`set(集合)`和`map(映射表)`两大类，以及这两大类的`衍生体multiset(多键集合)`和`multimap(多键映射表)`。
+
+这些容器的底层机制均以`RB-tree`(红黑树)完成。
+RB-tree也是一个独立容器，但并不开放给外界使用。
+此外，SGISTL还提供了一个不在标准规格之列的关联式容器: `hash table`(散列表)以及以此`hash table`为底层机制而完成的`hash_set` (散列集合)、`hash_map`(散列映射表)、`hash_multiset`(散列多键集合)、`hash_multimap`(列多键映射表)
+
+heap内含一个vector
+priority-queue内含一个heap
+stack和queue都内含一个deque
+set/map/multiset/multimap都内含一个 RB-tree
+hast_x 都内含一个hashtable
+
+关联式容器(associative containers)
+所谓关联式容器，观念上类似关联式数据库(实际上则简单许多):
+每笔数据(每个元素)都有一个键值 (key)和一个实值 (value)
+当元素被插人到关联式容器中时，容器内部结构(可能是 RB-tree，也可能是 hash-table)便依照其键值大小,以某种特定规则将这个元素放置于适当位置。
+`关联式容器没有所谓头尾(只有最大元素和最小元素)`，所以不会有所谓 push_back()、push_front()、pop_back()、pop_front()、begin()、end()这样的操作行为。
+
+一般而言，关联式容器的内部结构是一个 balanced binary tree(平衡二叉树)以便获得良好的搜寻效率。
+`balanced binary tree`有许多种类型，包括 AVL-tree、RB-tree、AA-tree，其中最被广泛运用于STL 的是RB-tree (红黑树)。
+为了探讨 STL 的关联式容器，我必须先探讨RB-tree。
+
+
+
+
+
+
+
+
+
+
+## 5.4 `map`
+`map`的特性是，所有元素都会根据`元素的键值`自动被排序。
+map 的所有元素都是`pair`，同时拥有实值 (value) 和键值 (key)。
+pair 的第一元素被视为键值，第二元素被视为实值。
+map不允许两个元素拥有相同的键值。
+下面是`<stl_pair.h>`中的pair定义
+```cpp
+template <class T1， class T2>
+struct pair {
+  typedef Tl first_type;
+  typedef T2 second_type;
+  Tl first;   // 注意，它是 public
+  T2 second;  // 注意，它是 public
+
+  pair() : first(T1())， second(T2()) {}
+  pair(const T1& a, const T2& b) : first(a), second(b) {}
+};
+```
+
+`我们可以通过 map 的迭代器改变 map 的元素内容吗？`
+如果想要修正元素的`键值`，答案是`不行`，因为 map 元素的键值关系到 map 元素的排列规则。
+任意改变 map元素键值将会严重破坏 map 组织。
+
+但如果想要修正元素的`实值`，答案是可以，因为map 元素的实值并不影响 map 元素的排列规则
+因此，`map iterators`既不是一种constant iterators，也不是一种`mutable iterators`.
+拥有和 list 相同的某些性质:
+  当客户端对它进行元素新增操作(`insert`)或删除操作 (`erase`)时，操作之前的所有选代器，在操作完成之后都依然有效。
+当然，被删除的那个元素的迭代器必然是个例外。
+
+由于`RB-tree`是一种`平衡二叉搜索树`，自动排序的效果很不错。
+所以标准的STI map即以RB-tree为底层机制。
+又由于map 所开放的各种操作接口，RB-tree也都提供了，所以几乎所有的 map 操作行为，都只是转调用RB-tree 的操作行为而已。
+
+
+
+
+
+
+
+
+
 
 
 
