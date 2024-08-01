@@ -2621,9 +2621,17 @@ hast_x 都内含一个hashtable
 为了探讨 STL 的关联式容器，我必须先探讨RB-tree。
 
 
+## 5.2 RB-tree, 红黑树
+`AVL-tree 之外`，另一个颇具历史并被广泛运用的平衡二叉搜索树是 RB-tree(红黑树)。
+所谓 RB-tree，不仅是一个二叉搜索树，而且必须满足以下规则:
+1. 每个节点不是红色就是黑色
+2. 根节点为黑色。
+3. 如果节点为红，其子节点必须为黑
+4. 任一节点至NULL(树尾端)的任何路径，所含之黑节点数必须相同
 
-
-
+* 根据规则 4，新增节点必须为红: 
+* 根据规则3，新增节点之父节点必须为黑
+当新节点根据二叉搜索树的规则到达其插入点，却未能符合上述条件时，就必须调整颜色并旋转树形。
 
 
 
@@ -2653,21 +2661,278 @@ struct pair {
 任意改变 map元素键值将会严重破坏 map 组织。
 
 但如果想要修正元素的`实值`，答案是可以，因为map 元素的实值并不影响 map 元素的排列规则
-因此，`map iterators`既不是一种constant iterators，也不是一种`mutable iterators`.
+因此，`map iterators`既不是一种`constant iterators`，也不是一种`mutable iterators`.
 拥有和 list 相同的某些性质:
   当客户端对它进行元素新增操作(`insert`)或删除操作 (`erase`)时，操作之前的所有选代器，在操作完成之后都依然有效。
 当然，被删除的那个元素的迭代器必然是个例外。
 
 由于`RB-tree`是一种`平衡二叉搜索树`，自动排序的效果很不错。
 所以标准的STI map即以RB-tree为底层机制。
-又由于map 所开放的各种操作接口，RB-tree也都提供了，所以几乎所有的 map 操作行为，都只是转调用RB-tree 的操作行为而已。
+又由于map 所开放的各种操作接口，RB-tree也都提供了，所以几乎所有的map操作行为，都只是转调用RB-tree的操作行为而已。
+
+
+`_Compare`默认是`std::less<_Key>`，表示键值按照升序排列
+```cpp
+template <class _Key, class _Tp, class _Compare, class _Alloc>
+class map {
+public:
+
+// requirements:
+
+  __STL_CLASS_REQUIRES(_Tp, _Assignable);
+  __STL_CLASS_BINARY_FUNCTION_CHECK(_Compare, bool, _Key, _Key);
+
+// typedefs:
+
+  typedef _Key                  key_type;
+  typedef _Tp                   data_type;
+  typedef _Tp                   mapped_type;
+  typedef pair<const _Key, _Tp> value_type;
+  typedef _Compare              key_compare;
+    
+  class value_compare
+    : public binary_function<value_type, value_type, bool> {
+  friend class map<_Key,_Tp,_Compare,_Alloc>;
+  protected :
+    _Compare comp;
+    value_compare(_Compare __c) : comp(__c) {}
+  public:
+    bool operator()(const value_type& __x, const value_type& __y) const {
+      return comp(__x.first, __y.first);
+    }
+  };
+
+private:
+  typedef _Rb_tree<key_type, value_type, 
+                   _Select1st<value_type>, key_compare, _Alloc> _Rep_type;
+  _Rep_type _M_t;  // red-black tree representing map
+public:
+  typedef typename _Rep_type::pointer pointer;
+  typedef typename _Rep_type::const_pointer const_pointer;
+  typedef typename _Rep_type::reference reference;
+  typedef typename _Rep_type::const_reference const_reference;
+  typedef typename _Rep_type::iterator iterator;
+  typedef typename _Rep_type::const_iterator const_iterator;
+  typedef typename _Rep_type::reverse_iterator reverse_iterator;
+  typedef typename _Rep_type::const_reverse_iterator const_reverse_iterator;
+  typedef typename _Rep_type::size_type size_type;
+  typedef typename _Rep_type::difference_type difference_type;
+  typedef typename _Rep_type::allocator_type allocator_type;
+
+  // allocation/deallocation
+
+  map() : _M_t(_Compare(), allocator_type()) {}
+  explicit map(const _Compare& __comp,
+               const allocator_type& __a = allocator_type())
+    : _M_t(__comp, __a) {}
+
+#ifdef __STL_MEMBER_TEMPLATES
+  template <class _InputIterator>
+  map(_InputIterator __first, _InputIterator __last)
+    : _M_t(_Compare(), allocator_type())
+    { _M_t.insert_unique(__first, __last); }
+
+  template <class _InputIterator>
+  map(_InputIterator __first, _InputIterator __last, const _Compare& __comp,
+      const allocator_type& __a = allocator_type())
+    : _M_t(__comp, __a) { _M_t.insert_unique(__first, __last); }
+#else
+  map(const value_type* __first, const value_type* __last)
+    : _M_t(_Compare(), allocator_type())
+    { _M_t.insert_unique(__first, __last); }
+
+  map(const value_type* __first,
+      const value_type* __last, const _Compare& __comp,
+      const allocator_type& __a = allocator_type())
+    : _M_t(__comp, __a) { _M_t.insert_unique(__first, __last); }
+
+  map(const_iterator __first, const_iterator __last)
+    : _M_t(_Compare(), allocator_type()) 
+    { _M_t.insert_unique(__first, __last); }
+
+  map(const_iterator __first, const_iterator __last, const _Compare& __comp,
+      const allocator_type& __a = allocator_type())
+    : _M_t(__comp, __a) { _M_t.insert_unique(__first, __last); }
+
+#endif /* __STL_MEMBER_TEMPLATES */
+
+  map(const map<_Key,_Tp,_Compare,_Alloc>& __x) : _M_t(__x._M_t) {}
+  map<_Key,_Tp,_Compare,_Alloc>&
+  operator=(const map<_Key, _Tp, _Compare, _Alloc>& __x)
+  {
+    _M_t = __x._M_t;
+    return *this; 
+  }
+
+  // accessors:
+
+  key_compare key_comp() const { return _M_t.key_comp(); }
+  value_compare value_comp() const { return value_compare(_M_t.key_comp()); }
+  allocator_type get_allocator() const { return _M_t.get_allocator(); }
+
+  iterator begin() { return _M_t.begin(); }
+  const_iterator begin() const { return _M_t.begin(); }
+  iterator end() { return _M_t.end(); }
+  const_iterator end() const { return _M_t.end(); }
+  reverse_iterator rbegin() { return _M_t.rbegin(); }
+  const_reverse_iterator rbegin() const { return _M_t.rbegin(); }
+  reverse_iterator rend() { return _M_t.rend(); }
+  const_reverse_iterator rend() const { return _M_t.rend(); }
+  bool empty() const { return _M_t.empty(); }
+  size_type size() const { return _M_t.size(); }
+  size_type max_size() const { return _M_t.max_size(); }
+  _Tp& operator[](const key_type& __k) {
+    iterator __i = lower_bound(__k);
+    // __i->first is greater than or equivalent to __k.
+    if (__i == end() || key_comp()(__k, (*__i).first))
+      __i = insert(__i, value_type(__k, _Tp()));
+    return (*__i).second;
+  }
+  void swap(map<_Key,_Tp,_Compare,_Alloc>& __x) { _M_t.swap(__x._M_t); }
+
+  // insert/erase
+
+  pair<iterator,bool> insert(const value_type& __x)   // ！！！注意到，返回值类型是pair<iterator, bool>
+    { return _M_t.insert_unique(__x); }
+  iterator insert(iterator position, const value_type& __x)
+    { return _M_t.insert_unique(position, __x); }
+#ifdef __STL_MEMBER_TEMPLATES
+  template <class _InputIterator>
+  void insert(_InputIterator __first, _InputIterator __last) {
+    _M_t.insert_unique(__first, __last);
+  }
+#else
+  void insert(const value_type* __first, const value_type* __last) {
+    _M_t.insert_unique(__first, __last);
+  }
+  void insert(const_iterator __first, const_iterator __last) {
+    _M_t.insert_unique(__first, __last);
+  }
+#endif /* __STL_MEMBER_TEMPLATES */
+
+  void erase(iterator __position) { _M_t.erase(__position); }
+  size_type erase(const key_type& __x) { return _M_t.erase(__x); }
+  void erase(iterator __first, iterator __last)
+    { _M_t.erase(__first, __last); }
+  void clear() { _M_t.clear(); }
+
+  // map operations:
+
+  iterator find(const key_type& __x) { return _M_t.find(__x); }
+  const_iterator find(const key_type& __x) const { return _M_t.find(__x); }
+  size_type count(const key_type& __x) const {
+    return _M_t.find(__x) == _M_t.end() ? 0 : 1; 
+  }
+  iterator lower_bound(const key_type& __x) {return _M_t.lower_bound(__x); }
+  const_iterator lower_bound(const key_type& __x) const {
+    return _M_t.lower_bound(__x); 
+  }
+  iterator upper_bound(const key_type& __x) {return _M_t.upper_bound(__x); }
+  const_iterator upper_bound(const key_type& __x) const {
+    return _M_t.upper_bound(__x); 
+  }
+  
+  pair<iterator,iterator> equal_range(const key_type& __x) {
+    return _M_t.equal_range(__x);
+  }
+  pair<const_iterator,const_iterator> equal_range(const key_type& __x) const {
+    return _M_t.equal_range(__x);
+  }
+
+#ifdef __STL_TEMPLATE_FRIENDS 
+  template <class _K1, class _T1, class _C1, class _A1>
+  friend bool operator== (const map<_K1, _T1, _C1, _A1>&,
+                          const map<_K1, _T1, _C1, _A1>&);
+  template <class _K1, class _T1, class _C1, class _A1>
+  friend bool operator< (const map<_K1, _T1, _C1, _A1>&,
+                         const map<_K1, _T1, _C1, _A1>&);
+#else /* __STL_TEMPLATE_FRIENDS */
+  friend bool __STD_QUALIFIER
+  operator== __STL_NULL_TMPL_ARGS (const map&, const map&);
+  friend bool __STD_QUALIFIER
+  operator< __STL_NULL_TMPL_ARGS (const map&, const map&);
+#endif /* __STL_TEMPLATE_FRIENDS */
+};
+```
+
+`示例代码`
+```cpp
+//  ！！！面对关联式容器，应该使用其所提供的 find 函数来搜寻元素，会比使用 STL 算法 find() 更有效率。因为STL算法find()只是循序搜寻
+itel = simap.find(string("mchen"));
+if (itel == simap.end())
+  cout << "mchen not found" << endl;  // mchen not found
+
+itel = simap.find(string("jerry"));
+if (itel != simap.end())
+  cout << "jerry found" << endl;  // jerry found
+
+ite1->second = 9; // 可以通过map选代器修改"value"(not key)
+int number2 = simap[string("jerry")];
+cout << number2 << endl;  //9
+```
+
+我想针对其中使用的`insert()`函数及`subscript(下标)操作符`做一些说明。
+首先是`insert()`函数:
+```cpp
+// 注意以下 insert 操作返回的型别
+pair<iterator,bool> insert(const value type& x)
+return t.insert_unique(x);
+```
+此式将工作直接转给底层机制 RB-tree 的 insert_unique() 去执行，原也不必多说。
+要注意的是其返回值型别是一个 pair，由一个选代器一个 boo1 值组成，后者`表示插入成功与否`，`成功的话前者即指向被插入的那个元素`
+
+至于`subscript(下标)操作符`，用法有两种，可能作为左值运用(内容可被修改)，也可能作为右值运用 (内容不可被修改)，例如:
+```cpp
+//以 string 为键值，以 int 为实值
+map<string, int> simap;
+simap[string("jjhou")] = 1;// 左值运用
+int number = simap[string("jjhou")]; // 右值运用
+```
+左值或右值都适用的关键在于，返回值采用`by reference`传递形式
+
+
+
+```cpp
+template <class Key, class T，
+          class Compare = less<Key>,
+          class A1loc = al1oc>
+class map {
+public:
+// typedefs:
+  typedef Key key_type;   //键值型别
+  typedef pair<const Key，T> value_type; // 元素型别(键值/实值)
+  // ...
+  public:
+    T& operator[](const key_type& k) {
+      return (*((   insert(value_type(k，T()))  ).first)).second; // (A)
+  }
+  // ...
+}
+```
+`insert`返回`std::pair<iterator, bool>`。第一个元素指向插入成功的新元素，或 插入失败(如果健值重复)的旧元素
+`operator[]`需要先构造临时T类型对象，
+对迭代器解引用(返回左值类型)，得到map中新创建的元素(是`std::pair`类型)的引用，调用second得到第二个元素本身，然后函数返回值是`T&`返回出去，也就是把它的引用返回出去
+
+`operator[]`返回`T&`，使得调用时，直接把元素的值赋上(如果把函数返回结果当作左值使用的话)
 
 
 
 
+## 5.7 hashtable
+二叉搜索树具有对数平均时间(logarithmic average time)的表现，但这样的表现构造在一个假设上:输入数据有足够的随机性。
+这一节要介绍一种名为hashtable(散列表)的数据结构，这种结构在插人、删除、搜寻等操作上也具有`“常数平均时间”`的表现，而且这种表现是以统计为基础，不需仰赖输入元素的随机性
 
+### 5.7.1 hashtable 概述
+hash table可提供对任何有名项 (named item)的存取操作和删除操作。
+由于操作对象是有名项，所以 hashtable 也可被视为一种`字典结构`(dictionary)
+这种结构的用意在于提供常数时间之基本操作，就像 stack 或 queue 那样。
+乍听之下这几乎是不可能的任务，因为约束制条件如此之少，而元素个数增加，搜寻操作必定耗费更多时间？倒也不尽然
 
-
+hashtable将元素名字进行映射，碰撞不可避免，解决办法有：
+* 线性探测
+* 二次探测
+* 开链(separate chaining)
+种方法都很容易，导出的效率各不相同一一与array 的填满程度有很大的关连
 
 
 

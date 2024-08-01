@@ -352,7 +352,7 @@ PS：此处涉及到  **DynamicServiceDiscovery**  的模板参数  **TemplateCo
    * - Start all client state machines.
    * \endinternal
    */
-  virtual void StartServiceInstanceStateMachines() {
+  virtual void StartServiceInstanceStateMachines()
     {
       // Start server state machines
       typename ServiceDiscoveryServiceInstanceServerStateMachineContainer::iterator const kBegin{
@@ -396,7 +396,7 @@ PS：此处涉及到  **DynamicServiceDiscovery**  的模板参数  **TemplateCo
 
 入参是匿名函数：
 
-**OnAccept**  (std::move(application_connection)    // 当潜在IPC通信向server建立连接时调用
+**OnAccept**(std::move(application_connection))    // 当潜在IPC通信向server建立连接时调用
 
 其中调用了  **CreateApplication**  (std::move(handle))    // 创建  **ApplicationType**  的实例，并传给新接收的IPC连接，其中的入参handle代表新到来的IPC连接
 
@@ -5380,6 +5380,95 @@ auto SetBlockingMode(NativeHandle native_handle, SocketBlockingMode enable) noex
   }
 }
 ```
+
+
+# 关于使用IPC向someipd转发method response的调用栈(重点看序列化)
+`SerializeAndSendMethodResponse`
+```cpp
+  template <typename Serializer, typename Output>
+  void SerializeAndSendMethodResponse(::amsr::someip_protocol::internal::SomeIpMessageHeader const& request_header,
+                                      Output output) {
+    skeleton_method_.GetLogger().LogDebug([](ara::log::LogStream const&) {}, __func__, __LINE__);
+
+    // Reuse request SOME/IP header
+    ::amsr::someip_protocol::internal::SomeIpMessageHeader header{request_header};
+    header.message_type_ = ::amsr::someip_protocol::internal::SomeIpMessageType::kResponse;
+
+    SerializeAndSend<Serializer>(header, output);
+  }
+```
+
+`SerializeAndSend`
+通过`SFINAE`技术重载`GetRequiredBufferSize`函数，得到`payload_size`
+根据`kHeaderSize` + `payload_size`，调用`GetTxBufferAllocator`的`Allocate(alloc_size)`得到`MemoryBufferPtr`
+对上述指针调用`GetView(0U)`，得到`packet_view`，它是一个`ara::core::Vector<IovecType>`，其中类型参数`IovecType`是`osabstraction::io::MutableIOBuffer`
+构造`BufferView`对象，构造需要两个参数，第一个是`packet_view`的base_pointer(转为uint8_t*)，第二个参数是packet的`size()`
+然后使用上述的`BufferView`对象来构造`someip_marshalling::Writer`
+接着调用`SerializeSomeIpMessageHeader(writer, header, payload_size);`，其内部开始调用writer的`writePrimitive`，是大端法
+然后序列化数据部分: `Serializer::Serialize(skeleton_method_.GetLogger().GetLogger(), writer, args);`
+最后把结果进行转发`skeleton_binding_.SendMethodResponse(std::move(packet));`，转发给someipd
+
+
+```cpp
+  /*!
+   * \brief Serializes the payload and header by using the provided serializer, a method response is send to the
+   * skeleton binding.
+   *
+   * \tparam Serializer    Type of the specific serializer.
+   * \tparam ArgumentType  Type of the structure containing the arguments that need to be serialized.
+   * \param[in] header  Header of the corresponding SOME/IP method request
+   * \param[in] args    Structure containing the arguments of this method response that need to be serialized.
+   *
+   * \pre -
+   * \context          Callback
+   * \threadsafe       FALSE
+   * \reentrant        FALSE
+   * \synchronous      TRUE
+   * \exceptionsafety  STRONG No undefined behavior or side effects.
+   *
+   * \internal
+   * - Get the required buffer size for the arguments.
+   * - Allocate memory for serialization.
+   * - Get buffer view and create writer.
+   * - serialize the payload and the header.
+   * - Send method response to the skeleton binding.
+   * \endinternal
+   *
+   */
+  template <typename Serializer, typename ArgumentType>
+  void SerializeAndSend(::amsr::someip_protocol::internal::SomeIpMessageHeader const& header, ArgumentType args) {
+    namespace someip_marshalling = ::amsr::someip_protocol::internal::serialization;
+
+    // Allocate memory for packet serialization
+    std::size_t const payload_size{Serializer::GetRequiredBufferSize(args)};
+    std::size_t const alloc_size{::amsr::someip_protocol::internal::kHeaderSize + payload_size};
+    // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOMEIPBINDING_AutosarC++17_10-A18.5.8_Large_packets_allocated_on_stack
+    ::vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> packet{
+        skeleton_method_.GetTxBufferAllocator().Allocate(alloc_size)};
+
+    ::vac::memory::MemoryBuffer<osabstraction::io::MutableIOBuffer>::MemoryBufferView packet_view{packet->GetView(0U)};
+    // VECTOR Next Line AutosarC++17_10-M5.2.8:MD_SOMEIPBINDING_AutosarC++17_10-M5.2.8_conv_from_voidp
+    someip_marshalling::BufferView const body_view{static_cast<std::uint8_t*>(packet_view[0U].base_pointer),
+                                                   packet->size()};
+    someip_marshalling::Writer writer{body_view};
+
+    SerializeSomeIpMessageHeader(writer, header, payload_size);
+    // VECTOR NC AutosarC++17_10-A5.0.1, VectorC++-V5.0.1: MD_SOMEIPBINDING_AutosarC++17_10_A5.0.1_falsepositive
+    Serializer::Serialize(skeleton_method_.GetLogger().GetLogger(), writer, args);
+    // Send packet to the skeleton binding, which forwards the packet together with the instance ID to
+    // AraComSomeIpBinding.
+    skeleton_binding_.SendMethodResponse(std::move(packet));
+  }
+```
+
+
+
+
+
+
+
+
+
 
 
 
