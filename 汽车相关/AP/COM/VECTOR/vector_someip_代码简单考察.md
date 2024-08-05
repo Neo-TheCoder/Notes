@@ -3682,6 +3682,9 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
   }
 }
 ```
+当前正在读取`CachedSamples`，如何确保此时的`CachedSamples`不会被多线程修改，导致读取到的数据有误？
+当前版本的VECTOR-COM代码，没法做此保证
+
 
 ## `ReceiveHandlerService1Event1`
 ### `Update()`, 后续被取消
@@ -3738,6 +3741,20 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
     return result;
   }
 ```
+注意到上述`Update`函数中，有如下代码：
+```cpp
+      if (is_subscribed_.load()) {
+        // Protect concurrent modification of visible_sample_cache_ by Update(), GetCachedSamples(), Cleanup() APIs.
+        std::lock_guard<std::mutex> const guard(visible_sample_cache_lock_);
+        result = (proxy_ptr_->GetServiceProxyImplInterface().get()->*GetEventManagerMethod)()->Update(
+            filter, event_cache_update_policy_, visible_sample_cache_);
+      }
+```
+
+
+
+
+
 以SOME/IP为例
 #### 更新策略`kNewestN`: 
 在这种策略下，每次调用 "更新 "时，缓存都会首先被清除，然后填入新的可用事件。
