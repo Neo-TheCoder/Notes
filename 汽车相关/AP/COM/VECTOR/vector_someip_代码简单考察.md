@@ -4055,7 +4055,7 @@ PS:
 
 
 ### `GetCachedSamples()`
-直接就把`visible_sample_cache_`返回出去
+直接就把`visible_sample_cache_`返回出去，注意到，返回的是`const类型`
 ```cpp
   // VECTOR NL VectorC++-V6.6.1: MD_SOCAL_VectorC++-V6.6.1_AbortWithSingleReturnStatement
   const SampleContainer& GetCachedSamples() const noexcept {
@@ -4068,7 +4068,7 @@ PS:
 
 
 
-#### 总结
+#### ！！！总结
 首先，`OnEvent`接口每次调用维护队尾元素的序号`last_event_sequence_`。
 
 # New
