@@ -1574,13 +1574,13 @@ PS: `前情提要`
 MutexLock mutex;
 std::vector<Foo> foos;
 
-void post(const Foo& f)
+void post(const Foo& f)   // 写操作
 {
   MutexLockGuard lock(mutex);
   foos.push_back(f);
 }
 
-void traverse()
+void traverse() // 读操作
 {
   MutexLockGuard lock(mutex);
   for ( std::vector<Foo>::const_iterator it = foos.begin(); it != foos.end(); ++it )
@@ -1598,7 +1598,7 @@ FooListPtr g_foos;
 ```
 
 ### 在read端
-用一个栈上局部`FooListPtr`变量当做“观察者”，它使得g_foos的引用计数增加。
+用一个栈上局部`FooListPtr`变量当做`“观察者”`，它使得g_foos的引用计数增加。
 临界区内只读了一次共享变量g_foos(这里多线程并发读写 shared_ptr，因此必须用mutex 保护)，
 比原来的写法大为缩短。
 而且多个线程同时调用traverse()也不会相互阻塞。
@@ -1607,10 +1607,10 @@ FooListPtr g_foos;
 void traverse()
 {
   FooListPtr foos;    // 指向vector<Foo>的指针
-  { // 这段{}内是临界区
+  {
     MutexLockGuard lock(mutex);
     foos = g_foos;    // 拷贝shared_ptr，实现：只要有人读取了，引用计数就加1
-    assert(!g_foos.unique());   // 判断是否是资源的唯一拥有者, assert中返回false则终止
+    assert(!g_foos.unique());   // 判断是否是资源的唯一拥有者, assert中返回false则终止，因为拷贝了share_ptr，所以肯定不是唯一拥有者
   }
 
   // assert(!foos.unique()); 这个断言不成立
@@ -1636,13 +1636,16 @@ void post(const Foo& f)
       g_foos.reset(new FooList(*g_foos));   // 最为核心！！！这样就不影响原来对象的读取，因为至少还有两个shared_ptr实例，不会调用析构函数，等到读操作结束，shared_ptr析构。那么读时的对象也被析构了
       printf("copy the whole list \n");  //练习:将这话移出临界区
     }
-    assert(g_foos.unique());
+    assert(g_foos.unique());  // 毕竟reset了，新的指针必然是不会增加引用计数的
     g_foos->push_back(f); // 在副本上进行修改
   } // ---临界区结束---
 }
 ```
+当读操作`traverse`做完了，那么其`shared_ptr`指向的对象也就析构了，内存释放了
+
 
 以下是几种错误写法：
+(在`traverse()`使用上述实现的前提下：)
 ```cpp
 //错误一:直接修改 g_foos 所指的 FooList，     因为对应的读操作没加锁，所以会导致读写不一致
 void post(const Foo& f)
@@ -1659,7 +1662,7 @@ void post(const Foo& f)
   {
     MutexLockGuard lock(mutex);
     g_foos = newFoos;// 或者 g_foos.swap(newFoos);
-  }
+  }   // traverse()的for循环doit()操作没加锁，可能会有数据出错
 }
 
 // 错误三:把临界区拆成两个小的，把 copying 放到临界区之外     和错误二同样的问题
@@ -1675,10 +1678,9 @@ void post(const Foo& f)
   {
     MutexLockGuard lock(mutex);
     g_foos = newFoos;//或者 g_foos.swap(newFoos);
-  }
+  }   // 不能直接操作g_foos指向的内存，因为正在traverse()的线程也可能感知到，导致数据出错
 }
 ```
-
 
 
 希望读者先吃透上面举的这个例子，再来看如何用相同的思路解决剩下的问题。

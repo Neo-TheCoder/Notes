@@ -5417,13 +5417,106 @@ auto SetBlockingMode(NativeHandle native_handle, SocketBlockingMode enable) noex
 
 `SerializeAndSend`
 通过`SFINAE`技术重载`GetRequiredBufferSize`函数，得到`payload_size`
-根据`kHeaderSize` + `payload_size`，调用`GetTxBufferAllocator`的`Allocate(alloc_size)`得到`MemoryBufferPtr`
+`GetRequiredBufferSize`含有大量的重载
+
+根据`kHeaderSize` + `payload_size`，调用`GetTxBufferAllocator`的`Allocate(alloc_size)`得到`MemoryBufferPtr`(申请了一块指定大小的内存)
+  `Allocate()`的实现就是创建了一个`std::vector<uint8_t>`，将其用于构造`FlexibleUniqueMemoryBuffer<IovecType>`对象
+总之得到了指向一块适当大小内存的指针
+
 对上述指针调用`GetView(0U)`，得到`packet_view`，它是一个`ara::core::Vector<IovecType>`，其中类型参数`IovecType`是`osabstraction::io::MutableIOBuffer`
-构造`BufferView`对象，构造需要两个参数，第一个是`packet_view`的base_pointer(转为uint8_t*)，第二个参数是packet的`size()`
+  ```cpp
+  /*!
+   * \brief  Obtain a view of the memory buffer.
+   * \param  offset The offset at which to start.
+   * \return The desired view of the memory buffer.
+   */
+  typename Base::MemoryBufferView GetView(typename Base::size_type offset) const noexcept final {
+    typename Base::MemoryBufferView view{};
+    if (offset < buffer_.size()) {
+      // VECTOR NL AutosarC++17_10-A5.2.3: MD_VAC_A5.2.3_CastRemovesConstQualification
+      view.push_back({const_cast<BufferType::value_type *>(&buffer_[offset]), buffer_.size() - offset});
+    }
+    return view;
+  }
+  ```
+
+然后，构造`BufferView`对象，构造需要两个参数：
+* 第一个是`packet_view`的`base_pointer(转为uint8_t*)`
+* 第二个参数是packet的`size()`
 然后使用上述的`BufferView`对象来构造`someip_marshalling::Writer`
-接着调用`SerializeSomeIpMessageHeader(writer, header, payload_size);`，其内部开始调用writer的`writePrimitive`，是大端法
+
+接着调用`SerializeSomeIpMessageHeader(writer, header, payload_size);`，(因为`Length`字段需要根据payload_size来填充)
+
+
+其内部开始调用writer的`writePrimitive`，采用`大端法`
 然后序列化数据部分: `Serializer::Serialize(skeleton_method_.GetLogger().GetLogger(), writer, args);`
+`someip_skeleton_event_backend.h`中，`Serializer`有多种重载，分别适用于：
+SOME/IP EVENT数据，不带E2E
+SOME/IP EVENT数据，带E2E
+可以看出，在序列化`SOME/IP header`后，还需要序列化`E2E header`
+```cpp
+  /*!
+   * \brief Serializes SOME/IP event notification packet in case the event is E2E protected.
+   *
+   * \tparam E2eProfileConfig E2E profile configuration used to enable this API in case the event is E2E protected.
+   * \tparam EventConfig Event configuration used to enable this API in case the event is SOME/IP serialized.
+   * \param[in,out] writer SOME/IP protocol buffer writer.
+   * \param[in,out] body_view Underlying buffer view of the writer.
+   * \param[in] payload_size Size of the event sample payload.
+   * \param[in] data Event sample value.
+   *
+   * \context App
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Build SOME/IP header logical struct and serialize the SOME/IP header into the allocated memory buffer.
+   * - Instantiate an E2E header serializer to allocate the memory for the E2E header later filled with contents.
+   * - Serialize the event sample payload into the memory buffer.
+   * - Finalize E2E header serialization (header will be filled with data).
+   * \endinternal
+   */
+  template <typename T1 = E2eProfileConfig, typename T2 = EventConfig>
+  auto Serialize(Writer& writer, BufferView& body_view, std::size_t const payload_size, SampleType const& data)
+      -> std::enable_if_t<!std::is_void<T1>::value &&
+                              (T2::kMessageType == ::amsr::someipd_app_protocol::internal::MessageType::kSomeIp),
+                          void> {
+    // Fill SOME/IP header with data for the request
+    ::amsr::someip_protocol::internal::SomeIpMessageHeader const header{BuildSomeIpHeader()};
+
+    // Serialize SOME/IP header
+    std::size_t const someip_payload_size{e2e_transformer_.value().GetHeaderSize() + payload_size};
+
+    ::amsr::someip_protocol::internal::serialization::SerializeSomeIpMessageHeader(writer, header, someip_payload_size);
+    // Serialize E2E header
+    ::amsr::someip_binding::internal::E2EHeaderSerializer<E2eTransformerType> e2e_header_serializer{
+        writer, e2e_transformer_.value(), body_view,
+        static_cast<std::uint8_t>(::amsr::someip_protocol::internal::kHeaderLength)};
+
+    // Serialize the event sample
+    PayloadSerializer::Serialize(writer, data);
+
+    // Finally close the E2E header serializer which updates the attributes of the already allocated E2E header.
+    e2e_header_serializer.Close();
+  }
+```
+
+
+PDU EVENT数据，不带E2E
+PDU EVENT数据，带E2E
+(PS: PDU, 协议数据单元，和S2S有关)
+
+
 最后把结果进行转发`skeleton_binding_.SendMethodResponse(std::move(packet));`，转发给someipd
+
+
+
+
+
+
+
+
 
 
 ```cpp
