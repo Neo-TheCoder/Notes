@@ -776,9 +776,37 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
   }
 ```
 
-分配空间，实例化someip的writer，调用  **Serialize**  ()，然后调用  **AraComSomeIpBindingServerManagerInterface**  类对象的  **SendEventNotification**  (instance_id_, std::move(packet))方法将数据发送
+分配空间，实例化someip的writer，调用 **Serialize**()，然后调用  **AraComSomeIpBindingServerManagerInterface**  类对象的`SendEventNotification(instance_id_, std::move(packet))`方法将数据发送
 
-其中调用了  **SomeIpDaemonClient**  类对象的  **Send**  (instance_id_, std::move(packet))
+`SendEventNotification`
+```cpp
+  /*!
+   * \brief       An instantiated skeleton implementation will send an event notification to the client.
+   * \param[in]   instance_id The SOME/IP instance id of the skeleton-binding.
+   * \param[in]   packet      Contains the complete SomeIpPacket of header and payload.
+   * \pre         Connection to the SOME/IP Daemon is established
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \vprivate
+   * \synchronous TRUE
+   */
+  void SendEventNotification(::amsr::someip_protocol::internal::InstanceId instance_id,
+                             ::vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> packet) override {
+    bool const result{someip_posix_.Send(instance_id, std::move(packet))};
+
+    if (!result) {
+      logger_.LogError(
+          [](ara::log::LogStream& s) {
+            s << "Failed to send event notification because a connection to the SOME/IP daemon has not been "
+                 "established.";
+          },
+          __func__, __LINE__);
+    }
+  }
+```
+
+其中调用了`SomeIpDaemonClient`类对象的`Send(instance_id_, std::move(packet))`
 
 `Send`内部实现：
 ```cpp
@@ -794,11 +822,10 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
     CheckIsRunning();
     return routing_controller_.SendSomeIpMessage(instance_id, std::move(packet));
   }
-
 ```
 
-可见，调用了  **RoutingController**  类对象的  **SendSomeIpMessage**  (instance_id, std::move(packet))，其内部实现
-
+可见，调用了`RoutingController`类对象的`SendSomeIpMessage(instance_id, std::move(packet))`，其内部实现
+！！！直到这里的入队操作，才`加锁`
 ```cpp
   /*!
    * \brief     Initiates the transmission of a SomeIp routing message.
@@ -846,7 +873,7 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
   }
 ```
 
-将SOME/IP消息入队，
+将SOME/IP消息入队（此处的入队操作是被加锁保护），
 ```cpp
   /*!
    * \brief Enqueues a routing message for transmission.
@@ -871,11 +898,14 @@ PayloadSerializer::  **GetRequiredBufferSize**  (data)
   }
 ```
 
-根据入参创建  **TransmitQueueEntry**  对象，然后入队，
+`transmit_queue_`这里的队列是什么类型？
+```cpp
+using TransmissionQueue = std::deque<TransmissionQueueEntry>;
+```
 
-如果传输队列只有一个元素（说明之前传输队列为空），就调用  **TransmitNextMessage**  ()进行下一次传输
-
-**TransmitNextMessage()**
+根据入参创建`TransmitQueueEntry对象`，然后入队，
+如果传输队列只有一个元素（说明之前传输队列为空），就调用`TransmitNextMessage()`进行下一次传输
+`TransmitNextMessage()`
 ```cpp
   /*!
    * \brief Starts transmission of all messages waiting in the transmit queue.
