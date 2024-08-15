@@ -1880,7 +1880,7 @@ void threadFunc()
 
 “线程”这个概念大概是在1993 年以后才慢慢流行起来的，距今不到20年，比不得有40年光辉历史的Unix操作系统。
 线程的出现给Unix添了不少乱，
-很多C库函数(`strtok()`、`ctime()`)不是线安全的，需要重新定义(4.2);
+很多C库函数(`strtok()`、`ctime()`)不是线程安全的，需要重新定义(4.2);
 signal 的语意也大为复杂化。
 据我所知，最早支持多线程编程的(民用)操作系统是 Slaris 2.2和WindowsNT3.1，它们均发布于1993年。
 随后在1995 年，POSIX threads标准确立。
@@ -1888,7 +1888,7 @@ signal 的语意也大为复杂化。
 一台机器上的多个进程能高效地共享代码段(操作系统可以映射为同样的物理内存)，但不能共享数据。
 如果多个进程大量共享内存，等于是把多进程程序当成多线程来写，掩耳盗铃。
 “多线程”的价值，我认为是为了更好地发挥多核处理器(multi-cores)的效能。
-在单核时代，多线程没有多大价值。Alan Cox说过:“Acomputer is a state machine. Threads are for people who can't program state machines”
+在单核时代，多线程没有多大价值。Alan Cox说过:“A computer is a state machine. Threads are for people who can't program state machines”
  (计算机是一台状态机线程是给那些不能编写状态机程序的人准备的。)
  如果只有一块 CPU、一个执行单元，那么确实如 Alan Cox 所说，按状态机的思路去写程序是最高效的，这正好也是下一节展示的编程模型。
 

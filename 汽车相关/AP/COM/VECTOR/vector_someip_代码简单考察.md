@@ -4151,6 +4151,326 @@ PS: `max_samples`是`Subscirbe()`的入参
 
 
 
+## 新版的`GetNewSamples`
+```cpp
+  /*!
+   * \brief       Reads the serialized samples from underlying receive buffers and deserializes them.
+   * \tparam      F User provided callable function with the signature void(ara::com::SamplePtr<SampleType const>).
+   * \param[in]   f Callable to be invoked on every deserialized sample.
+   * \param[in]   max_samples Maximum number of samples that can be processed within this call.
+   * \return      Result containing the number of successfully processed events within this call or an error.
+   * \error       ara::com::ComErrc::kMaxSamplesReached if all slots from visible sample cache are used.
+   * \pre         The event is subscribed.
+   * \context     App
+   * \threadsafe  FALSE for same class instance, TRUE for different instances.
+   *              This API can be called from event receive handler when subscription / unsubscription is requested in
+   *              parallel from the application thread without the need of additional synchronization measures.
+   * \reentrant   FALSE for same class instance, TRUE for different instances.
+   * \vpublic
+   * \synchronous TRUE
+   * \trace       SPEC-8053568
+   * \spec
+   *   requires true;
+   * \endspec
+   *
+   * \internal
+   * - Create a result with the valid event processed set to zero.
+   * - If the event is subscribed
+   *   - Define a callable which
+   *     - Create a SamplePtr from the deserialized data.
+   *     - Invoke the user provided callable f.
+   *   - Invoke ReadSamples on the proxy_event_backend_ and emplace its return value into result.
+   * - Otherwise
+   *    - Log a warning that API is called prior to subscription.
+   * - Return the result.
+   *
+   * Calls "ara::core::Abort()" if:
+   * - The event has been not subscribed to.
+   * \endinternal
+   */
+  template <typename F>
+  auto GetNewSamples(F&& f, std::size_t max_samples = std::numeric_limits<size_t>::max()) noexcept
+      -> GetNewSamplesResult {
+    // PTP-B-Socal-ProxyEvent_GetNewSamples
+    GetNewSamplesResult result{GetNewSamplesResult::FromValue(0UL)};
+    if (is_subscribed_) {
+      auto callable_sample_result = [this, &f](SampleData&& deserialized_data) {
+        // VCA_SOCAL_CALLING_NON_STATIC_FUNCTION_FROM_CALLBACK_SYNCHRONOUSLY
+        f(GetSamplePtr(std::move(deserialized_data)));
+      };
+      // VCA_SOCAL_FUNCTION_CALL_ON_VALID_OBJECTS_ADHERING_TO_FUNCTION_CONTRACT
+      result = proxy_event_backend_.ReadSamples(max_samples, callable_sample_result);
+    } else {
+      logger_.LogFatal(
+          [](::ara::log::LogStream& s) { s << "API called before subscription or after unsubscription of the event."; },
+          static_cast<char const*>(__func__), __LINE__);
+      ::ara::core::Abort(
+          "ProxyEventBase::GetNewSamples: API called before subscription or after unsubscription of the event.");
+    }
+    // PTP-E-Socal-ProxyEvent_GetNewSamples
+    return result;
+  }
+```
+
+
+其内部实现多了一个`GetSamplePtr`，将其作为外部传入的函数的参数，封装成可调用对象`callable_sample_result`，传入`proxy_event_backend_`的`ReadSamples`
+```cpp
+  /*!
+   * \brief       Construct the SamplePtr from the deserialization result when the parameter of time stamp is disabled.
+   * \tparam      Config  Configures if the time stamp is enabled or disabled.
+   * \param[in]   deserialized_data The deserialized event data.
+   * \return      SamplePtr containing the sample data and e2e check status.
+   * \pre         -
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   TRUE
+   * \synchronous TRUE
+   */
+  // VECTOR NC AutosarC++17_10-M9.3.3: MD_SOCAL_AutosarC++17_10-M9.3.3_Method_can_be_declared_static
+  template <typename Config = TimestampConfiguration>
+  auto GetSamplePtr(SampleData&& deserialized_data) const noexcept
+      -> std::enable_if_t<Config::IsEnabled != true, SamplePtr> {
+    // VCA_SOCAL_CALLING_STL_APIS
+    return SamplePtr{std::move(deserialized_data.memory_wrapper_if_ptr), std::move(deserialized_data.cache_ptr),
+                     deserialized_data.e2e_check_status};
+  }
+```
+
+版本2，带`时间戳`
+```cpp
+  /*!
+   * \brief      Construct the SamplePtr from the deserialization result when the parameter of time stamp is enabled.
+   * \tparam     Config  Configures if the time stamp is enabled or disabled.
+   * \param[in]   deserialized_data The deserialized event data.
+   * \return      sample_ptr containing the deserialized data, preallocated sample and time stamp.
+   * \pre         -
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   TRUE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If the deserialization result does not contain a valid time stamp, abort the application.
+   * - Construct and return the SamplePtr which includes the time stamp.
+   * \endinternal
+   */
+  template <typename Config = TimestampConfiguration>
+  auto GetSamplePtr(SampleData&& deserialized_data) const noexcept -> std::enable_if_t<Config::IsEnabled, SamplePtr> {
+    if (!deserialized_data.time_stamp.has_value()) {
+      logger_.LogFatal([](::ara::log::LogStream& s) { s << "Invalid time stamp!"; }, static_cast<char const*>(__func__),
+                       __LINE__);
+      ::amsr::core::Abort("ProxyEvent::GetSamplePtr(): Invalid time stamp!");
+    }
+    typename SamplePtr::TimeStamp const timestamp{deserialized_data.time_stamp.value()};
+    // VCA_SOCAL_CALLING_STL_APIS
+    return SamplePtr{std::move(deserialized_data.memory_wrapper_if_ptr), std::move(deserialized_data.cache_ptr),
+                     deserialized_data.e2e_check_status, timestamp};
+  }
+```
+
+### `ProxyEventXf`的`ReadSamples`
+```cpp
+  /*!
+   * \brief   Reads the serialized samples from underlying receive buffers and deserializes them.
+   *          Event samples without E2E protection will be ignored in case of a deserialization error.
+   * \details Binding implementation should start reading all the received samples
+   *          from the top of its receive buffers. Reading of samples should be continued until either:
+   *            > the pre-allocated memory for storing the deserialized samples is exhausted.
+   *            > given maximum samples have been processed within this call.
+   *            > there are no further new samples to read.
+   * \param[in]   max_samples            Maximum number of samples that can be processed within this call.
+   * \param[in]   callable_sample_result Callable to be invoked on successful deserialization.
+   *                                     The callable is valid only until the scope of this function call,
+   *                                     so storing and invoking it at a later point will lead to undefined behavior.
+   * \return      Result containing the number of events that have been passed to the provided callable.
+   * \error       ara::com::ComErrc::kMaxSamplesReached if all slots from visible sample cache are used at the
+   *              beginning of the call.
+   * \pre         Event must be subscribed. It is assumed that the event is successfully subscribed, if
+   *              > Subscribe call is returned successfully, or
+   *              > HandleEventNotification is triggered on the EventSubscriberInterface in the middle of subscription.
+   * \context     App
+   * \threadsafe  FALSE for same class instance, TRUE for different instances.
+   *              TRUE against GetE2EResult and GetFreeSampleCount when invoked on same/different class instances.
+   * \reentrant   FALSE for same class instance, TRUE for different instances.
+   * \synchronous TRUE
+   * \trace SPEC-10144331, SPEC-10144327
+   * \internal
+   * - If no subscriber registered
+   *   - Log fatal and call Abort().
+   * - Create a result with an error ComErrc::kMaxSamplesReached.
+   * - If there are sample pointers available in the visible sample cache
+   *   - If there are events available in the invisible cache
+   *     - Call ReadSamplesInternal
+   *     - Store the number of successfully processed events
+   *   - Otherwise
+   *     - Reset the current E2E result
+   *   - Emplace number of processed events in result
+   * - Return result
+   * \endinternal
+   */
+  // VECTOR NC AutosarC++17_10-A10.3.3: MD_SOMEIPBINDING_AutosarC++17_10-A10.3.3_no_virtual_functions_in_final_class
+  // VECTOR NC AutosarC++17_10-A15.4.2: MD_SOMEIPBINDING_AutosarC++17_10-A15.4.2_STL_exceptions_noexcept
+  // VECTOR NC AutosarC++17_10-A15.5.3: MD_SOMEIPBINDING_AutosarC++17_10-A15.5.3_STL_exceptions_noexcept
+  ReadSamplesResult ReadSamples(std::size_t const max_samples,
+                                CallableReadSamplesResult const& callable_sample_result) noexcept override {
+    if (!subscribed_proxy_event_xf_.has_value()) {
+      constexpr char const* error_message{"ReadSamples() called while not being subscribed!"};
+      logger_.LogFatal([](::ara::log::LogStream& s) { s << error_message; }, static_cast<char const*>(__func__),
+                       __LINE__);
+      ::ara::core::Abort(error_message);
+    }
+
+    ::ara::com::ComErrorDomain::SupportDataType const no_support_data_provided{0};
+    ReadSamplesResult result{ReadSamplesResult::FromError(
+        ::ara::com::MakeErrorCode(::ara::com::ComErrc::kMaxSamplesReached, no_support_data_provided,
+                                  "Application holds more SamplePtrs than committed in Subscribe"))};
+
+    SubscribedProxyEventXf& subscribed_proxy_event_xf{subscribed_proxy_event_xf_.value()};
+
+    // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+    if (subscribed_proxy_event_xf.visible_sample_cache->GetFreeSampleCount() > 0) {
+      std::size_t nr_valid_events_processed{0};
+
+      InvisibleSampleCache::SampleCacheContainer& sample_container{
+          // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+          subscribed_proxy_event_xf.invisible_sample_cache->GetSamples(max_samples)};
+
+      logger_.LogDebug(
+          [&sample_container, &subscribed_proxy_event_xf, &max_samples](::ara::log::LogStream& s) {
+            s << "Trying to read maximum of " << max_samples << " sample(s). ";
+            s << "Retrieved from received sample container: ";
+            s << sample_container.size() << " sample(s).";
+            s << ", Free sample count:";
+            // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+            s << subscribed_proxy_event_xf.visible_sample_cache->GetFreeSampleCount();
+            s << " sample(s).";
+          },
+          static_cast<char const*>(__func__), __LINE__);
+
+      // Note: the returned cache might have size equal, greater
+      // than or less than max_samples.
+      // In case more samples than requested exist, do not
+      // process the additional samples.
+      // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+      nr_valid_events_processed = subscribed_proxy_event_xf.sample_reader->ReadSamples(
+          subscribed_proxy_event_xf.visible_sample_cache, sample_container, max_samples, callable_sample_result);
+
+      result.EmplaceValue(nr_valid_events_processed);
+    }  // E2E result is not updated as this is not required by SWS, see ESCAN00112552
+    return result;
+  }
+```
+
+#### ``的`ReadSamples`
+```cpp
+  /*!
+   * \brief Reads serialized samples from the given sample cache container, deserializes them and calls the provided
+   *        callback function.
+   *
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   *
+   * \pre   -
+   * \param[in] visible_sample_cache         shared pointer to the visible sample cache from which free sample slots
+   *                                         are retrieved for each read sample
+   * \param[in] serialized_samples_container container which has the enqueued event samples cache entries
+   * \param[in] max_samples                  maximum number of samples to process
+   * \param[in] callable_sample_result       Callable to be invoked on successful deserialization
+   *
+   * \return The number of event samples which were successfully deserialized and processed
+   *
+   * \internal
+   * - Calculate how many samples shall be processed by using the min of max_samples or the available serialzied samples
+   * - Do repeatedly for the serialized_samples in sample_cache_container
+   *   - Retrieve one slot from the visible cache
+   *   - When a slot is availble
+   *     - Deserialize the sample.
+   *     - If deserialization is successful
+   *       - Increase the number of successfully processed events
+   *       - Invoke callable_sample_result with wrapped, deserialized sample, e2e check status
+"NotAvailable" and time stamp.
+   *     - Otherwise
+   *       - Return the visible cache slot.
+   *   - Otherwise
+   *     - Stop further processing of samples
+   * \endinternal
+   *
+   */
+  std::size_t ReadSamples(std::shared_ptr<VisibleSampleContainer> visible_sample_cache,
+                          SampleCacheContainer& serialized_samples_container, std::size_t const max_samples,
+                          CallableReadSamplesResult const& callable_sample_result) const noexcept override {
+    std::size_t nr_valid_events_processed{0};
+    std::size_t const samples_to_process{std::min(max_samples, serialized_samples_container.size())};
+    // VECTOR NL AutosarC++17_10-A6.5.1: MD_SOMEIPBINDING_AutosarC++17_10-A6.5.1_loop_counter
+    for (std::size_t process_index{0U}; process_index < samples_to_process; ++process_index) {
+      // Get free slot for deserialization
+      // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOMEIPBINDING_AutosarC++17_10_A18.5.8_false_positive
+      std::shared_ptr<socal::internal::events::MemoryWrapperInterface<SampleType>> visible_cache_slot{
+          // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+          visible_sample_cache->GetNextFreeSample()};
+
+      if (visible_cache_slot != nullptr) {
+        // Retrieve serialized event
+        std::unique_ptr<SomeIpSampleCacheEntry> const& serialized_event{
+            // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+            serialized_samples_container.front()};
+
+        // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+        ::ara::core::Optional<TimeStamp> const time_stamp{serialized_event->GetTimeStamp()};
+
+        // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+        std::size_t const buffer_size{serialized_event->GetBufferSize()};
+        ::vac::memory::MemoryBuffer<osabstraction::io::MutableIOBuffer>::MemoryBufferView const buffer_view{
+            // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+            serialized_event->GetBufferView()};
+        // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+        bool const deserialized_successfully{DeserializeSample(**visible_cache_slot, buffer_size, buffer_view)};
+
+        // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+        serialized_samples_container.pop_front();
+
+        if (deserialized_successfully) {
+          ++nr_valid_events_processed;
+          // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+          callable_sample_result(SampleData{std::move(visible_cache_slot), visible_sample_cache,
+                                            ara::com::E2E_state_machine::E2ECheckStatus::NotAvailable, time_stamp});
+        } else {
+          // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+          visible_sample_cache->ReturnEntry(std::move(visible_cache_slot));
+
+          logger_.LogError(
+              [](::ara::log::LogStream& s) {
+                s << "Deserialization error occurred. Please check that the event datatype for proxy and skeleton "
+                     "side are compatible.";
+              },
+              static_cast<char const*>(__func__), __LINE__);
+        }
+      } else {  // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        // This is not an error case, we only process until no more free slot is available.
+        logger_.LogDebug([](::ara::log::LogStream& s) { s << "No free slot is available anymore."; },
+                         static_cast<char const*>(__func__), __LINE__);
+        break;
+      }
+    }  // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+
+    return nr_valid_events_processed;
+  }
+```
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -5484,66 +5804,17 @@ auto SetBlockingMode(NativeHandle native_handle, SocketBlockingMode enable) noex
 SOME/IP EVENT数据，不带E2E
 SOME/IP EVENT数据，带E2E
 可以看出，在序列化`SOME/IP header`后，还需要序列化`E2E header`
-```cpp
-  /*!
-   * \brief Serializes SOME/IP event notification packet in case the event is E2E protected.
-   *
-   * \tparam E2eProfileConfig E2E profile configuration used to enable this API in case the event is E2E protected.
-   * \tparam EventConfig Event configuration used to enable this API in case the event is SOME/IP serialized.
-   * \param[in,out] writer SOME/IP protocol buffer writer.
-   * \param[in,out] body_view Underlying buffer view of the writer.
-   * \param[in] payload_size Size of the event sample payload.
-   * \param[in] data Event sample value.
-   *
-   * \context App
-   * \threadsafe FALSE
-   * \reentrant FALSE
-   * \synchronous TRUE
-   *
-   * \internal
-   * - Build SOME/IP header logical struct and serialize the SOME/IP header into the allocated memory buffer.
-   * - Instantiate an E2E header serializer to allocate the memory for the E2E header later filled with contents.
-   * - Serialize the event sample payload into the memory buffer.
-   * - Finalize E2E header serialization (header will be filled with data).
-   * \endinternal
-   */
-  template <typename T1 = E2eProfileConfig, typename T2 = EventConfig>
-  auto Serialize(Writer& writer, BufferView& body_view, std::size_t const payload_size, SampleType const& data)
-      -> std::enable_if_t<!std::is_void<T1>::value &&
-                              (T2::kMessageType == ::amsr::someipd_app_protocol::internal::MessageType::kSomeIp),
-                          void> {
-    // Fill SOME/IP header with data for the request
-    ::amsr::someip_protocol::internal::SomeIpMessageHeader const header{BuildSomeIpHeader()};
 
-    // Serialize SOME/IP header
-    std::size_t const someip_payload_size{e2e_transformer_.value().GetHeaderSize() + payload_size};
 
-    ::amsr::someip_protocol::internal::serialization::SerializeSomeIpMessageHeader(writer, header, someip_payload_size);
-    // Serialize E2E header
-    ::amsr::someip_binding::internal::E2EHeaderSerializer<E2eTransformerType> e2e_header_serializer{
-        writer, e2e_transformer_.value(), body_view,
-        static_cast<std::uint8_t>(::amsr::someip_protocol::internal::kHeaderLength)};
 
-    // Serialize the event sample
-    PayloadSerializer::Serialize(writer, data);
 
-    // Finally close the E2E header serializer which updates the attributes of the already allocated E2E header.
-    e2e_header_serializer.Close();
-  }
-```
 
 
 PDU EVENT数据，不带E2E
 PDU EVENT数据，带E2E
 (PS: PDU, 协议数据单元，和S2S有关)
 
-
 最后把结果进行转发`skeleton_binding_.SendMethodResponse(std::move(packet));`，转发给someipd
-
-
-
-
-
 
 
 
@@ -5600,6 +5871,178 @@ PDU EVENT数据，带E2E
     skeleton_binding_.SendMethodResponse(std::move(packet));
   }
 ```
+
+
+# 关于`Runtime`类的析构
+编译器生成代码，把类成员变量全部析构掉
+当前关注以下成员变量：
+```cpp
+  std::unique_ptr<::amsr::socal::internal::ReactorConstructorInterface> reactor_constructor_{};
+```
+
+```cpp
+/*! \internal
+ * - If the Runtime instance is not deinitialized
+ *   - Abort the application.
+ * - Otherwise, Invoke destructor.
+ * \endinternal
+ */
+Runtime::~Runtime() noexcept {
+  if (is_running_) {
+    ::amsr::core::Abort("Runtime::DeInitializeCommunication() must be called before Runtime is destroyed.");
+  }
+  // VCA_SOCAL_CALLING_DESTRUCTOR_OF_CLASS_MEMBERS
+}
+```
+经过观察发现，是`Reactor1`析构时出了问题
+
+
+
+
+
+
+
+# 关于SOME/IP序列化
+```cpp
+  /*!
+   * \brief Serializes SOME/IP event notification packet in case the event is E2E protected.
+   *
+   * \tparam E2eProfileConfig E2E profile configuration used to enable this API in case the event is E2E protected.
+   * \tparam EventConfig Event configuration used to enable this API in case the event is SOME/IP serialized.
+   * \param[in,out] writer SOME/IP protocol buffer writer.
+   * \param[in,out] body_view Underlying buffer view of the writer.
+   * \param[in] payload_size Size of the event sample payload.
+   * \param[in] data Event sample value.
+   *
+   * \context App
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Build SOME/IP header logical struct and serialize the SOME/IP header into the allocated memory buffer.
+   * - Instantiate an E2E header serializer to allocate the memory for the E2E header later filled with contents.
+   * - Serialize the event sample payload into the memory buffer.
+   * - Finalize E2E header serialization (header will be filled with data).
+   * \endinternal
+   */
+  template <typename T1 = E2eProfileConfig, typename T2 = EventConfig>
+  auto Serialize(Writer& writer, BufferView& body_view, std::size_t const payload_size, SampleType const& data)
+      -> std::enable_if_t<!std::is_void<T1>::value &&
+                              (T2::kMessageType == ::amsr::someipd_app_protocol::internal::MessageType::kSomeIp),
+                          void> {
+    // Fill SOME/IP header with data for the request
+    ::amsr::someip_protocol::internal::SomeIpMessageHeader const header{BuildSomeIpHeader()};
+
+    // Serialize SOME/IP header
+    std::size_t const someip_payload_size{e2e_transformer_.value().GetHeaderSize() + payload_size};
+
+    ::amsr::someip_protocol::internal::serialization::SerializeSomeIpMessageHeader(writer, header, someip_payload_size);
+    // Serialize E2E header
+    ::amsr::someip_binding::internal::E2EHeaderSerializer<E2eTransformerType> e2e_header_serializer{
+        writer, e2e_transformer_.value(), body_view,
+        static_cast<std::uint8_t>(::amsr::someip_protocol::internal::kHeaderLength)};
+
+    // Serialize the event sample
+    PayloadSerializer::Serialize(writer, data);
+
+    // Finally close the E2E header serializer which updates the attributes of the already allocated E2E header.
+    e2e_header_serializer.Close();
+  }
+```
+
+！！！序列化的剩余部分的代码，在`src-gen`中
+因而减少了C++ template的代码，调用了一个模板函数
+```cpp
+void SerializerStartApplicationEvent1::Serialize(serialization::Writer
+&writer, std::uint8_t const &data) {
+  // Serialize byte stream
+  serialization::SomeIpProtocolSerialize<
+      TpPackDataPrototype,
+      // Byte-order of primitive datatype (/AUTOSAR/StdTypes/uint8_t)
+      typename serialization::Tp<TpPackDataPrototype>::ByteOrder
+
+      >(writer, data);
+}
+```
+其实函数就传递两坨实参，第一个writer、第二个是待序列化数据
+实际传递2个模板实参：
+`TpPackDataPrototype`
+`ByteOrder`
+
+
+
+其中，第一个参数类型`TpPackDataPrototype`的定义为：
+(以下代码来自`src-gen`)
+```cpp
+  using TpPackDataPrototype = serialization::TpPack<
+      BigEndian,
+      serialization::SizeOfArrayLengthField<4>,
+      serialization::SizeOfVectorLengthField<4>,
+      serialization::SizeOfMapLengthField<4>,
+      serialization::SizeOfStringLengthField<4>,
+      serialization::SizeOfStructLengthField<0>,
+      serialization::SizeOfUnionLengthField<4>,
+      serialization::SizeOfUnionTypeSelectorField<4>,
+      serialization::StringBomActive,
+      serialization::StringNullTerminationActive,
+      serialization::DynamicLengthFieldSizeInactive>;
+
+};
+```
+
+以`SizeOfArrayLengthField`为例：
+```cpp
+/*!
+ * \brief     Defines the size of an array length field.
+ * \tparam    N   Size of array length field in bytes.
+ */
+template <std::size_t N>
+struct SizeOfArrayLengthField : std::integral_constant<std::size_t, N> {};
+```
+`std::integral_constant`这种类型是为了方便取得其中的模板类型参数
+
+PS: `sec_wrapper.h`中，有大量针对不同数据类型的函数重载
+```cpp
+template <typename TpPack, typename Head, typename... Confs, typename... Ts>
+void SomeIpProtocolSerialize(Writer& w, Ts const&... ts) noexcept {
+  detail::SomeIpProtocolSerialize<TpPack, Head, Confs...>(w, ts...);
+}
+```
+实际调用到下面：
+```cpp
+template <typename TpPack, typename Conf, typename Primitive>
+auto SomeIpProtocolSerialize(Writer& w, Primitive const& t) noexcept
+    -> std::enable_if_t<IsPrimitiveType<Primitive>::value, void> {
+  w.writePrimitive<std::decay_t<Primitive>, Conf>(t);
+}
+```
+使用`std::decay_t`，使得类型“衰减”：移除引用、数组和函数类型，将它们转换为对应的指针类型
+
+`writer.h`
+```cpp
+  template <typename T, typename Endian>
+  auto writePrimitive(T const& t) noexcept
+      -> std::enable_if_t<std::is_integral<T>::value && (!std::is_same<T, bool>::value), void> {
+    if (!hasSize(sizeof(T))) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to write primitive.",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    UintWrite<sizeof(T), Endian>::write(data(), static_cast<std::make_unsigned_t<T>>(t));
+    write_index_ += sizeof(T);
+  }
+```
+
+```cpp
+  std::uint8_t* data() const { return std::next(buffer_view_.data(), static_cast<std::ptrdiff_t>(write_index_)); }
+```
+
+
+
+
+
+
+
 
 
 
