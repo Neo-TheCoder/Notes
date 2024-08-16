@@ -6020,6 +6020,7 @@ auto SomeIpProtocolSerialize(Writer& w, Primitive const& t) noexcept
 使用`std::decay_t`，使得类型“衰减”：移除引用、数组和函数类型，将它们转换为对应的指针类型
 
 `writer.h`
+针对简单的整型
 ```cpp
   template <typename T, typename Endian>
   auto writePrimitive(T const& t) noexcept
@@ -6032,10 +6033,506 @@ auto SomeIpProtocolSerialize(Writer& w, Primitive const& t) noexcept
     write_index_ += sizeof(T);
   }
 ```
+`std::make_unsigned_t`确保将有符号整数类型 T 转换为其对应的无符号整数类型，以便在写入数据时避免出现符号位的影响。？？？
 
 ```cpp
   std::uint8_t* data() const { return std::next(buffer_view_.data(), static_cast<std::ptrdiff_t>(write_index_)); }
 ```
+
+
+这里看一下`writer`类
+```cpp
+/*!
+ * \brief SOME/IP protocol specific writer class.
+ *
+ * \details Support for SOME/IP protocol specific serialization of array, vector and string datatypes.
+ *          Furthermore specialization is required to allow ADL for SomeIpProtocolSerialize functions.
+ */
+class Writer {
+ public:
+  /*!
+   * \brief Constructor from a BufferViewNonConst.
+   * \param[in, out] buffer_view Buffer view.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   */
+  explicit Writer(BufferView const& buffer_view) : buffer_view_{buffer_view} {}
+
+  /*!
+   * \brief Writes a primitive to the buffer using the specified endian.
+   * \tparam T Primitive type.
+   * \tparam Endian Endianness to use when writing to the buffer.
+   * \param[in] t Value to serialize.
+   * \return void.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If there is not sufficient amount of memory in the buffer to write the primitive to it
+   *   - Log fatal message and abort.
+   * - Write primitive to the buffer.
+   * - Increase the write index with the size of the primitive.
+   * \endinternal
+   */
+  template <typename T, typename Endian>
+  auto writePrimitive(T const& t) noexcept
+      -> std::enable_if_t<std::is_integral<T>::value && (!std::is_same<T, bool>::value), void> {
+    if (!hasSize(sizeof(T))) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to write primitive.",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    UintWrite<sizeof(T), Endian>::write(data(), static_cast<std::make_unsigned_t<T>>(t));
+    write_index_ += sizeof(T);
+  }
+
+  /*!
+   * \brief Specialization for bool.
+   * \tparam T Type of primitive to be write. Must be bool.
+   * \tparam Endian Endianness.
+   * \param[in] t Boolean value, the data shall be deserialized into.
+   * \return void.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If there is not sufficient amount of memory in the buffer to write the bool to it
+   *   - Log fatal message and abort.
+   * - Write primitive to the buffer.
+   * - Increase the write index with the size of bool.
+   * \endinternal
+   */
+  template <typename T, typename Endian>
+  auto writePrimitive(bool t) noexcept -> std::enable_if_t<std::is_same<T, bool>::value, void> {
+    if (!hasSize(sizeof(bool))) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to write bool.",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    UintWrite<sizeof(bool), Endian>::write(data(), t);
+    write_index_ += sizeof(bool);
+  }
+
+  /*!
+   * \brief Specialization for float.
+   * \tparam T Type of primitive to be write. Must be of type float in this case.
+   * \tparam Endian  Endianness.
+   * \param[in] t Float value, the data shall be deserialized into.
+   * \return void.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If there is not sufficient amount of memory in the buffer to write the float to it
+   *   - Log fatal message and abort.
+   * - Write the value into the buffer.
+   * - Increase the write index with the size of the float.
+   * \endinternal
+   */
+  template <typename T, typename Endian>
+  auto writePrimitive(T const& t) noexcept -> std::enable_if_t<std::is_same<T, float>::value, void> {
+    static_assert(sizeof(float) == 4, "");
+    if (!hasSize(sizeof(float))) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to write float.",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    FloatWrite<Endian>::write(data(), t);
+    write_index_ += sizeof(T);
+  }
+
+  /*!
+   * \brief Specialization for double.
+   * \tparam T Type of primitive to be write. Must be of type double in this case.
+   * \tparam Endian Endianness.
+   * \param[in] t Double value, the data shall be deserialized into.
+   * \return void.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If there is not sufficient amount of memory in the buffer to write the double to it
+   *   - Log fatal message and abort.
+   * - Write the value into the buffer.
+   * - Increment the write index with the number of bytes written.
+   * \endinternal
+   */
+  template <typename T, typename Endian>
+  auto writePrimitive(T const& t) noexcept -> std::enable_if_t<std::is_same<T, double>::value, void> {
+    static_assert(sizeof(double) == 8, "");
+    if (!hasSize(sizeof(double))) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to write double.",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    DoubleWrite<Endian>::write(data(), t);
+    write_index_ += sizeof(T);
+  }
+
+  /*!
+   * \brief Skips over the next n bytes in the write buffer.
+   * \param[in] length The number of bytes to skip.
+   * \return False if the number of bytes to skip is larger than the number of bytes left, and true otherwise.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If there is not sufficient amount of memory in the buffer to add the n bytes
+   *   - Log fatal message and abort.
+   * - Add 'length' to the write index.
+   * \endinternal
+   */
+  void skip(SizeType length) {
+    if (!hasSize(length)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort(
+          "Violation: Insufficient buffer size to complete the serialization.", LOCATION,
+          static_cast<char const*>(__func__), __LINE__);
+    }
+    write_index_ += length;
+  }
+
+  /*!
+   * \brief Writes an unsigned integer of specified size.
+   * \tparam UintSize The number of bytes to write.
+   * \tparam Endian The endianness.
+   * \param[in] t The input data to write.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If there is not sufficient amount of memory in the buffer to write the data to it
+   *   - Log fatal message and abort.
+   * - Call writePrimitive for the configured size to write the data into the buffer.
+   * \endinternal
+   */
+  template <std::size_t UintSize, typename Endian>
+  void writeUintOfSize(typename UintWrite<UintSize, Endian>::type const& t) noexcept {
+    if (!hasSize(UintSize)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to write uint.",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    writePrimitive<typename UintWrite<UintSize, Endian>::type, Endian>(t);
+  }
+
+  /*!
+   * \brief Consumes the next n bytes from the write buffer and returns a new Writer object.
+   * \param[in] count The number of bytes to consume.
+   * \return The writer object handling the sub-stream.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - If there is not sufficient amount of memory in the buffer to consume n bytes
+   *   - Log fatal message and abort.
+   * - Create a 'count' bytes long subspan of the buffer indexed from 'write_index_'.
+   * - Create a Writer with the subspan.
+   * - Add 'count' to the write index.
+   * - Return the created Writer.
+   * \endinternal
+   */
+  Writer consumeSubStream(SizeType count) {
+    if (!hasSize(count)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort(
+          "Violation: Insufficient buffer size to complete the serialization.", LOCATION,
+          static_cast<char const*>(__func__), __LINE__);
+    }
+    Writer const ret{buffer_view_.subspan(write_index_, count)};
+    write_index_ += count;
+    return ret;
+  }
+
+  /*!
+   * \brief Writes the contents of a span holding bytes.
+   * \tparam T Element type of the span. Underlying type must be std::uint8.
+   * \param[in] span The span to write.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   */
+  template <typename T>
+  void writeSpan(ara::core::Span<T> const& span) noexcept {
+    static_assert(std::is_same<std::uint8_t, std::remove_cv_t<T>>::value, "The underlying type must be std::uint8_t");
+    writeRange(span.cbegin(), span.cend());
+  }
+
+  /*!
+   * \brief Writes the data of an iterator range pointing to bytes.
+   * \tparam InputIt The iterator type. Underlying type must be std::uint8.
+   * \param[in] begin The start of the range to write.
+   * \param[in] end The end of the range to write.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Calculate number of bytes to be serialized.
+   * - If there is not sufficient amount of memory in the buffer
+   *   - Log fatal message and abort.
+   * - Copy the data into the buffer.
+   * - Increment the write index with the number of bytes written.
+   * \endinternal
+   */
+  template <typename InputIt>
+  void writeRange(InputIt begin, InputIt end) noexcept {
+    using DataType = typename std::iterator_traits<InputIt>::value_type;
+    static_assert(std::is_same<DataType, std::uint8_t>::value, "Iterator underlying type must be std::uint8_t");
+
+    std::size_t const data_length{static_cast<std::size_t>(std::distance(begin, end))};
+    std::size_t const byte_count{data_length * sizeof(DataType)};
+
+    if (!hasSize(byte_count)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort(
+          "Violation: Insufficient buffer size to serialize iterator range.", LOCATION,
+          static_cast<char const*>(__func__), __LINE__);
+    }
+
+    std::uint8_t* const buffer_data{data()};
+    static_cast<void>(std::copy(begin, end, buffer_data));
+    write_index_ += data_length;
+  }
+
+  /*!
+   * \brief Writes an array of an arithmetic type with same endianness.
+   * \tparam N The size of the array.
+   * \param[in] arr The array to write.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Calculate number of bytes to be serialized.
+   * - If there is not sufficient amount of memory in the buffer
+   *   - Log fatal message and abort.
+   * - Copy the array into the buffer.
+   * - Increment the write index with the number of bytes written.
+   * \endinternal
+   */
+  template <typename T, std::size_t N, typename = typename std::enable_if_t<std::is_arithmetic<T>::value>>
+  void writeArray(std::array<T, N> const& arr) noexcept {
+    static_assert(!std::is_same<T, bool>::value, "Invalid write operation for bool array.");
+    std::size_t const bytes_count{N * sizeof(T)};
+    if (!hasSize(bytes_count)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort(
+          "Violation: Insufficient buffer size to serialize array<T, N>.", LOCATION, static_cast<char const*>(__func__),
+          __LINE__);
+    }
+    std::uint8_t* const buffer{data()};
+    std::memcpy(buffer, arr.data(), bytes_count);
+
+    write_index_ += bytes_count;
+  }
+
+  /*!
+   * \brief Writes an array of booleans.
+   * \tparam N The size of the array.
+   * \param[in] arr The array to write.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Calculate number of bytes to be serialized.
+   * - If there is not sufficient amount of memory in the buffer
+   *   - Log fatal message and abort.
+   * - Loop over array
+   *   - write the current bool into the buffer.
+   *   - Increment the writer index by one.
+   */
+  template <std::size_t N>
+  void writeArray(std::array<bool, N> const& arr) noexcept {
+    if (!hasSize(N)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort(
+          "Violation: Insufficient buffer size to serialize array<bool, N>.", LOCATION,
+          static_cast<char const*>(__func__), __LINE__);
+    }
+    typename std::array<bool, N>::const_iterator const start{arr.cbegin()};
+    typename std::array<bool, N>::const_iterator const end{arr.cend()};
+    static_cast<void>(std::for_each(start, end, [this](bool const& val) {
+      UintWrite<1, BigEndian>::write(data(), static_cast<uint8_t>(val));
+      write_index_ += 1U;
+    }));
+  }
+
+  /*!
+   * \brief Writes a vector of an arithmetic type with same endianness.
+   * \tparam T The element type of the vector.
+   * \param[in] vec The input vector.
+   * \param[in] no_of_elements The number of elements from the input vector that should be written.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Calculate number of bytes to be serialized.
+   * - If there is not sufficient amount of memory in the buffer
+   *   - Log fatal message and abort.
+   * - Copy the vector into the buffer.
+   * - Increment the write index with the number of bytes written.
+   * \endinternal
+   */
+  template <typename T, typename = typename std::enable_if_t<std::is_arithmetic<T>::value>>
+  void writeVector(std::vector<T> const& vec, size_t const no_of_elements) noexcept {
+    static_assert(!std::is_same<T, bool>::value, "Invalid write operation for bool vector.");
+    std::size_t const bytes_count{no_of_elements * sizeof(T)};
+    if (!hasSize(bytes_count)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to serialize vector<T>",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    std::uint8_t* const buffer{data()};
+    std::memcpy(buffer, vec.data(), no_of_elements);
+    write_index_ += no_of_elements;
+  }
+
+  /*!
+   * \brief Write vector<bool> to BufferViewNonConst.
+   * \param[in] vec The input vector.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Calculate number of bytes to be serialized.
+   * - If there is not sufficient amount of memory in the buffer
+   *   - Log fatal message and abort.
+   * - Loop over vector
+   *   - write the current bool into the buffer.
+   *   - Increment the writer index.
+   */
+  // VECTOR NL AutosarC++17_10-A18.1.2: MD_SOMEIPPROTOCOL_AutosarC++17_10-A18.1.2_use_of_vector_bool
+  void writeVector(std::vector<bool> const& vec) {
+    size_t const bufferLength{vec.size()};
+    if (!hasSize(bufferLength)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort(
+          "Violation: Insufficient buffer size to serialize vector<bool>.", LOCATION,
+          static_cast<char const*>(__func__), __LINE__);
+    }
+    static_cast<void>(std::for_each(vec.cbegin(), vec.cend(), [this](bool const& val) {
+      constexpr std::uint8_t one{0x01U};
+      constexpr std::uint8_t zero{0x00U};
+      UintWrite<1, BigEndian>::write(data(), val ? one : zero);
+      write_index_ += 1U;
+    }));
+  }
+
+  /*!
+   * \brief Write a string.
+   * \param[in] str The input string.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Calculate number of bytes to be serialized.
+   * - If there is not sufficient amount of memory in the buffer
+   *   - Log fatal message and abort.
+   * - Copy the vector into the buffer.
+   * - Increment the write index with the number of bytes written.
+   * \endinternal
+   */
+  void writeString(std::string const& str) {
+    size_t const stringLength{str.size()};
+    if (!hasSize(stringLength)) {
+      logging::SomeipProtocolLogBuilder::LogFatalAndAbort("Violation: Insufficient buffer size to serialize string.",
+                                                          LOCATION, static_cast<char const*>(__func__), __LINE__);
+    }
+    std::uint8_t* const buffer{data()};
+    std::memcpy(buffer, str.c_str(), stringLength);
+
+    write_index_ += stringLength;
+  }
+
+  /*!
+   * \brief Get the remaining size of the buffer view.
+   * \return Remaining size.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   */
+  SizeType Size() const { return (buffer_view_.size() - write_index_); }
+
+ private:
+  /*!
+   * \brief Get the current data pointer to write.
+   * \return Data pointer to write.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   */
+  std::uint8_t* data() const { return std::next(buffer_view_.data(), static_cast<std::ptrdiff_t>(write_index_)); }
+
+  /*!
+   * \brief Checks if the buffer is large enough for a write of size n.
+   * \param[in] size Bytes to be check against the remaining bufferView size.
+   * \return True if the amount could be written, false otherwise.
+   * \pre -
+   * \context ANY
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   */
+  bool hasSize(SizeType size) const { return size <= Size(); }
+
+  /*!
+   * \brief The managed BufferView
+   */
+  BufferView buffer_view_;
+  /*!
+   * \brief Write Index holding the current index to write
+   */
+  SizeType write_index_{0U};
+};
+```
+
+注意`writer`类持有的成员变量以及对应函数：
+```cpp
+  // 根据偏移，取得新的写入位置
+  std::uint8_t* data() const { return std::next(buffer_view_.data(), static_cast<std::ptrdiff_t>(write_index_)); }
+
+  BufferView buffer_view_;
+
+  SizeType write_index_{0U};
+```
+PS: `std::next`函数用于`返回一个 指向当前迭代器位置之后 第n个位置的 迭代器`。
+
+
 
 
 
