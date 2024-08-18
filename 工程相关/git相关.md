@@ -68,6 +68,21 @@ git reset --hard HEAD~1
 # `git branch -vv`
 
 
+# `git rebase`
+rebase，变基，可以直接理解为`改变基底`。
+feature分支是基于master分支的B拉出来的分支，feature的基底是B。而master在B之后有新的提交，就相当于此时要用master上新的提交来作为feature分支的新基底。
+实际操作为把B之后feature的提交先暂存下来，然后删掉原来这些提交，再找到master的最新提交位置，把存下来的提交再接上去（接上去是逐个和新基底处理冲突的过程），如此feature分支的基底就相当于变成了M而不是原来的B了。
+（`注意，如果master上在B以后没有新提交，那么就还是用原来的B作为基，rebase操作相当于无效，此时和git merge就基本没区别了，差异只在于git merge会多一条记录Merge操作的提交记录`）
+
+上面的例子可抽象为如下实际工作场景：
+远程库上有一个master分支目前开发到B了，
+张三从B拉了代码到本地的feature分支进行开发，目前提交了两次，开发到D了；
+李四也从B拉到本地的master分支，他提交到了M，然后合到远程库的master上了。
+此时张三想从远程库master拉下最新代码，于是他在feature分支上执行了`git pull origin master:feature --rebase`（注意要加–rebase参数），即把远程库master分支给rebase下来，由于李四更早开发完，此时远程master上是李四的最新内容，rebase后再看张三的历史提交记录，就相当于是张三是基于李四的最新提交M进行的开发了。
+（但实际上张三更早拉代码下来，李四拉的晚但提交早）
+
+
+
 
 
 
