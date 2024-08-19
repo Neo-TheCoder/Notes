@@ -145,16 +145,20 @@ network endpoint   **IpAddress（实际是string类型）**  、  **TCP Port**  
 
 
 
-# 调用顺序 SOME/IP daemon
+# 调用顺序 `SOME/IP daemon`
 **PS：Run()函数做了什么？**
 ![image.png](https://atlas.pingcode.com/files/public/65460c103a27284c5ca127f4/origin-url)
-**解析并验证配置（若无效，则直接终止）、启动signal handling（为了恰当地终止）、启动reactor线程（用于通信和时间处理）、创建用于APP在运行时来进行的BasicIPC通信连接、启动服务发现（多播通信）**
+* 解析并验证配置（若无效，则直接终止）
+* 启动signal handling（为了恰当地终止）
+* 启动reactor线程（用于通信和时间处理）
+* 创建用于APP在运行时来进行的BasicIPC通信连接
+* 启动服务发现（多播通信）
 
 ***PS：个别应用程序使用Basic IPC 通信通道与 SOME/IP 守护进程进行交互。通过这个Basic IPC 通信通道，应用程序可以提供、查找服务接口。***
 ***SOME/IP 数据包的发送和接收也通过该通信通道完成。***
 
 
-## **Initialize**  ()
+## `Initialize()`
 ### SomeIpDaemonClass的`Initialize()`
 ```cpp
  /*!
@@ -1229,16 +1233,18 @@ auto Send(NativeHandle native_handle, ara::core::Span<ConstIOBuffer> buffer) noe
 
 
 
-# 调用顺序    parameter server（skeleton）
+# 调用顺序    parameter server（`skeleton`）
 skeleton侧会调用
-**SomeIpDaemonClient**  类型的成员的方法：  **Connect**  ()、  **Start**  () 以及
-**ClientManager**  类型的成员的方法  **StartServiceDiscovery**  ()
+`SomeIpDaemonClient`类型的成员的方法：
+* `Connect()`、  
+`Start ()`
+`ClientManager`类型的成员的方法`StartServiceDiscovery()`
 
-## InitializeCommunication(config)
+## `InitializeCommunication(config)`
 
 ![image.png](https://atlas.pingcode.com/files/public/6530ce36b3a56a8dd49b042d/origin-url)
 
-**InitializeInternal()内部实现：**
+`InitializeInternal()`内部实现：
 
 判断Runtime实例是否存活
 
@@ -1246,11 +1252,11 @@ skeleton侧会调用
 
 入参是“reactor要处理的最大callback数量”。
 
-**InitializeReactorThread**  (GetReactorThreadConfig());
+`InitializeReactorThread`  (GetReactorThreadConfig());
 
-**InitializeBindings**  ();
+`InitializeBindings();`
 
-调用::amsr::someip_binding_transformation_layer::internal::  **InitializeComponent**  ()
+调用`::amsr::someip_binding_transformation_layer::internal::InitializeComponent()`
 
 ```cpp
 ara::core::Result<void> InitializeComponent() noexcept {
@@ -1266,7 +1272,7 @@ ara::core::Result<void> InitializeComponent() noexcept {
 }
 ```
 
-重点是其中的initializer的  **Initialize**  ()调用
+重点是其中的initializer的`Initialize()调用`
 
 ```cpp
 ::ara::core::Result<void> SomeipBindingInitializer::Initialize() noexcept {
@@ -1303,11 +1309,12 @@ ara::core::Result<void> InitializeComponent() noexcept {
 
 
 
-注意，无论是接收端还是发送端，都是用同一份代码，可能是便于模板生成。  **InitializeRequiredServiceInstances**  ()的实现是根据模型配置的，在server端根本不会有实现。  **InitializeServiceInterfaceProxyFactories**  ();同理。
+**注意，无论是接收端还是发送端，都是用同一份代码，可能是便于模板生成。**
+`InitializeRequiredServiceInstances()`的实现是根据模型配置的，在server端根本不会有实现。  **InitializeServiceInterfaceProxyFactories**  ();同理。
 
-**InitializeServiceInterfaceSkeletonFactories**  ()内部实现：
+`InitializeServiceInterfaceSkeletonFactories()`内部实现：
 
-**AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesparameter_service_interface**  (aracom_someip_binding_->  **GetServerManager**  ());
+`AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesparameter_service_interface(aracom_someip_binding_->  **GetServerManager**  ());`
 
 ```cpp
 void AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesparameter_service_interface(
@@ -1317,15 +1324,14 @@ void AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesparameter_ser
 }
 ```
 
-操作：往server_manager中添加当前service interface对应的Skeleton factory。
+操作：往`server_manager`中添加当前`service interface`对应的`Skeleton factory`。
 
-**ServerManager**  是  **AraComSomeIpBindingServerManager**  <  **SomeIpDaemonClient**  >
+`ServerManager`是`AraComSomeIpBindingServerManager<SomeIpDaemonClient>`
 
-（  **ServerManager**  持有SkeletonFactoryContainer对象，用于存储someip skeleton factory实例。）
+（ServerManager持有SkeletonFactoryContainer对象，用于存储someip skeleton factory实例。）
 
 
-
-**InitializeSkeletonSomeIpEventBackends**  ()的内部实现：
+`InitializeSkeletonSomeIpEventBackends()`的内部实现：
 
 ```cpp
  void SomeipBindingInitializer::InitializeSkeletonSomeIpEventBackends() noexcept {
@@ -1466,8 +1472,7 @@ void Runtime::InitializeThreadPools() noexcept {
 
 
 
-### **StartBindings**  ();的内部实现：
-
+### `StartBindings()`的内部实现：
 连接到SOME/IP daemon，为所有需要的service instance开始Service Discovery。
 
 ```cpp
@@ -1488,7 +1493,7 @@ void Runtime::InitializeThreadPools() noexcept {
 
 调用  **SomeIpDaemonClient**  对象的几个方法：
 
-#### **Connect()**
+#### `Connect()`
 
 根据给定配置的地址，连接SOME/IP daemon。
 
@@ -1702,7 +1707,7 @@ auto Connection::ConnectAsync(const UnicastAddress remote_address, ConnectComple
 }
 ```
 
-**ConnectSync**  (  **UnicastAddress**  )：
+`ConnectSync`  (  **UnicastAddress**  )：
 
 创建  **unique_lock**  <std::  **mutex**  >对象
 
@@ -1771,7 +1776,7 @@ auto Connect(UnicastAddressNative const& server_address, UnicastAddressNative co
 
 
 
-#### **Start()**
+#### `Start()`
 
 开始消息传输
 
@@ -1867,7 +1872,7 @@ auto Connection::ReceiveAsync(MessageAvailableCallback &&msg_available_callback,
 
 
 
-#### StartServiceDiscovery()
+#### `StartServiceDiscovery()`
 
 ```cpp
 /*!
@@ -2057,7 +2062,7 @@ auto Connection::ReceiveAsync(MessageAvailableCallback &&msg_available_callback,
 
 
 
-#### OfferService()
+#### `OfferService()`
 
 如果没有提供服务，
 
@@ -2438,9 +2443,9 @@ auto Connection::ReceiveAsync(MessageAvailableCallback &&msg_available_callback,
 
 
 
-# 调用顺序    sensor_data_service（proxy）
+# 调用顺序    sensor_data_service（`proxy`）
 
-## InitializeCommunication(config)
+## `InitializeCommunication(config)`
 
 和skeleton侧类似，会调用到
 
@@ -2733,7 +2738,7 @@ void SensorDataService::FindService1Handler(
   
 
 
-## FindService
+## `FindService`
 
 在Proxy对象调用  **StartClient**  ()方法之后，
 
@@ -3178,7 +3183,6 @@ ara::core::Result<void> SensorDataService::StartClient() {
 
 
 
-
 # Proxy Subscribe
 ```cpp
 // 用户层调用：ProxyEvent对象的Subscribe()方法
@@ -3481,8 +3485,6 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 
 
 # Proxy端初始化
-
-
 
 
 
@@ -6531,27 +6533,6 @@ class Writer {
   SizeType write_index_{0U};
 ```
 PS: `std::next`函数用于`返回一个 指向当前迭代器位置之后 第n个位置的 迭代器`。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
