@@ -2574,25 +2574,12 @@ void Runtime::InitializeThreadPools() noexcept {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 和skeleton相同，会调用到  **Runtime**  的  **StartBindings**  ()函数
 ![image.png](https://atlas.pingcode.com/files/public/65363c49b3a56a8dd49b4455/origin-url)
 
-socal这层提供函数  **StartFindService**  ()，用于接收函数对象
+socal这层提供函数`StartFindService()`，用于接收函数对象
 
-```
+```cpp
   // VECTOR NC VectorC++-V6.6.1: MD_SOCAL_VectorC++-V6-6-1_AbortWithSingleReturnStatement
   /*!
    * \brief Start an asynchronous FindService notification about service updates.
@@ -2729,12 +2716,6 @@ void SensorDataService::FindService1Handler(
 
 
 
-
-
-
-
-
-
   
 
 
@@ -2756,7 +2737,7 @@ void SensorDataService::FindService1Handler(
 1. 然后开始调用  **parameter_service_interfaceProxy**  类对象的  **ProxyEvent**  成员的  **Subscribe**
 
 
-```
+```cpp
 ara::core::Result<void> SensorDataService::StartClient() {
   ara::core::Result<void> result{};
   if (!client_started_) {

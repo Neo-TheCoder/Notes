@@ -1225,10 +1225,10 @@ auto wc = find_if(words.begin(), words.end(),
     { return a.size() >= sz; } );
 ```
 
-
+```cpp
 [capture list](parameter list) -> return type {function body}
-
-捕获列表和函数体必须包含
+```
+`捕获列表`和`函数体`必须包含
 
 #### 向lambda传递参数
 由于lambda不能有默认参数
@@ -1259,7 +1259,7 @@ for_each(wc, words.end(),
 #### 值捕获
 前提是变量可以拷贝
 
-被捕获的变量的值是在lambda创建时拷贝，而非调用时
+被捕获的变量的值是`在lambda创建时拷贝`，而非调用时
 `也就是说在创建lambda表达式时，只要捕获了变量，就记录了当时的值`
 
 
@@ -1278,10 +1278,41 @@ auto f2 = [&v1]{return v1;};
 `[&, c]`表示显式捕获c，其他的是引用
 第一个位置指定了默认捕获方式，必须是引用或值
 
+#### 可变lambda
+`默认情况下，对于一个值被拷贝的变量，lambda 不会改变其值。`
+如果我们希望能改变个被捕获的变量的值，
+就必须在参数列表首加上关键字`mutable`。
+因此，可变lambda能省略参数列表:
+```cpp
+void fcn3() {
+    sizet v1 = 42;   // 局部变量
+    // f 可以改变它所捕获的变量的值
+    auto f = [vl] () mutable { return ++vl; };
+    v1 = 0;
+    auto j = f();   // j为43
+}
+```
+
+一个引用捕获的变量是否(如往常一样)可以修改,依赖于此引用指向的是一个 const类型还是一个非const类型:
+```cpp
+void fcn4() {
+    size_t vl= 42;// 局部变量
+    // v1是一个非const 变量的引用
+    // 可以通过f2中的引用来改变它
+    auto f2 = [&vl]{ return ++vl; };
+    v1 = 0;
+    auto j = f2();  // j为1
+}
+
+#### 指定lambda返回类型
 当我们需要为一个lambda定义返回类型时，必须使用`尾置返回类型`(如果返回的情况不明确，比如是if-else，编译器就没法自动推导返回值类型了)
 ```cpp
 [](int i) -> int
 ```
+
+
+
+
 
 ### 10.3.4 参数绑定
 lambda的应用场景是只在一两个地方使用的简单操作
