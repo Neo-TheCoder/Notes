@@ -154,6 +154,36 @@ This explicitly allows, to start the same executable N times, each time with a d
   ]
 ```
 
+`InstanceSpecifier` -> `InstanceIdentifier`
+```cpp
+namespace ara {
+namespace com {
+namespace runtime {
+      ara::com::InstanceIdentifierContainer ara::com::runtime::ResolveInstanceIDs(ara::core::InstanceSpecifier modelName);
+    }
+  }
+}
+```
+
+为什么这个 API 会返回一个 `InstanceIdentifierContainer`（它代表了ara::com::InstanceIdentifierContainer 的集合）？
+这需要解释一下：
+AUTOSAR 支持集成商在软件组件开发人员可见的`一个抽象标识符`后面配置`多个技术绑定`。
+此功能称为`多重绑定`，在本文档的不同部分均有提及（更详细的解释请参见第 9.3 节）。
+**在`skeleton`/`server`使用`多重绑定`是一种常见的用例，因为它允许不同的客户端在与服务器联系时使用自己喜欢的绑定。**
+与此相反，在`proxy/client`使用多重绑定则比较奇特。
+例如，它可以用来支持一些`故障转移方法（如果绑定 A 不工作，则使用绑定 B）`。
+
+So the possible returns for a call of `ResolveInstanceIDs()` are:
+* empty list:
+  The integrator failed to provide a mapping for the abstract identifier. This most likely is a configuration error.
+* list with one element:
+  The common case. Mapping to one concrete instance id of one concrete technical binding.
+* list with more than one element: 
+  Mapping to multiple technical instances with possibly multiple technical bindings.
+
+
+从技术上讲，`ResolveInstanceIDs()`的中间件实现是从进程中捆绑的`service instance manifest`中查找`ara::core::InstanceSpecifier`。
+因此，在捆绑的`service instance manifest`中，ara::core::InstanceSpecifier 必须是明确的。
 
 
 
@@ -169,6 +199,73 @@ This explicitly allows, to start the same executable N times, each time with a d
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 9.3 Multi-Binding implications
+As shortly discussed in subsection 6.2.1 Multi-Binding describes the solution to support setups, where the technical transport/connection between different instances of a certain proxy class/skeleton class are different.
+service的实例1可以使用ipc，实例2可以使用someip
+There might be various technical reasons for that:
+* `proxy class` uses different transport/IPC to communicate with different skeleton instances.
+  Reason: `Different service instances` support `different transport mechanisms` because of `deployment decisions`.
+* symmetrically it may also be the case, that different proxy instances for the same skeleton instance uses different transport/IPC to communicate with this instance: The skeleton instance supports multiple transport mechanisms to get contacted.
+- 代理类使用不同的传输/IPC 与不同的骨架实例通信。原因是什么？
+  由于部署决定，不同的服务实例支持不同的传输机制。
+- 对称情况下，同一skeleton实例的不同proxy实例也可能使用不同的传输/IPC与该实例通信：skeleton实例支持多种传输机制。
+
+### 9.3.1 简单的多重绑定用例
+下图描述了一个明显和/或相当简单的案例。
+在这个示例中，服务消费者（代理）和服务提供者（骨架）之间的通信只涉及本地节点（在一个 AP 产品/ECU 内），服务消费者侧有两个相同代理类的实例。
+从图中可以看到，`服务 消费者 应用程序`首先触发了 “`FindService`”（查找服务），然后返回了两个句柄，分别代表 所搜索服务类型 的 两个 不同服务实例。
+服务消费者应用程序 为 每个句柄 实例化了 一个代理实例。
+在本例中，服务实例 1 与服务消费者（代理实例 1）位于同一自适应应用程序（同一进程/地址空间）中、
+而服务实例 2 位于不同的自适应应用程序中（不同的进程/地址空间）。
+
+
+```cpp
+FindService(ServiceType, AnyInstance)
+returns Handle1, Handle2
+```
+
+在这幅图中，象征代理和骨架之间传输层的线条颜色不同：
+  实例 1 的代理类实例的传输层（绑定实现）为红色，而实例 2 的传输层为蓝色。
+  之所以颜色不同，是因为在代理实现的层面上，所使用的技术已经不同。至少，如果你希望 AP 产品供应商（作为 IPC 绑定实现者）努力提供性能良好的产品的话！
+在这种情况下，代理实例 1 和服务实例 1（红色）之间的通信应优化为普通方法调用，因为代理实例和骨架实例 1 都包含在一个进程中。
+！！！service的provide和require甚至不一定使用IPC手段
+代理实例 2 和服务实例 2（蓝色）之间的通信是真正的 IPC。
+因此，这里的操作成本要高得多，很可能涉及各种`系统调用`/`内核上下文切换`，以便将 调用/数据 从 服务消费者应用程序的 进程 传输到 服务应用程序（通常使用`管道、套接字或共享 mem`等基本技术，并在上面添加一些信号进行控制）。
+
+因此，从 服务消费方应用程序 开发人员的角度来看，这是完全透明的：
+  从供应商的`ProxyClass::FindService`实现中，他获得了两个服务实例的不透明句柄，并由此创建了同一个代理类的两个实例。
+  但 “神奇”的是，这两个代理的行为方式完全不同，它们分别与各自的服务实例进行联系。
+  因此，这个句柄中必须`包含一些信息`，代理类实例才能从中知道要选择哪种`技术传输方式`。
+  虽然这个用例乍一看很简单，但仔细一看却并非如此...... 
+  问题是：谁会在句柄中写入这样的信息：由 句柄 创建的 代理实例 应使用直接的方法/函数调用，而不是更复杂的 IPC 机制，反之亦然？
+当服务实例 1 在注册表/服务发现处通过`SkeletonClass::OfferService`进行注册时，这一点无法确定！
+因为这取决于以后使用它的服务消费者。
+因此，AP 供应商的`SkeletonClass::OfferService`实现很可能从参数（AP 供应商生成的skeleton）中获取所需的信息，并通过 AP 供应商特定的 IPC 通知 AP 供应商的注册表/服务发现实现。
+前一句中的许多 “AP 厂商 ”都是有意为之。
+这只是表明，这里的所有机制都不是标准化的，因此可以由接入点供应商有意设计和优化。
+
+不过，基本步骤仍将保留。
+因此，在使用`SkeletonClass::OfferService`的过程中，服务实例方面 通常会 向`注册表/Discovery`通报的是`技术寻址信息`，即如何通过 AP 产品的本地 IPC 实现到达实例。
+
+
+通常情况下，一个 AP 产品/AP 节点只使用一种 IPC 机制！
+如果产品供应商已经在自适应应用程序之间实现了高度优化/高效的本地 IPC，那么这种 IPC 将被普遍使用。
+因此--在我们的例子中，假设底层 IPC 机制是`unix domain socket`--skeleton instance 1 将 获取/创建 其套接字端点 所连接的文件描述符，并在`SkeletonClass::OfferService`过程中将此描述符传递给`注册表/服务发现`。
+`skeleton instance 2`也是如此，只是描述符不同而已。
+当 服务消费者应用部分 稍后执行`ProxyClass::FindService`时，`注册表`会将这两个服务实例的`寻址信息`发送给服务消费者，在服务消费者中，这两个服务实例作为两个不透明句柄可见。
 
 
 
