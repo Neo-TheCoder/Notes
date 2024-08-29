@@ -2633,7 +2633,7 @@ socal这层提供函数`StartFindService()`，用于接收函数对象
 
 重点是其中的  **ScheduleInitialSnapshotTask**  (handle, service_instance)
 
-```
+```cpp
   /*!
    * \brief Register a new observer and schedule execution of a new InitialSnapShot task.
    * \details The InitialSnapShot will be executed via a dedicated ThreadPool thread.
@@ -2784,16 +2784,15 @@ ara::core::Result<void> SensorDataService::StartClient() {
 ```
 
 
-
-而在  **vComDef0-0**  线程中，取出任务队列的任务开始执行，会调用  **（Proxy**  对象中嵌套的）  **InitialSnapshotTask对象（这个类型会持有一个HandleAndHandler**  对象  **）的operator()**  方法：
+而在  **vComDef0-0**  线程中，取出任务队列的任务开始执行，会调用（`Proxy`对象中嵌套的）`InitialSnapshotTask对象`（这个类型会持有一个HandleAndHandler**  对象  **）的operator()**  方法：
 
 初始化find service request，并调用注册的find service handler（为所有活跃的observer）
 
-**PS**  ：  **观察者**  （行为设计模式）模式：定义一种订阅机制，在对象发生时通知多个观察该对象的其他对象
+**PS**  ：  `观察者（行为设计模式）模式`：定义一种订阅机制，在对象发生时通知多个观察该对象的其他对象
 
-其中调用了handle_的  **ExecuteFindServiceAndHandler()方法**
+其中调用了handle_的`ExecuteFindServiceAndHandler()`方法
 
-```
+```cpp
  /*!
      * \brief Initiates a find service request and calls the registered find service handler for all active observers.
      * \pre           -
@@ -2817,10 +2816,9 @@ ara::core::Result<void> SensorDataService::StartClient() {
 ```
 
 
-
 在  **ExecuteFindServiceAndHandler**  函数中，传入service handle的vector
 
-```
+```cpp
   /*!
    * \brief     Executes a FindService request and the associated handler (if it is active).
    * \tparam F  Type of find_service_function lambda function.
@@ -2838,7 +2836,8 @@ ara::core::Result<void> SensorDataService::StartClient() {
   }
 ```
 
-这时真正调用用户层通过StartFindService传入的handle（本例中即：  **FindService1Handler**  ，操作是：判断  **FindService**  是否成功，成功则根据service_handle创建  **parameter_service_interfaceProxy**  对象），并通过条件变量唤醒其他阻塞的线程（实际上就是主线程的StartClient()中阻塞等待了一秒钟）
+这时真正调用用户层通过`StartFindService`传入的`handle`（本例中即：  `FindService1Handler` ，操作是：
+判断  **FindService**  是否成功，成功则根据service_handle创建  **parameter_service_interfaceProxy**  对象），并通过条件变量唤醒其他阻塞的线程（实际上就是主线程的StartClient()中阻塞等待了一秒钟）
 
 
 
@@ -2850,7 +2849,7 @@ ara::core::Result<void> SensorDataService::StartClient() {
 
 **find_service_function**  的调用，实际上是调用  **FindService**
 
-```
+```cpp
 /*!
    * \brief Call binding-specific FindService operation and convert returned InstanceHandles back into HandleTypes.
    * \param[in] service_instances Container of searched service instances (InstanceSpecifier lookup table entries).
@@ -3464,10 +3463,8 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 所以，可以认为：当proxy端连续发来多个相同类型的method request时，skeleton端每收到一个，就创建一个相应的任务
 
 
-
 # Proxy端初始化
-
-
+是在find service成功时，才构造，入参是token
 
 
 # Proxy端接收数据
@@ -6514,6 +6511,13 @@ class Writer {
   SizeType write_index_{0U};
 ```
 PS: `std::next`函数用于`返回一个 指向当前迭代器位置之后 第n个位置的 迭代器`。
+
+
+
+
+
+
+
 
 
 
