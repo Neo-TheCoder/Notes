@@ -4248,7 +4248,7 @@ PS: `max_samples`是`Subscirbe()`的入参
   }
 ```
 
-### `ProxyEventXf`的`ReadSamples`
+### `ProxyEventXf`的`ReadSamples`(`ProxyEventXf`在src-gen实例化)
 ```cpp
   /*!
    * \brief   Reads the serialized samples from underlying receive buffers and deserializes them.
@@ -4342,7 +4342,7 @@ PS: `max_samples`是`Subscirbe()`的入参
   }
 ```
 
-#### ``的`ReadSamples`
+#### `SampleReader`的`ReadSamples`
 ```cpp
   /*!
    * \brief Reads serialized samples from the given sample cache container, deserializes them and calls the provided
