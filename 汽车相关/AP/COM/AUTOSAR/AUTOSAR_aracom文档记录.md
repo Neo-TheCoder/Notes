@@ -464,9 +464,362 @@ using FindServiceHandler = std::function<void(ServiceHandleContainer<T>, FindSer
 `服务提供商和消费者的生命周期在服务提供和服务（再）订阅方面受到监控。`
 
 为此，我们建立了`服务发现基础架构`，从`service offerings`和`service (re)subscriptions`的角度监控 服务提供商 和 消费者 的生命周期！
-如果服务消费者应用程序从 “查找服务 ”变体返回的句柄实例化了一个服务代理实例，可能发生的顺序如下图所示。
+如果服务消费者应用程序从 “查找服务 ”变体返回的句柄实例化了一个服务代理实例，可能发生的顺序如下所示。
+Explanation of figure 6.1:
+* T0: The service consumer may successfully call a service method of that proxy (and GetSubscriptionState() on subscribed events will return kSubscribed according to 6.2.3.2).
+* T1: The service instance goes down, correctly `notified via service discovery`.
+* T2: A call of a service method on that proxy will lead to a checked exception
+(ara::com::ServiceNotAvailableException), since the targeted service instance of the call does not exist anymore. Correspondingly `GetSubscriptionState()` on any subscribed event will return `kSubscriptionPending` (see also 6.2.3.2) at this point even if the event has been successfully subscribed (kSubscribed) before.
+* T3: The service instance comes up again, `notified via service discovery infrastructure.` The Communication Management at the proxy side will be notified and will `silently update the proxy object instance with a possibly changed transport layer addressing information.`(**比如说，port number发生变化**) This is illustrated in the figure with transport layer part of the proxy, which changed the color from blue to rose. The Binding implementer hint part below discusses this topic more detailed.
+* T4: Consequently service method calls on that proxy instance will succeed again and GetSubscriptionState() on events which the service consumer had subscribed before, will return kSubscribed again.
+
+代理实例的这种便利行为（因为有相应的服务发现机制对service的状态进行通知）使服务消费者的实现者不必：
+- 通过`GetSubscriptionState()`对事件进行轮询，这表明服务实例宕机
+- 重新触发一次性 FindService 以获取新句柄：
+或者是：
+- 注册一个 FindServiceHandler，在服务实例宕机或有新句柄时调用它。
+然后从新句柄重新创建代理实例（并重新执行所需的事件订阅调用）。
+
+此外，如果您已注册了`FindServiceHandler`，那么 绑定实现 必须确保在调用已注册的 FindServiceHandler 之前对现有代理实例进行 `“自动更新”`（使之可用）！
+这样做的原因是：在调用中给出代理实例的句柄时，应用程序开发人员就可以在 FindServiceHandler 中与现有的代理实例成功交互，从而表明服务实例已重新启动。
+```cpp
+/**
+* Reference to radar instance, we work with,
+* initialized during startup
+*/
+RadarServiceProxy *myRadarProxy;
+void radarServiceAvailabilityHandler(ServiceHandleContainer<
+  RadarServiceProxy::HandleType> curHandles, FindServiceHandle handle) {
+  for (RadarServiceProxy::HandleType handle : curHandles) {
+      if (handle.GetInstanceId() == myRadarProxy->GetHandle().
+        GetInstanceId()) {
+  /**
+  * This call on the proxy instance shall NOT lead to an exception,
+  * regarding service instance not reachable, since proxy instance
+  * should be already auto updated at this point in time.
+  */
+        ara::core::Future<Calibrate::Output> out = myRadarProxy->Calibrate("test");
+  // ... do something with out.
+    }
+  }
+}
+```
+
+AUTOSAR 绑定实现者提示
+对于绑定实现者来说，重要的是要明白，当服务实例的底层传输层寻址发生变化时，现有代理实例的这种 “自动更新 ”也会起作用！
+这种情况是否会发生，完全取决于传输层绑定的实现！
+例如，如果我们在 代理实例 和 服务实例实施 之间建立了 SOME/IP 网络绑定，那么在服务实例重启后，`服务实例的端口号`可能确实发生了变化。
+尽管如此，代理实例的“自动更新”仍将无缝运行！
+如果您还记得前面的讨论（见表 6.2.1 和第 9.3 节），我们在其中给出了一些提示，说明绑定实现者可以/可以在代理句柄实例中嵌入哪些内容，那么您可能会提出这样的问题：它是如何干扰 “自动更新 ”的？
+在`binding/discovery`生成句柄时，服务实例的`初始传输层寻址信息`很可能会被编码到句柄中，以便由此创建的`proxy instance`能够与`service instance`取得联系。
+
+请注意，对于 `服务实例的 传输层 寻址信息` 在整个生命周期内 `保持不变`的设置，这也是一种`性能优化`！
+在这种情况下，可以在生命周期内进行一次服务查找，并将返回的句柄持久地存储在某个地方。
+只要服务消费者再次启动（而不是触发查找服务变体），它就可以直接重新使用持久化句柄来创建代理实例。
+`其优化之处在于，无需首先进行代价高昂的发现`。
+如果代理实例按照 ara::com 的要求在幕后 “自动更新”，当服务实例被重新提供时，可能会出现传输层寻址信息发生变化的情况（如上文所述）。这显然意味着，更新后的代理实例使用的传输层寻址信息与以前构建实例的句柄中包含的信息不同！
+另一方面，这也意味着允许用户使用过时的句柄（过时的含义是传输层寻址信息已失效）创建代理实例。
+这里需要区分两种不同的情况：
+- 在用过时的句柄创建代理实例时，绑定实现不知道新的传输层地址。其结果是，在使用过时的地址信息创建代理实例后，对服务实例的调用可能会失败。
+但是，当服务实例被（重新）提供，并且 AP 产品的绑定实现可以看到/知道实例的新传输层地址信息时，它就会对代理实例应用 “自动更新”（用新的传输层地址进行更新）。
+- 在使用过时的句柄创建代理实例时，绑定实现已知道新的传输层地址，并使用该地址代替。
+
+**如果服务实例完全改变了传输层机制，“自动更新 ”机制也必须发挥作用。**
 
 
+### 6.2.3 Events
+For each event the remote service provides, `the proxy class contains a member of a event specific wrapper class`. In our example the member has the name BrakeEvent and is of type events::BrakeEvent.
+As you see in 6.5 all the event classes needed for the proxy class are generated inside a specific namespace events, which is contained inside the proxy namespace.
+The member in the proxy is used to access events/event data, which are sent by the service instance our proxy is connected to. Let’s have a look at the generated event class for our example:
+
+```cpp
+void SetReceiveHandler(ara::com::EventReceiveHandler handler);
+```
+用户通过`SetReceiveHandler`传入的handler不需要重入，因为通信管理实现必须对处理程序的调用进行串行处理： 当上次调用 `GetNewSamples()`后有新事件发生时，MW 会调用一次处理程序。
+
+```cpp
+/*
+  设置订阅状态更改处理程序，一旦该事件的订阅状态发生变化，通信管理实现就会调用该处理程序。
+  通信管理实现将序列化对已注册处理程序的调用。
+  如果如果在前一次调用处理程序的运行期间订阅状态发生了多次变化，通信管理会将所有变化汇总到一次调用中，并以最后一次/有效的变化为准。
+*/
+void SetSubscriptionStateChangeHandler(
+  ara::com::SubscriptionStateChangeHandler handler);
+```
+多次订阅状态的变化，以最后一次有效的为准
+
+```cpp
+template <typename F>
+ara::core::Result<size_t> GetNewSamples(
+  F&& f,
+  size_t maxNumberOfSamples = std::numeric_limits<size_t>::max());
+  // 默认参数表示处理所有可用的free sample slots
+```
+
+
+#### 6.2.3.1 Event Subscription and Local Cache
+仅凭代理实例中存在一个事件封装类成员这一事实，并不意味着用户可以即时访问由服务实例引发/发出的事件。
+首先，您必须 “订阅 ”事件，以便告诉通信管理部门，您现在有兴趣接收事件。
+```cpp
+void Subscribe(size_t maxSampleCount);
+```
+This method expects a parameter maxSampleCount, which basically informs Communication Management implementation, how many event samples the application intends to hold at maximum.
+`Therefore — with calling this method, you not only tell the Communication Management, that you now are interested in receiving event updates, but you are at the same time setting up a "local cache" for those events bound to the event wrapper instance with the given maxSampleCount.`
+This cache is allocated and filled by the Communication Management implementation, which hands out smartpointers to the application for accessing the event sample data.
+How that works in detail is described in subsubsection 6.2.3.3.
+
+#### 6.2.3.2 Monitoring Event Subscription
+The call to the Subscribe method is `asynchronous` by nature. This means that at the point in time Subscribe returns, it is just the indication, that the Communication Management has accepted the order to care for subscription.
+The subscription process itself may (most likely, but depends on the underlying IPC implementation) involve the event provider side. `Contacting the possibly remote service for setting up the subscription might take some time.`
+
+So the binding implementation of the subscribe is allowed to return immediately after accepting the subscribe, even if for instance the remote service instance has not yet acknowledged the subscription (in case the underlying IPC would support mechanism like acknowledgment at all). If the user — after having called Subscribe — wants to get feedback about the success of the subscription, he might call:
+```cpp
+ara::com::SubscriptionState GetSubscriptionState() const;
+```
+如果底层 IPC 实现使用了某种机制，如服务端的订阅确认，那么在订阅后立即调用 GetSubscriptionState，如果确认尚未到达，可能会返回 kSubscriptionPending。
+否则，在底层 IPC 实现获得即时反馈的情况下（这在本地通信中很有可能），调用也可能已经返回 kSubscribed。
+如果用户需要监控订阅状态，他有两种选择：
+- 通过 GetSubscriptionState 轮询
+- 注册一个处理程序，在订阅状态发生变化时调用该处理程序
+```cpp
+  void SetSubscriptionStateChangeHandler(ara::com::
+SubscriptionStateChangeHandler handler);
+
+enum class SubscriptionState { kSubscribed, kNotSubscribed, kSubscriptionPending };
+using SubscriptionStateChangeHandler = std::function<void(SubscriptionState)>;
+```
+Anytime the subscription state changes, the Communication Management implementation calls the registered handler. A typical usage pattern for an application developer, who wants to get notified about latest subscription state, would be to register a handler before the first call to Subscribe.
+After having accepted the “subscribe order” the Communication Management implementation will call the handler first with argument `SubscriptionState.kSubscriptionPending` and later — as it gets acknowledgment from the service side —
+it will call the handler with argument `SubscriptionState.kSubscribed`.
+PS：用户注册的回调是在订阅状态发生变化时触发，不管是pending还是subscribe都会触发
+
+再次说明：如果底层实现不支持来自服务端的订阅确认，那么实现也可以跳过对带有参数 SubscriptionState.kSubscriptionPending 的处理程序的第一次调用，而直接调用带有参数 SubscriptionState.kSubscribed 的处理程序。
+对已注册的 “订阅状态更改 ”处理程序的调用是完全异步的。
+也就是说，它们甚至可以在调用 Subscribe 尚未返回时发生。用户必须意识到这一点！
+
+一旦用户为某个事件注册了 “订阅状态改变”处理程序，他可能会收到多次对该处理程序的调用。
+不仅是最初，当状态从 SubscriptionState.kNotSubscribed 变为 SubscriptionState.kSubscribed（最终通过中间步骤 SubscriptionState.kSubscriptionPending）时，而且以后的任何时候，因为提供此事件的服务可能有一定的生命周期（可能与某些车辆模式绑定）。
+因此，**服务可能会在可用和（暂时）不可用之间切换，甚至可能意外崩溃并重新启动。**
+提供事件的服务实例的可用性发生变化时，代理方的通信管理实现可能会看到。
+因此，只要检测到对事件订阅状态有影响的变化，通信管理程序就会触发已注册的 “订阅状态更改 ”处理程序。
+此外（也许更重要），`通信管理功能还能在需要时更新用户的事件订阅、`
+这一机制与上文（6.2.2.1）所述的 “自动更新代理实例 ”机制密切相关： 由于通信管理实现会监控服务实例的可用性，因此一旦服务可用，`service proxy`就会自动连接到通信管理实现。
+
+**该机制不仅会在需要时 “自动更新 ”其代理，还会在更新代理实例后 “悄悄地” 重新订阅用户已完成的任何事件订阅。**
+这可以粗略地看作是一个非常有用的安慰功能--如果没有 “更新后重新订阅”功能，仅靠 “自动更新”似乎是一种半心半意的做法。
+通过注册 “订阅状态更改” 处理程序，用户现在又多了一种监控服务当前可用性的可能性！
+除了 6.2.2 中所述的注册 FindServiceHandler 外，注册了 “订阅状态更改 ”处理程序的用户还可以通过调用其处理程序来间接监控服务的可用性。
+如果代理所连接的服务实例出现故障，通信管理会调用带有参数 SubscriptionState.kSubscriptionPending 的处理程序。
+一旦 “更新后重新订阅”成功，通信管理程序就会调用带有参数 SubscriptionState.kSubscribed 的处理程序。
+
+符合 ara::com 标准的通信管理实现必须将对用户注册处理程序的调用进行串行化处理。
+即：**如果发生新的订阅状态变更，而用户提供的处理程序仍在运行，通信管理实现必须推迟下一次调用，直到前一次调用返回。在用户注册的状态变更处理程序运行期间发生的数次订阅状态变更，应汇总为对用户注册的处理程序的一次调用，`其有效/最后一次调用应为对用户注册的处理程序的一次调用`。**
+
+`AUTOSAR Binding Implementer Hint`
+Depending on the used IPC or transport layer technology the lifetime/availability of the service as a whole (represented by the proxy instance) and the availability of its subparts (e.g. events, fields methods) may be distinguishable or not.
+With SOME/IP f.i., there is the contract, that the service availability as a whole is notified and the expectation/contract is, that then automatically all subparts are available as well.
+Here in ara::com we do not require this tight coupling! So generally it would be supported/allowed, that a service instance could be found (see subsection 6.2.2) and methods could be called on it (via the proxy), but the “subscription state” switches to SubscriptionState.kNotSubscribed, because the service has withdrawn just the event, which the user has subscribed to. The mechanism of registering the “subscription state change” handler with the expectation to steadily monitor state changes in the background is similar or related to the mechanism of Proxy::FindService (see subsection 6.2.2), where the user can also register a handler to monitor availability changes of service instances. So from implementation view point — depending on the used transport layer technology —
+those mechanisms may depend on each other or may be tightly coupled implementation-wise.
+根据所使用的 IPC 或传输层技术，整个服务（由代理实例表示）的生命周期/可用性和其子部分（如事件、字段方法）的可用性可能是可区分的，也可能是不可区分的。
+对于 SOME/IP f.i.，有一个契约，即服务的整体可用性会得到通知，而期望/契约是，所有子部分也会自动可用。
+在 ara::com 中，我们不需要这种紧密耦合！
+因此，一般情况下，我们支持/允许找到服务实例（见第 6.2.2 小节）并调用其method（通过代理），但 “订阅状态 ”会切换为 `SubscriptionState.kNotSubscribed`，因为服务只撤回了用户订阅的事件。（可见，粒度是比较细的）
+注册 “订阅状态更改 ”处理程序以期望在后台稳定监控状态更改的机制与 Proxy::FindService 的机制类似或相关（见第 6.2.2 小节），在后者中，用户也可以注册一个处理程序来监控服务实例的可用性更改。
+因此，从实现的角度看--取决于所使用的传输层技术--这些机制可能相互依赖，也可能相互关联。
+
+
+
+#### 6.2.3.3 Accessing Event Data — aka Samples
+那么，在根据前面的章节成功订阅事件后，如何访问接收到的事件数据样本呢？
+`在典型的 IPC 实现中，从事件发出者（服务提供者）发送到订阅代理实例的事件数据会在一些缓冲区（如内核缓冲区、特殊 IPC 实现控制的共享内存区域等）中累积/排队。`
+缓冲区、特殊 IPC 实现控制的共享内存区域......）。
+因此，必须采取明确的行动，从这些缓冲区获取/取回这些事件样本、
+最终进行反序列化，然后以正确的样本缓存形式将其放入`event封装类实例的特定缓存中`。
+触发此操作的 API 是`GetNewSamples`.
+
+第二个 size_t 类型的参数控制着事件采样的最大数量，这些采样将从中间件缓冲区获取/反序列化，然后以调用 f 的形式呈现给应用程序。
+
+在调用`GetNewSamples()`时，ara::com 实现会首先检查应用程序持有的事件采样数是否已超过其在上次调用 Subscribe() 时承诺的最大值。
+* 如果是，则返回 ara::core::ErrorCode。
+* 否则，ara::com 实现会检查底层缓冲区是否包含`新的事件样本`:
+  如果是，则将其反序列化到样本槽中，然后调用应用程序提供的带有指向新事件样本的 SamplePtr 的 f。
+  这一处理过程（检查缓冲区中的其他样本并回调应用程序提供的回调 f）会重复进行，直到：
+- 缓冲区中没有任何新样本
+- 缓冲区中有更多样本，但已达到调用`GetNewSamples()`(的入参)时应用程序提供的最大样本数参数。
+- 缓冲区中有更多样本，但应用程序已超过在 Subscribe() 中承诺的 maxSampleCount。
+
+在应用程序/用户提供的回调 f 的执行过程中，可以决定如何处理传入的 SamplePtr 参数（即最终对事件数据进行深入检查）： 是将新样本 “扔掉”（因为不感兴趣），还是将其保留备用。
+要了解保留/丢弃事件样本的含义，必须充分理解作为事件样本数据访问/入口的 SamplePtr 的语义。
+下一章将对此进行说明。返回的 ara::core::Result 包含一个 ErrorCode 或`（在成功情况下）对 f 的调用次数`，这些调用是在 GetNewSamples 调用的上下文中完成的。
+
+
+#### 6.2.3.4 Event Sample Management via SamplePtrs
+A `SamplePtr`, which is handed over from the ara::com implementation to application/user layer is — from a semantical perspective — a unique-pointer (very similar to a `std::unique_ptr`): When the ara::com implementation hands it over an ownership transfer takes place. 
+From now on the application/user is responsible for the lifetime management of the underlying sample. As long as the user doesn’t free the sample by destroying the SamplePtr or by calling explicit assignment-ops/modifiers on the SamplePtr instance, the ara::com implementation can not reclaim the memory slot occupied by this sample.
+
+事件样本数据所在的内存插槽由 ara::com 实现分配。
+这通常发生在调用`Subscribe()`时，用户/应用程序通过参数 maxSampleCount 定义了希望同时访问的事件数据样本的最大数量。
+在以后的 GetNewSamples() 调用中，ara::com 实现将填充这样一个 “样本槽”（如果有空闲），并在用户/应用程序回调 f 中传递指向它的 SamplePtr。
+在回调实现中，用户/应用程序决定如何处理传入的 SamplePtr。如果用户/应用程序希望保留样本以供日后访问（即在回调返回后），那么它将在某个外层作用域位置复制样本，以适应其软件组件架构。决定是否复制样本（即保留样本）可能仅仅取决于事件样本数据的属性/值。在这种情况下，回调实现基本上是对接收到的事件样本进行 “过滤”。
+由于我们说过，SamplePtr 的行为类似于 std::unique_ptr），因此上面的语句必须稍作修改： `在决定保留事件采样时，实现显然不是复制传入的 SamplePtr，而是将其移动到外层作用域位置。移动到外层作用域位置。`
+6.8 中的小示例除其他外，还展示了方法`handleBrakeEventReception()`中的回调实现如何实现简单的过滤，以及如何将样本移动到具有 “LastN ”语义的全局存储中，供以后使用/处理。
+
+`AUTOSAR 绑定实现者提示`
+如前几章所述，在事件接收代理实例的进程空间中为样本分配内存是`绑定实现`的工作。
+它应在 `<event>::Subscribe` 调用的上下文中完成，因为可能存在资源关键型应用程序（如符合 ASIL 要求的应用程序？？？），这些应用程序明确将其对 Subscribe 的调用转移到初始化阶段，在该阶段允许从内核分配内存。
+因此，将真正的内存分配转移到稍后阶段（执行 Subscribe 调用后）的绑定实现应考虑到，可能会有应用程序无法接受这样的实现、
+因为这样一来，应用程序就无法控制从操作系统/内核分配内存的时间（例如通过 mmap 或 brk）。
+另外，在前面几章中，我们提到了一个事实，即应用程序在调用 Subscribe 时可能会超出其占用的样本数。
+这种情况基本上会发生，因为一个典型的绑定实现会在一个名为 “Subscribe ”的样本数之上分配一个额外的 "空闲槽"！
+对于使用 LastN 策略的典型应用程序，在处理样本时，会在 GetNewSamples() 过程中将现有/持有的 SamplePtr 替换为新的 SamplePtr。
+`为了实现这一基本语义，绑定实现需要一个额外的备用槽，以便在将事件数据序列化之前将其提供给应用程序`
+
+
+#### 6.2.3.5 Event-Driven vs Polling-Based access
+正如我们所承诺的，我们完全支持以`事件驱动`和`轮询方式`访问新数据。
+
+！！！为什么需要轮询
+对于轮询方法，除了我们已经讨论过的那些应用程序接口外，不需要其他应用程序接口。
+典型的用例是，您有一个应用程序，会被周期性地触发以进行某些处理，并在特定期限内提供其输出。
+这是`regulator/control算法`的典型模式--循环激活可能还由`实时定时器`驱动，以确保最小的抖动。
+在这种情况下，每个激活周期都要调用 GetNewSamples()，然后将更新的缓存数据作为当前处理迭代的输入。
+在这里，只需在处理算法调度时获取要处理的最新数据即可。
+如果通信管理程序在新数据可用时随时通知您的应用程序，则会适得其反： 这将意味着应用程序进程会出现`不必要的上下文切换`，`因为在收到通知时，您并不想处理新数据，因为还不到处理的时候。`
+不过，也有其他使用情况。如果您的应用程序没有这种：以截止日期为驱动的方法，而只是在某些事件发生时做出反应、那么设置周期性警报并通过调用 GetNewSamples() 轮询新事件 的调用来设置周期性警报和轮询新事件，这就有点不妥了，而且效率极低。
+
+（即：异步模式）
+在这种情况下，您明确希望通信管理程序通知您的应用程序，从而向您的应用程序进程发出异步上下文切换。
+我们通过以下 API 机制支持这种情况：
+```cpp
+  void SetReceiveHandler(ara::com::EventReceiveHandler handler)；
+```
+通过该 API，您可以注册一个用户定义的回调函数，当上次调用 GetNewSamples() 后`出现新的事件数据时`，通信管理程序必须调用该函数。
+注册的函数无需重入，因为通信管理程序必须将对注册回调的调用序列化。
+明确允许在已注册的回调中调用 GetNewSamples()！
+
+
+`AUTOSAR Binding Implementer Hint`
+如果绑定实现调用了注册的用户函数，并且在执行此函数期间有新事件到达，但应用程序尚未再次从正在运行的用户函数中调用GetNewSamples()，则不需要触发新的回调！
+但是，新到达的数据必须在应用程序下一次调用GetNewSamples()时可见。如果在执行此函数期间用户调用了GetNewSamples()，并且在或之后此GetNewSamples()仍在注册的接收处理程序内部到达新事件数据，则通信管理实现必须延迟对接收处理程序的下一次调用，直到运行的调用结束。
+因此，直观的绑定实现方式是设置一个`标志`，当新的事件数据到达且用户定义的接收处理程序当前正在运行时。当用户接收处理程序结束时，通信管理实现只需检查标志是否已设置，并在需要时发出对接收处理程序的下一次调用。
+
+
+注意，用户可以随时通过event wrapper提供的`UnsetReceiveHandler()`方法`更改事件驱动和轮询样式之间的行为`，因为用户还可以撤销用户特定的“接收处理程序”。
+ 以下简短的代码片段是如何在代理/客户端端处理事件的简单示例。
+ 在此示例中，在main函数中创建了一个RadarService类型的代理实例，并注册了一个接收处理程序，当接收到新的BrakeEvent事件时，ara::com实现会调用该处理程序。这意味着，在这个示例中，我们使用了“事件驱动”方法。
+在我们的示例接收处理程序中，我们使用新接收的事件更新本地缓存，从中筛选出所有不符合特定属性的BrakeEvent事件。之后，我们调用一个处理函数，处理我们决定保留的样本。
+
+```cpp
+myRadarProxy->BrakeEvent.GetNewSamples(
+  [](SamplePtr<proxy::events::BrakeEvent::SampleType> samplePtr) {
+  if(samplePtr->active) {
+    lastNActiveSamples.push_back(std::move(samplePtr));
+    if (lastNActiveSamples.size() > 10)
+      lastNActiveSamples.pop_front();
+  }
+});
+```
+策略是：获取这一批数据中，最新的N个数据
+```cpp
+/* Note: If the entity we would subscribe to, would be a field instead of an event, it would be crucial, to register our reception handler BEFORE subscribing, to avoid race conditions. After a field subscription, you would get instantly so called "initial events" and to be sure not to miss them, you should care for that your reception handler is registered before. * /
+```
+对于`field`要避免`race condition`
+要把注册receive handler放在订阅操作前面，
+由于field有初值，为了确保不错过这些事件，应确保接收处理程序在订阅之前已经注册好。如果在订阅后才set handler，那么初值可能丢失。
+
+
+#### 6.2.3.6 Buffering Strategies
+`AUTOSAR Binding Implementer Hint`
+At this point it surely makes sense to talk about reasonable buffering strategies for binding implementations. So this entire subsection is mainly of interest for an AP product vendor/binding implementer.
+
+The following figure sketches a simple deployment, where we have a service providing an event, for which two different local adaptive SWCs have subscribed through their respective ara::com proxies/event wrappers. As you can see in the picture both proxies have a local event cache. This is the cache, which gets filled via `GetNewSamples()`.
+What this picture also depicts is, that the service implementation sends its event data to a Communication Management buffer, which is apparently outside the process space of the service implementation — the picture here assumes, that `this buffer is owned by kernel or it is realized as a shared memory between communicating proxies and skeleton or owned by a separate binding implementation specific “demon” process.`
+图中假设的背景如下： 自适应应用程序是作为具有独立/受保护内存/地址空间的进程来实现的。
+服务实现（通过skeleton）发送的事件数据不能在service/skeleton进程私有地址空间内缓冲：如果是这样的话，代理对事件数据的访问通常会导致服务应用进程的上下文切换。
+我们希望通过方法调用处理模式（`MethodCallProcessingMode`）（参见 6.3.3 小节）对服务端进行完全控制，因此任意服务消费者的通信行为不应触发这种情况。
+现在，让我们粗略地看看作为 “发送事件 ”目标的缓冲区可能位于以下三个不同位置：
+* `Kernel Space`:
+  Data is sent to a memory region not mapped directly to an application process.
+  This is typically the case, when binding implementation uses IPC primitives like pipes or sockets, where data written to such a primitive ends up in `kernel buffer space`.
+* `Shared Memory`:
+  (需要实现数据同步)
+  Data is sent to a memory region, which is also directly readable from receivers/proxies.
+  Writing/reading between different parties is synchronized specifically (lightweight with mem barriers or with explicit mutexes).
+* `IPC-Daemon Space`:
+  Data is sent to an explicit non-application process, which acts as a kind of demon for the IPC/binding implementation.
+  Note, that technically this approach might be built on an IPC primitive like communication via kernel space or shared memory to get the data from service process to demon process.
+
+
+在`缓冲区空间的灵活性/大小`、`访问速度/开销方面的效率`以及`防止恶意访问/写入缓冲区方面`，每种方法都可能有不同的优缺点。
+因此，考虑到 AP 产品及其使用中的不同限制，可能会产生不同的解决方案。
+本例中要强调的是，明确鼓励 AP 产品供应商使用基于参考的方法来访问事件数据： `event wrapper的 ara::com API 故意通过 SamplePtr 来建立访问模型，并将其传递给回调而不是值！`
+在`1:N事件通信`的典型场景中，这将允许在 “本地事件缓存 ”中拥有的不是事件数据值本身，而是指向中央通信管理缓冲区中数据的`指针/引用`。
+这样，通过`GetNewSamples()`对本地缓存进行更新时，就`不是以值复制的方式，而是以引用更新的方式来实现`。
+老实说：这显然只是对缓冲区使用方面优化可能性的粗略描述。
+正如这里（第 9.1 节）所提示的，传输到应用程序进程的数据通常必须在首次访问应用程序之前进行去序列化。
+
+由于去序列化必须专门针对消费应用程序的对齐方式，因此集中共享已经去序列化的表示可能会很棘手。
+但至少你明白了一点，那就是代理/服务端的事件数据访问 API 设计为消费者之间共享事件数据提供了空间。
+
+
+### 6.2.4 Methods
+For each method the remote service provides, the proxy class contains a member of a method specific wrapper class.
+In our example, we have three methods and the corresponding members have the name Calibrate (of type methods::Calibrate), Adjust (of type methods::Adjust) and LogCurrentState (of type methods::LogCurrentState). Just like the event classes the needed method classes of the proxy class are generated inside a specific namespace methods, which is contained inside the proxy namespace.
+The method member in the proxy is used to call a method provided by the possibly remote service instance our proxy is connected to.
+
+
+```cpp
+class Adjust {
+public:
+  struct Output {
+    bool success;
+    Position effective_position;
+};
+
+ara::core::Future<Output> operator()(const Position &target_position);
+};
+```
+
+#### 6.2.4.1 One-Way aka Fire-and-Forget Methods
+在继续介绍“普通”方法提供的功能之前，我们简要介绍“单向方法”，因为我们在前一节中已经提到了这个术语。
+ara::com支持一种特殊类型的方法，我们称之为“单向”或`“fire-and-forget”`。
+从技术上讲，这是一种`只有IN参数而没有OUT参数`且`不允许引发错误`的方法。
+与服务器之间也不可能进行握手/同步！
+因此，客户端/调用方在服务器/被调用方是否处理了“单向”调用时将得不到任何反馈。
+
+有些通信模式中，这种`尽力而为`的方法是完全足够的。
+在这种情况下，“单向/发出并忘记”的语义在资源方面非常`轻量级`。
+这意味着在某些情况下，不需要等待服务器的响应或确认，只需发送请求并继续执行即可，这种轻量级的通信方式可以更高效地利用资源。
+
+`AUTOSAR Binding Implementer Hint`
+To support the notion of a “one-way/fire-and-forget” method perfectly, implementation of such a call should be very asynchronously by nature. I.e. blocking the caller for some time to do a lot of housekeeping/setting up the call, is not expected by the caller of a “one-way/fire-and-forget” method! Since he isn’t even prepared for any error handling in this case, it is explicitly encouraged to do minimal processing in the callers context and shift as much as possible in an asynchronous context.
+为了完美支持“单向/发出并忘记”方法的概念，这种调用的实现应该是非常异步的。即，阻塞调用方一段时间来进行大量的清理/设置调用并不是“单向/发出并忘记”方法的调用方所期望的！`由于在这种情况下甚至没有准备好进行任何错误处理，因此鼓励在调用方的上下文中进行最少的处理，并尽可能将尽可能多的工作转移到异步上下文中。`
+`LogCurrentState`示例类，可能用于在特定时间点或事件发生时记录系统、应用程序或对象的当前状态，以便后续分析、调试或监控。就是一个比较轻量级的类。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 6.3 Skeleton Class
+
+
+
+
+
+## 6.4 Runtime
+Note: `A singleton` called Runtime may be needed to collect cross-cutting functionalities.
+Currently there are no requirements for such functionalities, so this chapter is empty. This might change until the 1st release.
 
 
 

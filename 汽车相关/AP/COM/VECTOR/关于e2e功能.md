@@ -1,3 +1,78 @@
+# 文档介绍
+# AUTOSAR
+# 6 Functional specification
+This chapter contains the specification of the internal functional behavior of the E2E supervision, this includes how the layout of the E2E-Header is defined, how the E2E-Header is created and how the E2E-Header is evaluated, and how the E2E-Statemachine is defined. For general introduction of the E2E supervision, see chapter 1.
+
+## 6.1 Overview of communication protection
+An important aspect of a communication protection mechanism is its `standardization` and `its flexibility for different purposes`.
+This is resolved by having a set of E2E Profiles, that define a combination of protection mechanisms, a message format, and a set of configuration parameters.
+Moreover, some E2E Profiles have standard `E2E variants`.
+An E2E variant is simply a set of configuration options to be used with `a given E2E Profile`.
+For example, in E2E Profile 1, the positions of CRC and counter are configurable. The E2E variant 1A requires that CRC starts at bit 0 and counter starts at bit 8.
+E2E communication protection works as follows:
+* Sender: addition of control fields like CRC or counter to the transmitted data;
+* Receiver: evaluation of the control fields from the received data, calculation of control fields (e.g. CRC calculation on the received data), comparison of calculated control fields with an expected/received content.
+
+Each E2E Profile has a specific set of control fields with a specific functional behavior and with specific properties for the detection of communication faults.
+
+## 6.2 Overview of E2E Profiles
+The E2E Profiles provide a consistent set of data protection mechanisms, designed to protecting against the faults considered in the fault model.
+Each E2E Profile provides an alternative way to protect the communication, by means of different algorithms. However, E2E Profiles have similar interfaces and behavior.
+### Each E2E Profile uses a subset of the following data protection mechanisms:
+1. `A CRC`, provided by CRC Supervision;
+2. `A Sequence Counter incremented at every transmission request`, the value is checked at receiver side for correct incrementation;
+3. `An Alive Counter incremented at every transmission request`, the value checked at the receiver side if it changes at all, but correct incrementation is not checked;(只检查是否置位，不检查是否正确地增长)
+4. `A specific ID for every port data element` sent over a port or a specific ID for every message-group (global to system, where the system may contain potentially several ECUs);
+5. `A specific ID for every source` (e.g., client) of a data element or message group
+6. `A message type` distinguishing between requests and responses in case of E2E communication protection for methods
+7. `A message result` distinguishing between normal and error responses in case of E2E communication protection for methods
+8. Timeout detection:
+(a) Receiver communication timeout.
+(b) Sender acknowledgement timeout.
+
+Depending on the used communication and network stack, appropriate subsets of these mechanisms are defined as E2E communication profiles.
+Some of the above mechanisms are implemented in RTE, COM, and/or communication stacks. However, to reduce or avoid an allocation of safety requirements to these modules, they are not considered: E2E Supervision provides all mechanisms internally (only with usage of CRC Supervision).
+The E2E Profiles can be used for both inter and intra ECU communication. The E2E Profiles were specified for specific communication infrastructure, such as CAN, CAN FD, FlexRay, LIN, Ethernet. Depending on the system, the user selects which E2E Profile is to be used, from the E2E Profiles provided by E2E Supervision.
+
+
+### 6.2.1 Error detection
+
+### 6.2.3 General Functionality of an E2E-Profile
+Each E2E-Profile provides the following 3 functionalities:
+1. Protect
+2. Forward
+3. Check
+The ’protect’ functionality, simply called the ’protect function’ creates the E2E-Header and therefore protects the data to be sent over a communication medium.
+The ’forward’ functionality, simply called the ’forward function’, is similar to the protect function and creates the header for the data to be transmitted but allows the additional replication of a received E2E-State. The main use-case for this function is Signal-Service-Translation where e.g. a E2E-protected signal is received, and the E2E-Status shall be replicated on the outgoing side.
+The ’check’ functionality, simply called the ’check function’, evaluates the E2E-Header of the received message and checks for occurred communication faults. These faults are mirrored in the returned E2E-States.
+In addition to the single E2E-Profiles a E2E-Statemachine evaluates the returned E2E-States over a longer period.
+
+
+
+
+
+
+# VECTOR
+### 2.7.5 E2E Communication Protection
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # 先看下下proxy端接收数据时的链路
 当`Runtime`、`Skeleton`、`Proxy`对象（find service时成功时构造）都成功构造时
