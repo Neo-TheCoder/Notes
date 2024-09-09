@@ -695,7 +695,7 @@ From now on the application/user is responsible for the lifetime management of t
 ```
 通过该 API，您可以注册一个用户定义的回调函数，当上次调用 GetNewSamples() 后`出现新的事件数据时`，通信管理程序必须调用该函数。
 注册的函数无需重入，因为通信管理程序必须将对注册回调的调用序列化。
-明确允许在已注册的回调中调用 GetNewSamples()！
+明确允许在已注册的回调中调用`GetNewSamples()`！
 
 
 `AUTOSAR Binding Implementer Hint`
@@ -797,22 +797,699 @@ To support the notion of a “one-way/fire-and-forget” method perfectly, imple
 `LogCurrentState`示例类，可能用于在特定时间点或事件发生时记录系统、应用程序或对象的当前状态，以便后续分析、调试或监控。就是一个比较轻量级的类。
 
 
+#### 6.2.4.2 Event-Driven vs Polling access to method results
+`Event-Driven`
+Like in the event data access, `event-driven` here means, that the caller of the method (the application with the proxy instance) `gets notified by the Communication Management implementation` as soon as the method call result has arrived.
+
+For a Communication Management implementation of ara::com this means, it has to setup some kind of `waiting mechanism (WaitEvent)` behind the scene, which gets woken up as soon as the method result becomes available, to notify the ara::com user. So how do the different usage patterns of the ara::core::Future work then?
+
+```cpp
+enum class future_status : uint8_t
+{
+  ready, ///< the shared state is ready
+  timeout, ///< the shared state did not become ready before the specified timeout has passed
+};
+
+template <typename T, typename E = ErrorCode>
+class Future {
+public:
+// ...
+  Result<T, E> GetResult() noexcept;
+
+  template <typename Rep, typename Period>
+  future_status wait_for(std::chrono::duration<Rep, Period> const& timeoutDuration) const;
+
+  template <typename Clock, typename Duration>
+  future_status wait_until(std::chrono::time_point<Clock, Duration> const& deadline) const;
+
+  template <typename F>
+  auto then(F&& func) -> SEE_COMMENT_ABOVE;
+
+};
+```
+根据您提供的信息，AUTOSAR绑定实现者需要确保在future对象上调用get()或wait()的变体之一时，用户会在方法结果（有效结果或异常）可用时立即收到通知。这是他们对事件驱动的定义。在所有这些情况下，绑定实现者必须设置一个机制，确保用户通过Future::then注册的回调被调用，或者在服务方法结果可用或在调用过程中检测到错误时，阻塞的wait()/get()调用立即恢复。
+
+“立即”这个概念显然有点模糊！ara::com设计团队设想的一般方法可以通过一个简单的例子来最好地解释：
+假设使用的底层传输机制基于Unix域套接字（或类似的基于fd的I/O）。在方法结果准备就绪时，服务方法的骨架端实现会将其写入相应的套接字文件描述符。
+在域套接字的接收端，代理实例将具有相应的描述符，并通过select或poll等待它。`也就是说，在服务端向套接字写入时，会“立即”唤醒在select/poll调用中等待的代理端通信管理代码。`
+
+正如您所看到的，“立即”取决于机器负载和所使用的低级机制提供的延迟。
+`另一方面，我们不会排除一个偏向于基于轮询的机制的低级实现！`
+因此，代理实现也可以周期性地检查数据，而不是从服务实例传播OS信号到代理实例，这会导致恢复线程执行。
+如果轮询频率足够高，这可能会导致用户调用服务方法时具有相当低且可接受的延迟！
+在底层传输机制类似基于文件描述符的读/写I/O的情况下，这样的方法可能没有太多意义，因为您会对每个描述符发出读取。
+但在基于共享内存的实现或支持异步I/O的情况下，允许每个系统调用提交多个I/O操作，这可能是一个有效的用例！
+如果您有一个具有极端通信负载的自适应应用程序，那么在通信管理实现级别上采用这样一种基于轮询的解决方案，甚至为了实现事件驱动的应用程序行为可能是有意义的，如果您的平台/选择的传输机制提供了有效的批量操作，并且您可以以一些可接受的延迟成本应用这些操作。
+
+在某些情况下，ara::com用户可能根本不希望他的应用程序（进程）被某个方法调用返回事件激活！
+想象一下一个典型的`实时(Real Time)应用程序`，它必须完全控制自己的执行。
+我们已经在事件数据访问的上下文中讨论过这种实时/轮询用例（子小节6.2.3.3）。
+对于方法调用，同样的方法适用！
+这意味着对于实时应用程序，用户可能希望完全控制方法调用的执行，而不希望由于方法调用返回事件而激活应用程序。
+
+对于ara::core::Future，我们预见了以下的使用模式：
+在通过`operator()`调用服务方法之后，您只需使用`ara::core::Future::is_ready()`来轮询方法调用是否已经完成。
+这个调用被定义为非阻塞的。
+当然，它可能`涉及一些系统调用/上下文切换（例如查看一些内核缓冲区）`，这`并非免费，但它不会阻塞`！
+在ara::core::Future::is_ready()返回true之后，可以保证下一次调用ara::core::Future::get()不会阻塞，而会立即返回有效值或在出现错误时抛出异常。
+
+
+#### 6.2.4.3 Canceling Method Result
+在使用服务方法调用时，如果你对结果不再感兴趣，应该如何处理
+。如果你已经通过()运算符调用了一个服务方法，返回了一个ara::core::Future对象，但是你对结果不再感兴趣，甚至可能已经通过ara::core::Future::then()注册了一个回调函数。在这种情况下，你应该明确告诉通信管理模块。
+让ara::core::Future对象超出作用域是一种简单的方式来表明你不再对方法调用结果感兴趣，这样它的析构函数就会被调用。
+`ara::core::Future的析构函数的调用是一个信号，告诉绑定实现，任何针对该future注册的回调都不应再被调用，为方法调用结果保留/分配的内存可能会被释放，等待方法结果的事件机制也将被停止。`
+
+`AUTOSAR Binding Implementer Hint`
+这段文字主要讨论了在服务方法调用中，如果用户通过触发 ara::core::Future 的析构函数表明不再对服务方法调用结果感兴趣，那么跳过该方法调用的工作是有意义的。
+在极端情况下，这意味着将方法调用的取消传播到实现服务方法的服务端。
+然而，他们故意不要求这样做，因为这可能会对应用程序级别的实现产生很大影响。如果他们要求或预见应用程序级别的服务方法随时可能被中止，那么就会涉及到高级应用程序协议的领域（类似`事务系统`），并且会给服务端应用程序开发人员带来很大负担，这是超出范围的。
+但是，绑定实现者可以自由地`将 取消操作 传播到 服务端框架`，这样应用程序级别方法实现返回的方法调用结果可能会直接在服务端/框架端被丢弃！
+当然，这样的高效实现需要一个适当的`控制通道/协议`，以便从代理传播取消到框架。
+例如，SOME/IP协议并没有提供这样的机制，因此在使用SOME/IP传输时，方法结果不能在框架端被丢弃。
+这是否会造成实质性影响还有待商榷。
+取消通知会带来额外的网络流量，只有在从框架到代理的传输节省的资源要多得多时，才会有可衡量的效益。
+
+`To trigger the call to the dtor` you could obviously let the future go out of scope.
+Depending on the application architecture this might not be feasible, as you already might have assigned the returned ara::core::Future to some variable with greater scope.
+
+
+```cpp
+  calibrateFuture = service.Calibrate(myConfigString);
+
+  calibrateFuture = Future<Calibrate::Output>();  // 直接把future无效化
+```
 
 
 
+### 6.2.5 Fields
+Conceptually a field has — unlike an event — a certain value at any time.
+That results in the following additions compared to an event:
+* if a subscription to a field has been done, “immediately” `initial values are sent back` to the subscriber in an event-like notification pattern.
+* the current field value can be queried via a call to a `Get()` method or could be updated via a `Set()` method.
+总之，field表示的量，一直存在
 
+`在`field`的配置中，你可以决定字段是否具有“on-change-notification”、Get() 或 Set() 这三种机制中的哪些`。
+在这个例子中，字段同时配置了这三种机制。
+对于每个字段，远程服务提供的代理类包含一个特定字段包装类的成员。在这个例子中，成员的名称为UpdateRate（类型为fields::UpdateRate）。
+与事件和方法类一样，代理类的字段类是在特定命名空间fields内生成的，该命名空间包含在代理命名空间内。
+在解释字段的概念时，它被故意放在事件和方法的解释之后，因为字段的概念大致上是一个具有相关get()/set()方法的`event`的聚合。
+因此，从技术上讲，我们也将ara:com`field`表示实现为ara:com`event`和`method`的组合。
 
-
-
-
-
+Consequently the field member in the proxy is used to
+* call `Get()` or `Set()` methods of the field with exactly the same mechanism as regular method
+* access field update notifications `in the form of events/event data`, which are sent by the service instance our proxy is connected to with exactly the same mechanism as regular events
 
 
 
 
 
 ## 6.3 Skeleton Class
+The Skeleton class is generated from the service interface description of the AUTOSAR meta model. ara::com does standardize the interface of the generated Skeleton class. The toolchain of an AP product vendor will generate a Skeleton implementation class exactly implementing this interface.
 
+The generated Skeleton class is an `abstract class`. It cannot be instantiated directly, because it does not contain implementations of the service methods, which the service shall provide.
+`Therefore the service implementer has to subclass the skeleton and provide the service method implementation within the subclass.`
+
+Note: Equal to the Proxy class the interfaces the Skeleton class has to provide are defined by ara::com, a generic (product independent) generator could generate an abstract class or a mock class against which the application developer could implement his service provider application. This perfectly suits the platform vendor independent development of Adaptive AUTOSAR SWCs.
+！！！开发者可以根据这个生成的类来实现自己的服务提供者应用程序。这种方法非常适合于`平台供应商无关的 Adaptive AUTOSAR SWCs 开发`。
+ara::com expects skeleton related artifacts inside a namespace "skeleton". This namespace is typically included in a namespace hierarchy deduced from the service definition and its context.
+这个命名空间通常是从`服务定义`和`上下文中推导出来的命名空间层级结构中的一部分`。这样做有助于组织和管理代码，使得代码结构清晰且易于维护。
+
+```cpp
+class RadarServiceSkeleton {
+public:
+  RadarServiceSkeleton(ara::com::InstanceIdentifier instanceId,
+    ara::com::MethodCallProcessingMode mode = ara::com::MethodCallProcessingMode::kEvent);
+
+  /*
+    This specifically supports multi-binding.
+  */
+  RadarServiceSkeleton(ara::com::InstanceIdentifierContainer instanceIds,
+    ara::com::MethodCallProcessingMode mode = ara::com::MethodCallProcessingMode::kEvent);
+
+  RadarServiceSkeleton(ara::com::InstanceSpecifier instanceSpec,
+    ara::com::MethodCallProcessingMode mode = ara::com::MethodCallProcessingMode::kEvent);
+
+  RadarServiceSkeleton(const RadarServiceSkeleton& other) = delete;
+
+  RadarServiceSkeleton& operator=(const RadarServiceSkeleton& other) = delete;
+
+/*
+  The Communication Management implementer should care in his dtor implementation, 
+  that the functionality of StopOfferService() is internally triggered in case this service instance has been offered before.
+  This is a convenient cleanup functionality.
+*/
+~RadarServiceSkeleton();  // 需要触发StopOfferService() 确保在服务实例被销毁时，相关的服务提供也会被停止。
+
+
+void OfferService();
+
+void StopOfferService();
+
+struct CalibrateOutput {
+  bool result;
+};
+
+/*
+  This fetches the next call from the Communication Management and executes it.
+  The return value is a ara::core::Future. n case of an Application Error, 
+  an ara::core::ErrorCode is stored in the ara::core::Promise from which the ara::core::Future is returned to the caller.
+  Only available in polling mode.
+*/
+ara::core::Future<bool> ProcessNextMethodCall();
+
+events::BrakeEvent BrakeEvent;
+
+virtual ara::core::Future<CalibrateOutput> Calibrate(std::string configuration) = 0;
+};
+```
+
+### 6.3.1 Instantiation
+Since you could deploy many different instances of the same type (and therefore same skeleton class) it is straightforward, that you have to give an instance identifier upon creation.(可以部署多个service instance的不同实现)
+This identifier has to be unique. 
+In the exception-less creation of a service skeleton a static member function Preconstruct checks the provided identifier.
+The construction token is embedded in the returned ara::core::Result if the identifier was unique. Otherwise it returns ara::core:.ErrorCode.
+
+在无例外地创建服务骨架时，静态成员函数 `Preconstruct` 会`检查 所提供的标识符`。
+如果标识符是唯一的，则在返回的 ara::core::Result 中嵌入构造标记。否则返回 ara::core:.ErrorCode。
+
+如果要创建具有相同`identifier`的新实例，必须先销毁现有实例。
+正是出于这个原因，骨架类（就像代理类一样）既不支持复制构造，也不支持复制赋值！
+否则，两个 “完全相同”的实例就会以相同的实例标识符存在一段时间，方法调用的路由就会变得不确定。
+关于实例标识符定义的不同 ctors 变体反映了它们的不同性质，这在第 6.1 节中介绍过。
+* variant with ara::com::`InstanceIdentifier`:
+  Service instance will be created with exactly `one binding specific instance identifier`.
+* variant with ara::com::`InstanceIdentifierContainer`:
+  Service instance will be created with bindings to `multiple distinct instance identifiers`.
+  This is mentioned as "multi-binding" throughout this document and also explained in more detail in section 9.3
+* variant with ara::core::`InstanceSpecifier`:
+  Service instance will be created with bindings to the instance identifier(s) found after "`service manifest`" lookup with the given ara::core::InstanceSpecifier.
+  Note, that this could also imply a "multi-binding" as the integrator could have mapped the given ara::core::InstanceSpecifier to multiple technical/binding specific instance identifiers within the "service manifest".
+
+这也可能意味着“多绑定”，因为集成者可以将给定的 ara::core::InstanceSpecifier 映射到“服务清单”中的多个技术/绑定特定实例标识符。
+换句话说，集成者可以在服务清单中将`一个抽象的实例标识符`映射到`多个具体的技术或绑定相关的实例标识符上`。
+这种做法可以帮助在不同的技术或绑定层面上管理和识别相同的实例，从而实现更灵活和多样化的系统集成和管理。
+
+Note: Directly after creation of an instance of the subclass implementing the skeleton,
+this instance will not be visible to potential consumers and therefore no method will be called on it.
+This is only possible after the service instance has been made visible with the `OfferService` API (see below).
+
+
+### 6.3.2 Offering Service instance
+The skeleton provides the method `OfferService()`.
+After you — as application developer for the service provider side — have instantiated your custom service implementation class and initialized/set up your instance to a state, where it is now able to serve requests (method calls) and provide events to subscribing consumers, you will call this OfferService() method on your instance.
+From this point in time, where you call it, method calls might be dispatched to your service instance — even if the call to OfferService() has not yet returned.
+If you decide at a certain point (maybe due to some state changes), that you do not want to provide the service anymore, you call StopOfferService() on your instance. The contract here is: After StopOfferService() has returned no further method calls will be dispatched to your service instance.
+For sanity reasons ara::com has the requirement for the AP vendors implementation of the skeleton dtor, that it internally does a StopOfferService() too, if the instance is currently offered.
+
+这段话描述了 在作为服务提供方的应用程序开发者 实例化 自定义服务实现类 并将实例初始化/`method`调用）并向订阅的消费者提供`event`之后，会调用 `OfferService()` 方法。
+从调用此方法的时间点开始，即使调用 `OfferService()` 方法尚未返回，方法调用也可能会被分派到您的服务实例。
+
+如果在某个时刻（可能是由于某些状态变化），您决定不再提供服务，可以在实例上调用`StopOfferService()`。
+在这里的约定是：在`StopOfferService()`返回后，不会再将进一步的方法调用分派到您的服务实例。
+出于健全性考虑，ara::com 对于骨架类析构函数的API供应商实现有一个要求，即如果实例当前正在提供服务，那么在内部也要执行`StopOfferService()`。
+这样做是为了确保在销毁实例时，服务的提供会被正确地停止，避免潜在的问题和混乱。
+
+So — “`stop offer`” needs only be called on an instance which lives on and during its lifetime it switches between states, where it is visible and provides its service, and states, where it does not provide the service.
+是的，“停止提供服务”只需要在一个实例上调用，该实例在其生命周期内会在`可见并提供服务的状态`和`不提供服务的状态`之间切换。
+当您的服务实例需要停止提供服务时，您可以调用`StopOfferService()`方法来实现这一目的。
+这种设计允许服务实例在需要时灵活地切换服务提供状态，确保系统的稳定性和可控性。
+
+### 6.3.3 Polling and event-driven processing modes
+Now let’s come to the point, where we deliver on the promise to support event-driven and polling behavior also on the service providing side.
+From the viewpoint of the service providing instance — here our skeleton/skeleton subclass instance — requests (service method or field getter/setter calls) from service consumers may come in at arbitrary points in time.
+In a `purely event-driven setup`, this would mean, that the Communication Management generates corresponding call events and transforms those events to concrete method calls to the service methods provided by the service implementation.
+在一个纯粹的事件驱动设置中，通信管理会生成相应的`调用事件`，并将这些 `事件` 转换为`对 由服务实现提供的 服务方法 的 具体方法调用`。
+换句话说，当某个事件发生时，通信管理会触发相应的调用事件，
+然后将这些事件转换为实际的方法调用，以便服务实现可以对这些事件做出响应并执行相应的操作。
+这种设计模式通常用于异步和松散耦合的系统中，以实现更灵活和可扩展的架构。
+The consequences of this setup are clear:
+* general reaction to a service method call might be fast, since `the latency is only restricted by general machine load and intrinsic IPC mechanism latency.`
+* rate of context switches to the OS process containing the service instance might be high and non-deterministic, decreasing overall throughput.（如果触发频率高，上下文切换多，显得处理的吞吐量差）
+
+As you see — there are pros and cons(优缺点) for an event-driven processing mode at the service provider side. However, we do support such a processing mode with ara::com. The other bookend we do support, is a pure polling style approach. Here the application developer on the service provider side explicitly calls an ara::com provided API to process explicitly one call event.
+With this approach we again support the typical RT-application developer. His application gets typically activated due to a low jitter cyclical alarm.
+通过这种方法，我们再次支持典型的实时应用程序开发人员。他的应用程序通常由于低抖动周期性警报而被激活。
+PS: "抖动"（jitter）指的是事件发生的时间上的不确定性或波动性。
+
+When his application is active, it checks event queues in a non-blocking manner and decides explicitly how many of those accumulated (since last activation time) events it is willing to process. Again: Context switches/activations of the application process are only accepted by specific (RT) timers. Asynchronous communication events shall not lead to an application process activation.
+So how does ara::com allow the application developer to differentiate between those processing modes? The behavior of a skeleton instance is controlled by the second parameter of its ctor, which is of type ara::com::MethodCallProcessingMode.
+在这种情况下，当应用程序处于活动状态时，它以`非阻塞`的方式`检查 事件队列`，并明确决定要处理多少个（自上次激活以来积累的）事件。
+PS: 这意味着应用程序的执行是由特定的定时器控制的，只有在定时器触发时才会激活应用程序进程进行处理。
+异步通信事件不应该导致应用程序进程的激活，这样可以确保应用程序的执行是在可控的时间点进行的，从而提高系统的可预测性和稳定性。
+
+再次强调：应用程序进程的`上下文切换/激活`仅由特定（实时）定时器接受。异步通信事件不应导致应用程序进程激活。
+那么，ara::com如何允许应用程序开发人员区分这些处理模式呢？
+skeleton实例的行为由其构造函数的第二个参数控制，该参数的类型为`ara::com::MethodCallProcessingMode`。
+```cpp
+enum class MethodCallProcessingMode { kPoll, kEvent, kEventSingleThread };
+```
+
+That means the processing mode is set for `the entire service instance` (i.e. all its provided methods are affected) and is fix for the whole lifetime of the skeleton instance.
+The default value in the ctor is set to `kEvent`, which is explained below.
+
+
+#### 6.3.3.1 Polling Mode
+If you set it to `kPoll`, the Communication Management implementation will not call any of the provided service methods asynchronously!
+If you want to process the next (assume that there is `a queue` behind the scenes, where incoming service method calls are stored) pending service-call, you have to call the following method on your service instance:
+```cpp
+ara::core::Future<bool> ProcessNextMethodCall();
+```
+We are using the mechanism of `ara::core::Future` again to return a result, which will be fulfilled in the future. What purpose does this returned ara::core::Future serve?
+It allows you to get notified, when the “next request” has been processed. That might be helpful to chain service method calls one after the other. A simple use case for a typical RT application could be:
+* RT application gets scheduled.
+* it calls `ProcessNextMethodCall` and registers a callback with `ara::core::Future::then()`
+* the callback is invoked after the service method called by the middleware corresponding to the outstanding request has finished.
+* in the callback the RT application decides, if there is enough time left for serving a subsequent service method. If so, it calls another ProcessNextMethodCall.
+
+返回的ara::core::Future用于在将来返回结果，从而实现异步处理。它允许您在“下一个请求”被处理时得到通知。
+这对于`按顺序链接服务方法调用`可能很有帮助。
+一个典型的实时应用程序的简单用例可能是：
+- 实时应用程序被`调度`。
+- 它调用`ProcessNextMethodCall`并在`ara::core::Future::then()`中注册一个回调函数。
+- 在中间件调用的服务方法对应的未完成请求处理完毕后，回调函数被调用。
+- 在回调函数中，实时应用程序`决定 是否 有足够的时间 来处理后续的服务方法`。
+    如果有，它会调用另一个`ProcessNextMethodCall`。
+    这种机制可以帮助实现服务方法的链式调用，以便更有效地处理多个请求。
+
+Sure - this simple example assumes, that the RT application knows worst case runtime of its service methods (and its overall time slice), but this is not that unlikely! The bool value of the returned ara::core::Future is set to true by the Communication Management in case there really was an outstanding request in the queue, which has been dispatched, otherwise it is set to false. This is a somewhat comfortable indicator to the application developer, not to call repeatedly ProcessNextMethodCall although the request queue is empty. So calling ProcessNextMethodCall directly after a previous call returned an ara::core::-
+Future with the result set to false might most likely do nothing (except that incidentally in this minimal time frame a new request came in).
+Note that the binding implementation is free to decide, whether it dispatches the method call event to your service method implementation within the thread context in which you called ProcessNextMethodCall, or whether it does spawn a separate thread for this method call.
+
+这个简单的例子假设实时应用程序知道其`服务方法`的`最坏运行时间（以及总体时间片）`，但这并非不可能！
+**返回的ara::core::Future的布尔值由通信管理设置为true，表示队列中确实有一个未完成的请求已经被处理，否则设置为false。**
+这是一个相对方便的指示，告诉应用程序开发人员，即使请求队列为空，也不要重复调用ProcessNextMethodCall。
+因此，在之前的调用返回一个结果为`false`的`ara::core::Future`后，直接调用`ProcessNextMethodCall`可能大多数情况下不会执行任何操作（除非在这个极短的时间段内恰好有新的请求进来）。
+请注意，绑定实现可以自由决定是否在调用`ProcessNextMethodCall`的线程上下文中，将方法调用事件分派到您的服务方法实现中，或者是否为此方法调用生成一个单独的线程。
+
+`AUTOSAR Binding Implementer Hint`
+The explanation up to this point regarding the request processing mode `MethodCallProcessingMode.kPoll` will have a huge impact on the binding implementation!
+The fundamental idea of this mode to rule out context switches to a process containing a service implementation caused by Communication Management events (incoming service method calls) has some consequences for AP products based on typical operating systems: There are constraints for the location of the queue, which has to collect the service method call requests until they are consumed by the polling service implementation.
+The queue must be realized either outside of the address space of the service provider application or it must be located in a shared memory like location, so that the sending part is able to write directly into the queue. Typical solutions of placing the queue outside of the service provider address space would be
+• Kernel space. If the binding implementation would use socket or pipe mechanisms, the kernel buffers being the target of the write-call would resemble the queue. Adapting/configuring maximal sizes of those buffers might in typical OS mean recompiling the kernel.
+• User address space of a different binding/Communication Management demon-application. Buffer space allocation for queues allocated within user space could typically be done more dynamic/flexible.
+In comparison to a shared memory solution the access from the polling service provider to those queue location might come with higher costs/latency.
+
+到目前为止关于请求处理模式`MethodCallProcessingMode.kPoll`的解释对于绑定实现将产生巨大影响！
+这种模式的基本思想是：`排除`由通信管理事件（传入的服务方法调用）引起的对包含服务实现的进程的`上下文切换`，这对基于典型操作系统的AP产品有一些影响：对于收集服务方法调用请求直到它们被轮询服务实现消耗的队列的位置有一些约束。
+队列必须要么实现在服务提供者应用程序的地址空间之外，要么必须位于共享内存位置，以便发送方能够直接写入队列。
+将队列放在服务提供者地址空间之外的典型解决方案可能包括：
+- 内核空间。
+  如果绑定实现使用套接字或管道机制，作为写调用目标的内核缓冲区将类似于队列。
+  调整/配置这些缓冲区的最大大小在典型操作系统中可能意味着重新编译内核。
+- 不同绑定/通信管理守护应用程序的用户地址空间。
+  在`用户空间`内`分配用于队列的缓冲区空间`可以更加动态/灵活地完成。
+与共享内存解决方案相比，从轮询服务提供者到队列位置的访问可能会带来更高的成本/延迟。
+`ProcessNextMethodCall()`，用于处理当前队列头部的一个任务
+// provided service instance端，处理future队列中的任务
+// 返回值的true：表示任务执行成功，false表示失败、也表示没任务
+```cpp
+    virtual ara::core::Future<bool> ProcessNextMethodCall() override
+    {
+        if (delegates_.size() != 0) {
+            std::list<ServiceBase*>::iterator last_iterator = it_;
+            do {
+                if (it_ == delegates_.end()) {
+                    it_ = delegates_.begin();
+                }
+
+                ara::core::Future<bool> result = (*it_)->ProcessNextMethodCall();   // ProcessNextMethodCall()是skeleton端需要重载的函数
+                it_++;
+
+                if (!result.is_ready()) {
+                    return result;
+                } else if (result.get()) {
+                    ara::core::Promise<bool> promise;
+                    promise.set_value(true);
+                    return promise.get_future();
+                }
+            } while (it_ != last_iterator);
+        }
+
+        ara::core::Promise<bool> promise;
+        promise.set_value(false);
+        return promise.get_future();
+    }
+```
+在`ProcessNextMethodCall()`方法中，根据底层通信协议的不同，一般应包含如下步骤：
+- 将method`request`数据`反序列化`
+- 将反序列化后的参数列表传入`用户的method实现`，得到一个Future：在用户的方法实现可能是同步的；也可能是异步的
+通过用户method实现返回的Future`拿到处理结果`
+- 将这个结果`序列化`成`response`，发送给Proxy
+- 检查`是否存在下一个method请求`，如果是返回true，否则返回false
+
+在以上的步骤中，有两次返回Future：`用户method处理实现返回`和`ProcessNextMethodCall`返回，这两处只要有一处是异步的，则整个method请求的处理就是异步的。
+序列化、反序列化、检查是否有下一个请求等步骤 可以在ProcessNextMethodCall的当前线程，也可以异步执行；
+用户method处理方法中，可以先返回Future，然后异步执行处理，也可以在ProcessNextMethodCall同一个线程中同步完成。ProcessNextMethodCall所在的线程、序列化/反序列化/调用用户实现/返送返回值的线程、用户实际处理method的线程，这三个上下文可以是同一个线程，可以是两个线程，也可以是三个不同的线程。
+
+
+#### 6.3.3.2 Event-Driven Mode
+If you set the processing mode to `kEvent` or `kEventSingleThread`, the Communication Management implementation will `dispatch events asynchronously` to the service method implementations at the time the service call from the service consumer comes in.
+
+Opposed to the `kPoll` mode, here the service consumer implicitly controls/triggers service provider process activations with their method calls!
+What is then the difference between kEvent and kEventSingleThread? kEvent means, that the Communication Management implementation may call the service method implementations concurrently.
+That means for our example: If — at the same point in time — one call to method Calibrate and two calls to method Adjust arrive from different service consumers, the Communication Management implementation is allowed to take three threads from its internal thread-pool and do those three calls for the two service methods concurrently.
+那么kEvent和kEventSingleThread之间的区别是什么呢？
+**`kEvent`表示通信管理实现可以`并发 调用服务方法实现`。**
+对于我们的例子来说：如果在同一时间点，来自不同服务消费者的一个对Calibrate方法的调用和两个对Adjust方法的调用同时到达，通信管理实现可以从其内部线程池中获取三个线程，并同时执行这两个服务方法的三个调用。
+
+On the contrary the mode `kEventSingleThread` assures, that on the service instance `only one service method at a time will be called by` the Communication Management implementation.
+That means, Communication Management implementation has to `queue incoming service method call events for the same service instance and dispatch them one after the other.`
+Why did we provide those two variants? 
+From a functional viewpoint only `kEvent` would have been enough! 
+A service implementation, where certain service methods could not run concurrently, because of shared data/consistency needs, could simply do its synchronization (e.g. via std::mutex) on its own!
+The reason is “efficiency”. If you have a service instance implementation, which has extensive synchronization needs, i.e. would synchronize almost all service method calls anyways, it would be a total waste of resources, if the Communication Management would “spend” N threads from its thread-pool resources, which directly after get a hard sync, sending N-1 of it to sleep.
+`！！！为什么要提供单线程模式？？？`
+一个服务实现，由于`共享数据/一致性需求`，某些服务方法`不能并发运行`，可以简单地在自己的服务方法上进行同步（例如通过std::mutex）！原因是“效率”。
+如果您有一个服务实例实现，它具有广泛的同步需求，即几乎所有服务方法调用都需要同步，那么如果通信管理“花费”了N个线程从其线程池资源中，然后直接进行严格的同步，**将N-1个线程置于休眠状态，这将是一种资源的浪费**。
+（PS：大量的线程间同步，使得并行退化为串行了）
+
+For service implementations which lie in between — i.e. some methods can be called concurrently without any sync needs, some methods need at least partially synchronization — the service implementer has to decide, whether he uses kEvent and does synchronization on top on his own (possibly optimizing latency, responsiveness of his service instance) or whether he uses kEventSingleThread, which frees him from synchronizing on his own (possibly optimizing ECU overall throughput).
+
+对于介于两者之间的服务实现——即一些方法可以并发调用而无需同步，而一些方法至少部分需要同步——服务实现者必须决定是使用`kEvent`并在自己的基础上进行同步（可能优化其服务实例的延迟和响应性），还是使用`kEventSingleThread`，这样就不需要自行进行同步（可能优化ECU的整体吞吐量）。
+这取决于服务实现者对于性能和资源利用的不同考量，以满足其特定的需求和优化目标。
+
+### 6.3.4 Methods
+Service methods on the skeleton side are abstract methods, which have to be `overwritten` by the service implementation sub-classing the skeleton. Let’s have a look at the Adjust method of our service example:
+```cpp
+struct AdjustOutput {
+  bool success;
+  Position effective_position;
+};
+
+virtual ara::core::Future<AdjustOutput> Adjust(const Position& position) = 0;
+```
+在这种情况下，服务方法的抽象定义中的输入参数直接映射到骨架抽象方法签名的方法参数中。
+在这里，它是来自类型Position的position参数，由于它是一个`非原始类型`，因此被建模为`“const ref”`。
+方法签名中有趣的部分是返回类型。
+服务方法的实现必须返回我们之前讨论过的ara::core::Future。
+这个想法很简单：我们不想强迫服务方法的实现者通过简单返回这个“入口点”方法来表示服务方法的完成。
+通过返回`ara::core::Future`，可以更灵活地处理服务方法的完成状态，而不仅仅是通过简单的返回值来表示。
+
+也许服务实现者决定将服务调用的实际处理分派给一个中央工作线程池！
+当“入口点”方法的返回信号服务调用的完成给通信管理时，这将会非常麻烦。
+在我们的工作线程池场景中，我们将不得不在服务方法内部的某个等待点阻塞，并等待来自工作线程的通知，表明它已经完成，然后我们才会从服务方法返回。
+`在这种情况下，我们将在服务方法内部有一个被阻塞的线程！`
+从现代多核CPU的高效利用的角度来看，这是不可接受的。
+因此，通过返回`ara::core::Future`，可以避免在服务方法内部阻塞线程，提高CPU的利用率和系统的性能。
+
+(这段描述指出了在服务方法实现中避免阻塞线程的重要性。通过返回ara::core::Future而不是在服务方法内部阻塞线程等待处理完成的通知，可以提高系统的效率和性能。如果服务方法的实现需要将实际处理分派给工作线程池，通过Future可以更好地管理异步操作，避免在服务方法内部阻塞线程。这种设计可以更好地利用现代多核CPU的性能，避免不必要的资源浪费和性能下降。因此，通过返回Future，服务实现者可以更灵活地处理服务调用的完成状态，同时保持系统的高效性和性能。
+主要说明用future的好处
+)
+The returned ara::core::Future contains a structure as template parameter, which aggregates all the OUT-parameters of the service call.
+The following two code examples show two variants of an implementation of Adjust.
+- In the first variant the service method is directly processed synchronously in the method body, so that an ara::core::Future with an already set result is returned, 
+- while in the second example, the work is dispatched to an asynchronous worker, so that the returned ara::core::Future may not have a set result at return.
+
+(The referenced object is provided by the Communication Management implementation until the service method call has set its promise (valid result or error). If the service implementer needs the referenced object beyond that, he has to make a copy.)
+
+返回的ara::core::Future包含一个结构作为模板参数，该结构聚合了服务调用的所有输出参数。
+下面的两个代码示例展示了Adjust方法的两种实现变体。
+在第一种变体中，服务方法`直接在函数体中同步处理`，因此返回一个已经设置结果的`ara::core::Future`；
+```cpp
+class RadarServiceImpl : public RadarServiceSkeleton {
+public:
+  Future<AdjustOutput> Adjust(const Position& position) {
+    ara::core::Promise<AdjustOutput> promise;
+    struct AdjustOutput out = doAdjustInternal(position, &out.effective_position);
+      promise.set_value(out);
+    // we return a future from an already set promise...
+    return promise.get_future();
+  }
+};
+```
+
+而在第二个示例中，`工作被分派给一个异步工作线程`，因此返回的ara::core::Future在返回时可能没有设置结果。
+（通信管理实现提供了引用对象，直到服务方法调用设置了其承诺（有效结果或错误）。
+如果服务实现者需要在此之后使用引用对象，他必须进行复制。）
+```cpp
+Future<AdjustOutput> Adjust(const Position& position) {
+  ara::core::Promise<AdjustOutput> promise;
+  auto future = promise.get_future();
+  std::thread t(
+      [this] (const Position& pos, ara::core::Promise prom) {
+        prom.set_value(doAdjustInternal(pos));
+      },
+      std::cref(position), std::move(promise)).detach();
+
+    return future;
+}
+```
+
+#### 6.3.4.1 One-Way aka Fire-and-Forget Methods
+“One-way/fire-and-forget” methods on the server/skeleton side do have (like on the proxy side) a simpler signature compared to normal methods.
+Since there is no feedback possible/needed towards the caller it is a simple void method:
+```cpp
+virtual void LogCurrentState() = 0;
+```
+
+
+#### 6.3.4.2 Raising Application Errors
+Whenever on the implementation side of a service method, an `ApplicationError` — according to the interface description — is detected, `the Checked Exception representing this ApplicationError simply has to be stored into the Promise`, from which the Future is returned to the caller:
+```cpp
+Future<CalibrateOutput> Calibrate(const std::string& configuration) {
+  ara::core::Promise<CalibrateOutput> promise;
+  auto future = promise.get_future();
+  if (!checkConfigString(configuration)) {
+      // given arg is invalid:
+      // assume that in ARXMLs we have ErrorDomain with name SpecificErrors
+      // which contains InvalidConfigString error.
+      // Note that numeric error code will be casted to ara::core::ErrorCode implicitly. promise.SetError(SpecificErrorsErrc::InvalidConfigString); }
+  }
+  else {...}
+
+return future;
+}
+```
+
+### 6.3.5 Events
+On the skeleton side the service implementation is in charge of `notifying about occurrence of an event`.
+As shown in 6.15 the skeleton provides a member of an event wrapper class per each provided event.
+The event wrapper class on the skeleton/event provider side looks obviously different than on the proxy/event consumer side.
+```cpp
+class BrakeEvent {
+public:
+  using SampleType = RadarObjects;
+
+  void Send(const SampleType& data);
+
+  ara::com::SampleAllocateePtr<SampleType> Allocate();
+
+  /*
+    After sending data, 
+    you loose ownership
+    and can’t access the data through the SampleAllocateePtr anymore.
+    Implementation of SampleAllocateePtr will be with the semantics of std::unique_ptr (see types.h)
+  */
+  void Send(ara::com::SampleAllocateePtr<SampleType> data);
+};
+```
+The using directive — analogue to the Proxy side — just introduces the common name SampleType for the concrete data type of the event. We provide two different variants of a “Send” method, which is used to send out new event data. The first one takes a reference to a SampleType.
+This variant is straight forward: 
+The event data has been `allocated` somewhere by the service application developer and is given via reference to the binding implementation of `Send()`.
+After the call to send returns, the data might be removed/altered on the caller side. The binding implementation will make a copy in the call.
+The second variant of ’Send‘ also has a parameter named “data”, but this is now of a different type `ara::com::SampleAllocateePtr<SampleType>`. According to our general approach to only provide abstract interfaces and eventually provide a proposed mapping to existing C++ types (see section 5.3) this pointer type, we introduced here, shall behave like a `std::unique_ptr<T>`.
+这段文本描述了在一个系统中使用代理模式时的一种情况。
+在这个系统中，使用指令指示符（using directive）引入了一个名为 SampleType 的通用名称，用于表示事件的具体数据类型。
+系统提供了两种不同的“Send”方法变体，用于发送新的事件数据。
+* 第一种变体接受一个`对 SampleType 的引用`。
+  这种方式很直接：事件数据 由服务应用程序开发人员在某处分配，并通过引用传递给`Send()`的绑定实现。
+  在调用 Send 后，数据可能会在调用方被移除/更改。绑定实现将在调用中进行复制。
+
+* 第二种“Send”方法的变体也有一个名为“data”的参数，但这次是一个不同类型的参数 `ara::com::SampleAllocateePtr<SampleType>`。
+  根据系统提供的一般方法，只提供抽象接口并最终提供对现有 C++ 类型的映射，这里引入的指针类型应该表现得像一个 `std::unique_ptr<T>`。
+
+That roughly means: Only one party can hold the pointer - if the owner wants to give it away, he has to explicitly do it via `std::move`.
+So what does this mean here? Why do we want to have `std::unique_ptr<T>` semantics here?
+To understand the concept, we have to look at the third method within the event wrapper class first:
+```cpp
+ara::com::SampleAllocateePtr<SampleType> Allocate();
+
+// 旧版VECTOR的实现：
+// VECTOR Next Line VectorC++-V6-6-1: MD_SOCAL_VectorC++-V6-6-1_AbortWithSingleReturnStatement
+::ara::com::SampleAllocateePtr<SampleType> Allocate() noexcept { return std::make_unique<SampleType>(); }
+```
+The event wrapper class provides us here with a method to `allocate memory` for one sample of event data.
+It returns a smart pointer `ara::com::SampleAllocateePtr <SampleType>`, which points to the allocated memory, where we then can write an event data sample to.
+And this returned smart pointer we can then give into an upcoming call to the second version of “Send”.
+So — the obvious question would be — why should I let the binding implementation do the memory allocation for event data, which I want to notify/send to potential consumers?
+The answer simply is: `Possibility for optimization of data copies.`
+The following “over-simplified” example makes things clearer: Let’s say the event, which we talk about here (of type RadarObjects), could be quite big, i.e. it contains a vector, which can grow very large (say hundreds of kilobytes).
+In the first variant of “Send”, you would allocate the memory for this event on your own on the `heap` of your own application process.
+Then — during the call to the first variant of “Send” — the binding implementation has to copy this event data from the (private) process heap to a memory location, where it would be accessible for the consumer.
+If the event data to copy is very large and the frequency of such event occurrences is high, the sheer runtime of the data copying might hurt.
+The idea of the combination of `Allocate()` and the second variant to send event data (`Send(SampleAllocateePtr<SampleType> data)`) is to eventually avoid this copy!
+A smart binding implementation might implement the Allocate() in a way, that it allocates memory at a location, where writer (service/event provider) and reader (service/event consumer) can both directly access it! So an `ara::com::SampleAllocateePtr<SampleType>` is a pointer, which points to memory nearby the receiver.
+Such locations, where two parties can both have direct access to, are typically called `“shared memory”.`
+The access to such regions should — for the sake of data consistency — be synchronized between readers and writers.
+This is the reason, that `the Allocate()` method returns such a smart pointer with the aspects of single/solely user of the data, which it points to: After the potential writer (service/event provider side) has called `Allocate()`, he can access/write the data pointed to as long as he hands it over to the second send variant, where he explicitly gives away ownership!
+This is needed, because after the call, the readers will access the data and need a consistent view of it.
+这段文本描述了事件包装类提供的一种方法，用于为事件数据的一个样本分配内存。
+它返回一个智能指针 `ara::com::SampleAllocateePtr <SampleType>`，指向已分配的内存，我们可以在其中写入事件数据样本。然后，我们可以将这个返回的智能指针传递给下一个调用第二版本的“Send”。
+为什么要让绑定实现来为我想要通知/发送给潜在消费者的事件数据进行内存分配呢？答案很简单：数据拷贝的优化可能性。
+举个简单的例子来解释：假设我们这里讨论的事件（类型为 RadarObjects）可能非常庞大，比如包含一个可以变得非常大（比如数百千字节）的向量。
+在第一个“Send”变体中，您将在您自己应用程序进程的堆上为此事件分配内存。然后，在调用第一个“Send”时，绑定实现必须将此事件数据从（私有）进程堆复制到一个内存位置，以便消费者可以访问。
+如果要复制的事件数据非常大，并且事件发生的频率很高，那么数据复制的运行时间可能会影响性能。
+`Allocate()` 和第二个发送事件数据的变体（`Send(SampleAllocateePtr<SampleType> data)`）的组合的想法是`最终避免这种复制`！
+一个智能的绑定实现可能会以一种方式实现 `Allocate()`，在这种方式下，它会在一个位置分配内存，写入者（服务/事件提供者）和读取者（服务/事件消费者）都可以直接访问！因此，`ara::com::SampleAllocateePtr<SampleType>` 是一个指针，指向接收者附近的内存。
+这种双方都可以直接访问的位置通常被称为“共享内存”。为了数据一致性，这些区域的访问应该在读取者和写入者之间进行同步。
+这就是为什么 `Allocate()` 方法返回具有单一用户/`独占`用户方面的智能指针的原因：潜在的写入者（服务/事件提供者方）调用 `Allocate()` 后，他可以访问/写入指向的数据，只要他将其移交给第二个发送变体，那里他明确放弃所有权！
+这是必要的，因为在调用之后，读取者将访问数据并需要一个一致的视图。
+
+```cpp
+using namespace ara::com;
+
+RadarServiceImpl myRadarService;
+
+// Handler called at occurrence of a BrakeEvent
+void BrakeEventHandler() {
+  // let the binding allocate memory for event data...
+  SampleAllocateePtr<BrakeEvent::SampleType> curSamplePtr = myRadarService.BrakeEvent.Allocate();
+  
+  // fill the event data ...
+  curSamplePtr->active = true;
+  fillVector(curSamplePtr->objects);
+  
+  // Now notify event to consumers ...
+  myRadarService.BrakeEvent.Send(std::move(curSamplePtr));
+
+  // Now any access to data via curSamplePtr would fail -
+  // we’ve given up ownership!
+}
+```
+
+`AUTOSAR Binding Implementer Hint`
+The idea behind the concept of providing a binding specific “Allocate” functionality was greatly driven by the “zero-copy” buzzword.
+Having a shared memory based IPC transport mechanism the “zero-copy” axiom might be easily fulfill-able at first glance. The `ara::com::SampleAllocateePtr<SampleType>` mechanism foresees/assumes a hard synchronization between readers/writers anyway, so the challenge in implementation isn’t that big, if the platform provides shared memory concepts anyway.
+But in reality you have to be aware of serialization needs (section 9.1), which can ruin any “zero-copy” attempts, which we did also hint at explicitly in subsection 9.1.1.
+The work-around would be to either rule out serialization needs between ara::com communication partners in an deployment by prescribing compile settings in a way, that exchanged data types are binary compatible or at least to implement some smart checking logic to detect, between which ara::com communication partners in fact serialization is not needed.
+
+这一理念主要受到`“zero-copy”`这个概念的推动。
+通过基于`共享内存`的IPC传输机制，一开始看起来“zero-copy”是可以轻松实现的。
+`ara::com::SampleAllocateePtr<SampleType>`机制预见/假设读者/写者之间存在严格的同步，因此在实现上的挑战并不大，只要平台本身提供了共享内存的概念。
+但实际上，你必须意识到`序列化的需求`（第9.1节），这可能会破坏任何“zero-copy”的尝试，我们在第9.1.1小节中也明确指出了这一点。解决方法可以是在部署中通过编译设置规定交换数据类型是二进制兼容的，或者至少实现一些智能检查逻辑来检测哪些 ara::com 通信伙伴之间实际上不需要序列化。
+
+
+
+### 6.3.6 Fields
+On the skeleton side the service implementation is in charge of
+* updating and notifying about changes of the value of a field.
+* serving incoming Get() calls.
+* serving incoming Set() calls.
+As shown in 6.15 the skeleton provides a member of a field wrapper class per each provided field. The field wrapper class on the skeleton/field provider side looks obviously different than on the proxy/field consumer side.
+On the service provider/skeleton side the service specific field wrapper classes are defined within the namespace fields directly beneath the namespace skeleton. Let’s have a deeper look at the field wrapper in case of our example event UpdateRate:
+```cpp
+class UpdateRate {
+public:
+  using FieldType = uint32_t;
+
+  void Update(const FieldType& data); // 等价于event中的Send()
+
+/*
+  If no Getter is registered ara::com is responsible for responding to the request using the last value set by update.
+  This implicitly requires at least one call to update after initialization of the Service, before the service is offered. This is up to the implementer of the service.
+  如果没有注册Getter，ara::com 将负责使用 update 设置的最后一个值来响应请求。
+  这就隐含地要求在初始化服务后、提供服务前至少调用一次 update。这取决于服务的实现者。
+*/ 
+  void RegisterGetHandler(std::function<ara::core::Future<FieldType>()> getHandler);
+
+/*
+  Registering a SetHandler is mandatory, if the field supports it.
+  The handler gets the data the sender requested to be set. It has to validate the settings and perform an update of its internal data. The new value of the field should than be set in the future.
+  The returned value is sent to the requester and is sent via notification to all subscribed entities.
+*/
+  void RegisterSetHandler(std::function<ara::core::Future<FieldType>(const FieldType& data)> setHandler);
+};
+```
+The using directive — again as in the Event Class and on the Proxy side — just introduces the common name FieldType for the concrete data type of the field.
+We provide an `Update `method by which the service implementer can update the current value of the field.
+It is very similar to the simple/first variant of the `Send` method of the event class: The field data has been allocated somewhere by the service application developer and is given via reference to the binding implementation of Update.
+After the call to Update returns, the data might be removed/altered on the caller side. The binding implementation will make a (typically serialized) copy in the call.
+In case “on-change-notification” is configured for the field, notifications to subscribers of this field will be triggered by the binding implementation in the course of the Update call.
+通过using——就像在事件类和代理端一样——引入了一个通用名称 FieldType，用于表示字段的具体数据类型。
+我们提供了一个 Update 方法，通过这个方法，服务的实现者可以更新字段的当前值。
+这个方法与事件类的简单/第一个变体的 Send 方法非常相似：
+field数据在服务应用程序开发人员的某个地方被分配，并通过引用传递给 Update 的绑定实现。
+在调用 Update 后，数据可能会在调用方被移除/修改。绑定实现将在调用中创建一个（通常是序列化的）副本。
+如果为字段配置了“`在变化时通知`”，则在 Update 调用过程中，绑定实现将触发对该字段订阅者的通知。
+
+#### 6.3.6.1 Registering Getters
+The `RegisterGetHandler` method provides the possibility to register a method implementation by the service implementer, which gets then called by the binding implementation on an incoming Get() call from any proxy instance.
+The RegisterGetHandler method in the generated skeleton does only exist in case availability of “field getter” has been configured for the field in the IDL!（模型中配置的话，才生成相应的函数接口）
+`Registration` of such a “GetHandler” is fully `optional`! 
+Typically there is no need for a service implementer to provide such a handler. The binding implementation always has access to the latest value, which has been set via Update. So any incoming Get() call can be served by the Communication Management implementation standalone.
+A theoretical reason for a service implementer to still provide a “GetHandler” could be: Calculating the new/current value of a field is costly/time consuming. Therefore the service implementer/field provider wants to defer this process until there is really need for that value (indicated by a getter call). In this case he could calculate the new field value within its “GetHandler” implementation and give it back via the known ara:com promise/future pattern.
+If you look at the bigger picture, then such a setup with the discussed intention, where the service implementer provides and registers a “GetHandler” will not really make sense, if the field is configured with “on-change-notification”, too.
+In this case, new subscribers will get potentially outdated field values on subscription, since updating of the field value is deferred to the explicit call of a “GetHandler”.
+通常情况下，服务实现者无需提供这样的处理程序。
+绑定实现始终可以访问通过 Update 设置的最新值。因此，任何传入的 Get() 调用都可以由通信管理实现独立提供。
+服务实现者仍需提供 “GetHandler ”的一个理论原因可能是 `计算field的新值/当前值耗费大量时间`。
+因此，服务实现者/字段提供者希望将这一过程推迟到真正需要该值（由获取器调用指示）时再进行。
+在这种情况下，他可以在其 “GetHandler ”实现中计算新的字段值，并通过已知的 ara:com promise/future 模式将其返回。
+从更大的角度来看，如果field也被配置为 “on-change-notification”（变更时通知），那么服务实现者提供并注册一个 “GetHandler”（获取处理程序）的这种设置就不太合理了。
+在这种情况下，`由于字段值的更新会推迟到显式调用 “GetHandler”时进行，因此新用户在订阅时可能会得到过时的field值`。
+
+You also have to keep in mind: In such a setup, with enabled “on-change-notification” together with a registered “GetHandler” the Communication Management implementation will not automatically care for, that the value the developer returns from the “GetHandler” will be synchronized with value, which subscribers get via “on-change-notification” event!
+If the implementation of “GetHandler” does not internally call Update() with the same value, which it will deliver back via ara:com promise, then the field value delivered via “on-change-notification” event will differ from the value returned to the Get() call. I.e.
+the Communication Management implementation will not automatically/internally call Update() with the value the “GetHandler” returned.
+Bottom line: Using RegisterGetHandler is rather an exotic use case and developers should be aware of the intrinsic effect.
+Additionally a user provided “GetHandler”, which only returns the current value, which has already been updated by the service implementation via Update(), is typically very inefficient! The Communication Management then has to call to user space and to additionally apply field serialization of the returned value at any incoming Get() call.
+Both things could be totally “optimized away” if the developer does not register a “GetHandler” and leaves the handling of Get() calls entirely to the Communication Management implementation.
+
+
+您还必须记住： 在这种情况下，如果启用了“on-change-notification”（变更通知）和已注册的 “GetHandler”（获取处理程序），通信管理实现将不会自动考虑开发人员`从 “GetHandler”（获取处理程序）返回的值是否与订阅者通过 “on-change-notification”（变更通知）事件获取的值同步`！
+如果 “GetHandler”的实现没有在内部使用相同的值调用`Update()`（它将通过 ara:com 承诺返回该值），那么通过 “on-change-notification”事件返回的字段值将与调用`Get()`返回的值不同。
+也就是说`通信管理实现不会自动/内部调用 Update() 并使用 “GetHandler”返回的值`。
+一句话 使用 RegisterGetHandler 是一个比较特殊的用例，开发人员应注意其内在影响。
+此外，用户提供的 “GetHandler ”只返回服务实现已通过 Update() 更新的当前值，效率通常很低！通信管理必须调用用户空间，并在任何传入的 Get()调用中额外应用返回值的字段序列化。
+如果开发人员不注册 “GetHandler”，而是将 Get() 调用的处理完全交给通信管理实现，那么这两件事都可以完全 “优化掉”。
+
+
+#### 6.3.6.2 Registering Setters
+Opposed to the RegisterGetHandler the RegisterSetHandler API has to be called by the service implementer in case it exists (i.e. field has been configured with setter support).
+The reason, that we decided to make the registration of a “GetHandler” mandatory is simple: We expect, that the server implementation will always need to check the validity of a new/updated field values set by any anonymous client. A look at the signature of the “SetHandler” `std::function<ara::core::Future<FieldType>(const FieldType& data)>` reveals that the registered handler does get the new value as input argument and is expected to return also a value.
+The semantic behind this is: In case the “SetHandler” always has to return the effective (eventually replaced/corrected) value. This allows the service side implementer to validate/overrule the new field value provided by a client.
+The effective field value returned by the “SetHandler” is implicitly taken over by the Communication Management implementation as if the service implementer had called Update() explicitly with the effective value on its own. That means: An explicit Update() call within the “SetHandler” is superfluous as the Communication Management would update the field value with the returned value of the “SetHandler” anyways.
+
+相对于 RegisterGetHandler，`RegisterSetHandler` API 必须由服务实现者调用（如果存在的话，即字段已配置支持设置操作）（即必须set）。
+注册“GetHandler”是`强制性`的原因很简单：
+我们期望 服务器实现 始终需要 检查由任何匿名客户端设置的 新/更新field值的有效性。
+通过观察“SetHandler”的签名 `std::function<ara::core::Future<FieldType>(const FieldType& data)>`，可以看到注册的处理程序会将新值作为输入参数，并且预期也会返回一个值。
+这背后的语义是：`SetHandler` 必须始终返回`有效的`（可能被替换/校正的）值。
+这使得服务端实现者可以验证/覆盖客户端提供的新字段值。
+由 SetHandler 返回的有效字段值会被通信管理实现隐式接管，就好像服务实现者自己显式调用了`Update()`并传入了有效值一样。
+这意味着：在 SetHandler 中显式调用 Update() 是多余的，因为`通信管理会使用 SetHandler 返回的值更新字段值`。
+
+
+#### 6.3.6.3 Ensuring existence of “SetHandler”
+The existence of a registered “SetHandler” is ensured by an ara:com compliant implementation by returning an unchecked error: If a developer calls OfferService() on a skeleton implementation and had not yet registered a “SetHandler” for each of its fields, which has setter enabled, the Communication Management implementation shall return an unchecked error indicating this programming error.
+符合 ara:com 规范的实现会通过返回`unchecked错误`来确保已注册的“SetHandler”的存在： 
+  如果开发者在骨架实现上调用`OfferService()`，但尚未为每个启用了`setter`的字段注册 “SetHandler”，则通信管理实现应返回一个未选中的错误，表明编程错误。
+
+#### 6.3.6.4 Ensuring existence of valid Field values
+Since the most basic guarantee of a field is, that it has a valid value at any time, ara:com has to somehow ensure, that a service implementation providing a field has to provide a value before the service (and therefore its field) becomes visible to potential consumers, which — after subscription to the field — expect to get initial value notification event (if field is configured with notification) or a valid value on a Get call (if getter is enabled for the field).
+An ara::com Communication Management implementation needs therefore behave in the following way: If a developer calls OfferService() on a skeleton implementation and had not yet called Update() on any field, which
+* has notification enabled
+* or has getter enabled but not yet a “GetHandler” registered
+the Communication Management implementation shall return an unchecked error indicating this programming error.
+Note: The AUTOSAR meta-model supports the definition of such initial values for a field in terms of a so called FieldSenderComSpec of a PPortPrototype. So this model element should be considered by the application code calling `Update()`.
+
+由于`field`最基本的保证是在任何时候都具有有效值，ara::com 必须确保服务实现在服务（以及其字段）对潜在消费者可见之前必须提供一个值。
+消费者在订阅字段后，期望收到初始值通知事件（如果字段配置了通知）或在 Get 调用时收到有效值（如果字段启用了 Getter）。
+ara::com 的通信管理实现需要按照以下方式行事：如果开发人员在骨架实现上调用`OfferService()`，但尚未对任何字段调用 Update()，而这些字段
+* 启用了通知
+* 或启用了 Getter 但尚未注册“GetHandler”
+通信管理实现应返回一个未经检查的错误，指示这个编程错误。
+值得注意的是：AUTOSAR AP元模型支持通过 `PPortPrototype` 的 `FieldSenderComSpec` 定义字段的初始值。
+因此，应用代码在调用 `Update()` 时应考虑这个模型元素。
+也就是说，skeleton端，要在`OfferService`之前，在SetHandler那些初始化阶段就调用`Update`来设置初值
+
+
+
+#### 6.3.6.5 Access to current field value from Get/SetHandler
+Since the underlying field value is only known to the middleware, the current field value is not accessible from the “`Get/SetHandler`” implementation, which are on application level.
+If the “Get/SetHandler” needs to read the current field value, the skeleton implementation must provide a field value replica accessible from application level.
+用户层无法直接获取当前的初值，因为用户只能通过用户层回调获取（skeleton底层实现要把维护的底层的field的值拷贝出来）。
 
 
 
@@ -827,6 +1504,66 @@ Currently there are no requirements for such functionalities, so this chapter is
 
 
 
+
+
+# 8 Raw Data Streaming Interface
+## 8.1 Introduction
+The Adaptive AUTOSAR Communication Management is based on `Service Oriented communication`.
+This is good for implementing platform independent and dynamic applications with a service-oriented design. For ADAS applications, it is important to be able to transfer raw binary data streams over Ethernet efficiently between applications and sensors, where service oriented communication (e.g. SOME/IP, DDS) either creates unnecessary overhead for efficient communication, or the sensors do not even have the possibility to send anything but
+raw binary data.
+The Raw Data Binary Stream API provides a way to send and receive Raw Binary Data Streams, which are sequences of bytes, without any data type. They enable efficient communication with external sensors in a vehicle (e.g. sensor delivers video and map data in "Raw data" format). The communication is performed over a network using sockets.
+From the ara::com architecture point of view, Raw Data Streaming API is static, i.e. its is not generated. It is part of the ara::com namespace, but is independent of the ara::com middleware services.
+Adaptive AUTOSAR Communication Management基于“面向服务的通信”。
+这对于实现基于服务设计的平台无关和动态应用程序非常有用。
+对于`ADAS应用程序`，能够在`应用程序`和`传感器之间`高效地通过以太网传输`原始二进制数据流`非常重要，而面向服务的通信（例如SOME/IP、DDS）可能会为高效通信带来不必要的开销，或者传感器甚至没有发送除原始二进制数据之外的任何可能性。
+`原始数据二进制流API`提供了一种发送和接收原始二进制数据流的方式，这些数据流是`字节序列`，`没有任何数据类型`。它们使得能够与车辆中的外部传感器进行高效通信（例如，传感器以“原始数据”格式提供视频和地图数据）。
+通信是通过`套接字`在`网络上`执行的。
+从ara::com架构的角度来看，原始数据流API是静态的，即它不是生成的。
+`它是ara::com命名空间的一部分，但独立于ara::com中间件服务。
+
+
+
+### 8.1.1 Functional description
+`The Raw Data Binary Stream API` can be used in both the client or the server side.
+The functionality of both client and server allow to send and receive.
+The only difference is that `the server` can `wait for connections` but `cannot actively connect to a client`.
+On the other side, the client can `connect to a server` (`that is already waiting for connections`)
+but the client cannot wait for connections.
+The usage of the Raw Data Binary Streams API from Adaptive Autosar must follow this sequence:
+* As client
+1. `Connect`:
+  Establishes connection to sensor
+2. `ReadData/WriteData`:
+  Receives or sends data
+3. `Shutdown`:
+  Connection is closed.
+
+* As server
+1. `WaitForConnection`:
+  Waits for incoming connections from clients
+2. `ReadData/WriteData`:
+  Receives or sends data
+3. `Shutdown`:
+  Connection is closed and stops waiting for connections.
+
+## 8.2 Class and Model
+### 8.2.1 Class and signatures
+The class `ara::com::raw` defines a `RawDataStream` class for reading and writing binary data streams over a network connection using sockets. The client side is an object of the class class ara::com::raw::RawDataStreamClient and the server side is `ara::com::raw::RawDataStreamServer`
+
+#### 8.2.1.1 Constructor
+The constructor takes as input the instance specifier qualifying the network binding and parameters for the instance.
+```cpp
+RawDataStreamClient(const ara::com::InstanceSpecifier& instance);
+RawDataStreamServer(const ara::com::InstanceSpecifier& instance);
+```
+
+#### 8.2.1.2 Destructor
+Destructor of RawDataStream.
+If the connection is still open, it will be shut down before destroying the RawDataStream object.
+```cpp
+~RawDataStreamClient();
+~RawDataStreamServer();
+```
 
 
 

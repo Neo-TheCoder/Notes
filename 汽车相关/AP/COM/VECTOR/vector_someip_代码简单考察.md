@@ -3697,7 +3697,7 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
 
 
 ## `ReceiveHandlerService1Event1`
-### `Update()`, 后续被取消
+### `Update()`, 后续被取消，不再沿用
 `ProxyEvent`的接口，调用了更底层的`Update`，注意IPC SOME/IP都有自己的Update()实现
 更新用户可见的内存
 ```cpp
@@ -3918,7 +3918,7 @@ PS:
 (PS: 实际上，历史的历史的每一个event都需要有一个编号，这些序号都是用来作差的)
 比如说，skeleton先启动一顿狂发5个event，`invisible_sample_cache_`全存储下来了: 0, 1, 2, 3, 4, 5
 而`Subscribe`时设置的`visible_cache`大小为1，则只保留1个
-然后设置一个skip值，便于for循环，跳过不需要管的老的几个数据
+然后设置一个skip值，便于for循环，跳过不需要管的、老的几个数据
 因为`invisible_sample_cache_`存储时，是新的在最后面
 `invisible_sample_cache_`中很可能是未经反序列化的数据，因此调用更底层的`GetSample`得到反序列化后的数据
 然后经过`filter`筛选，得到实际数据，经过筛选条件后塞入`visible_cache`(实际上是把`shared_ptr`塞进去了，塞进去可以延长生命周期)
@@ -4000,7 +4000,6 @@ PS:
 观察到序号一直增长，但是`invisible_sample_cache_`的size应该是限定在Subscribe的长度了(通过`assert`)，也就是一直为1，但是序号仍然在记录，是什么意思？
 
 
-
 ```cpp
   /*!
    * \brief       Retrieves stored deserialized sample or performs deserialization
@@ -4078,9 +4077,6 @@ PS:
 
 
 
-
-
-
 ### `GetCachedSamples()`
 直接就把`visible_sample_cache_`返回出去，注意到，返回的是`const类型`
 ```cpp
@@ -4091,7 +4087,6 @@ PS:
     return visible_sample_cache_;
   }
 ```
-
 
 
 
@@ -4128,7 +4123,6 @@ PS: `max_samples`是`Subscirbe()`的入参
 取的是当前`invisible`里面的`n`个数据(`n`为`Subscribe的入参`)
 
 **核心在于，给`OnEvent`接口收到的event数据每一个进行了编号**
-
 
 
 ## 新版的`GetNewSamples`
@@ -4450,16 +4444,7 @@ PS: `max_samples`是`Subscirbe()`的入参
 
 
 
-
-
-
-
-
-
-
-
 **`ReceiveHandlerService1Event1()`的实现**
-
 调用  **parameter_service_interfaceProxy**  类型的指针指向对象的  **ParameterNotificationEvent**  成员的`GetCachedSamples()`，得到cache（vector）对象的引用。
 
 

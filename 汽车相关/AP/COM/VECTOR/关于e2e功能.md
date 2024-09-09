@@ -65,15 +65,6 @@ In addition to the single E2E-Profiles a E2E-Statemachine evaluates the returned
 
 
 
-
-
-
-
-
-
-
-
-
 # 先看下下proxy端接收数据时的链路
 当`Runtime`、`Skeleton`、`Proxy`对象（find service时成功时构造）都成功构造时
 Proxy端的reactor线程，通过`epoll`，监听若干和someipd建立的unix domain socket的可读事件.
