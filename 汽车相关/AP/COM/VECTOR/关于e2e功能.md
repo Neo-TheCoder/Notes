@@ -1,9 +1,44 @@
 # 文档介绍
-# AUTOSAR
+# AUTOSAR E2EProtocolSpecification
+# 概述
+端到端(E2E)通信保护的概念假设，与`安全相关`[1]的数据交换在运行时应受到保护，防止通信链路上故障的影响.
+这类故障的例子包括：
+* `随机硬件故障`（例如，CAN收发器的寄存器损坏）、干扰（例如，由于电磁兼容性(EMC)引起）、
+* `较低通信层`的`系统性故障`（例如，RTE、IOC、COM和网络协议栈）。
+
+端到端(E2E)通信保护 仅限于`周期性`或`半周期性`数据通信模式，其中接收方期望定期接收数据，并且在发生通信`丢失`/`超时`或`错误`时，会执行错误处理。
+如果用于保护（发送方）或检查（接收方）数据的任何一个E2E功能不是周期性地被调用，那么某些通信故障模式（如丢失、延迟）可能无法被检测到。
+
+以下E2E参数的值由标准定义，并且不应更改：
++ dataIdMode
++ counterOffset
++ crcOffset
++ dataIdNibbleOffset
++ offset
+不建议在客户端-服务器通信中使用E2E Profiles 1、2、11和22。
+
+
 # 6 Functional specification
-This chapter contains the specification of the internal functional behavior of the E2E supervision, this includes how the layout of the E2E-Header is defined, how the E2E-Header is created and how the E2E-Header is evaluated, and how the E2E-Statemachine is defined. For general introduction of the E2E supervision, see chapter 1.
+This chapter contains the specification of the internal functional behavior of the E2E supervision, this includes
+how the `layout of the E2E-Header` is defined,
+how the E2E-Header is created and
+how the E2E-Header is evaluated, and 
+how the `E2E-Statemachine` is defined. For general introduction of the E2E supervision, see chapter 1.
+
 
 ## 6.1 Overview of communication protection
+通信保护机制的一个重要方面是其标准化程度及其为不同目的提供的灵活性。
+这一需求通过一套E2E配置文件来解决，这些配置文件定义了保护机制的组合、消息格式及一组配置参数。
+此外，某些E2E配置文件具有标准的E2E变体。
+E2E变体简单来说就是与特定E2E配置文件配合使用的一组配置选项。
+例如，在E2E配置文件1中，CRC校验码和计数器的位置是可配置的。
+而E2E变体1A要求CRC从位0开始，计数器从位8开始。
+
+`E2E通信保护的工作流程`如下：
+`发送方`：向传输数据中添加`控制字段`，如`CRC校验码`或`计数器`；
+`接收方`：从接收到的数据中`评估控制字段`，`计算控制字段`（例如，对接收数据进行CRC计算），并将计算出的控制字段与预期/接收到的内容进行`比较`。
+
+
 An important aspect of a communication protection mechanism is its `standardization` and `its flexibility for different purposes`.
 This is resolved by having a set of E2E Profiles, that define a combination of protection mechanisms, a message format, and a set of configuration parameters.
 Moreover, some E2E Profiles have standard `E2E variants`.
@@ -46,6 +81,64 @@ The ’protect’ functionality, simply called the ’protect function’ creates th
 The ’forward’ functionality, simply called the ’forward function’, is similar to the protect function and creates the header for the data to be transmitted but allows the additional replication of a received E2E-State. The main use-case for this function is Signal-Service-Translation where e.g. a E2E-protected signal is received, and the E2E-Status shall be replicated on the outgoing side.
 The ’check’ functionality, simply called the ’check function’, evaluates the E2E-Header of the received message and checks for occurred communication faults. These faults are mirrored in the returned E2E-States.
 In addition to the single E2E-Profiles a E2E-Statemachine evaluates the returned E2E-States over a longer period.
+
+
+
+
+
+
+
+
+
+## 6.8  Specification of E2E Profile 7
+Profile 7应提供以下控制字段，这些字段与受保护的数据一起在运行时传输：长度、计数器、CRC、数据标识符（参见表6.59）。
+![alt text](image-17.png)
+### 6.8.1  Header layout
+![alt text](image-18.png)
+
+在E2E Profile 7的发送端，对于数据元素的首次传输请求，计数器应初始化为0，并且对于之后的每次发送请求应递增1。
+当计数器达到最大值（0xFF’FF’FF’FF）时，下一个发送请求应重新从0开始计数。
+请注意，计数器值0xFF’FF’FF’FF并不保留为特殊无效值，而是作为正常计数值使用。
+
+
+
+
+#### 6.8.4.4 Profile 7 Configuration Type
+|  Member Name   | Type  | Description |
+|  ----  | ----  | ----  |
+| DataID  | Unsigned Integer  | A system-unique identifier of the Data. |
+| Offset  | Unsigned Integer  | Bit offset of the first bit of the E2E header from the beginning of the Data (bit numbering: bit 0 is the least important). The offset shall be a multiple of 8 and 0 <= Offset <= MaxDataLength-(20*8). Example: If Offset equals 8, then the first byte of the E2E Length (32 bit) is written to byte 1, the next byte is written to byte 2 and so on. |
+| MinDataLength  | Unsigned Integer  | Minimal length of Data, in bits. E2E checks that Length is >= MinDataLength. The value shall be >= 20*8 and <= MaxDataLength. |
+| MaxDataLength  | Unsigned Integer  | Maximal length of Data, in bits. E2E checks that DataLength is <= MinDataLength. The value shall be >= MinDataLengthMaximal length of Data, in bits. E2E checks that DataLength is <= MinDataLength. The value shall be >= MinDataLength |
+| MaxDeltaCounter  | Unsigned Integer  | Maximum allowed gap between two counter values of two consecutively received valid Data. |
+
+
+
+#### 6.15.3.1 E2E State Machine Configuration Type
+##### WindowSizeValid
+
+##### WindowSizeInit
+
+##### WindowSizeInvalid
+
+##### MaxErrorStateInit
+
+##### MinOkStateValid
+
+##### MaxErrorStateValid
+
+PS: 可以配置e2e config，供每个event引用
+一个e2e state machine针对一个event
+
+
+
+VECTOR中 必须：
+```
+windowSizeInit == WindowSizeValid == WindowSizeInvalid == WidowSize
+```
+
+
+
 
 
 

@@ -567,6 +567,11 @@ This method expects a parameter maxSampleCount, which basically informs Communic
 `Therefore — with calling this method, you not only tell the Communication Management, that you now are interested in receiving event updates, but you are at the same time setting up a "local cache" for those events bound to the event wrapper instance with the given maxSampleCount.`
 This cache is allocated and filled by the Communication Management implementation, which hands out smartpointers to the application for accessing the event sample data.
 How that works in detail is described in subsubsection 6.2.3.3.
+该方法需要一个`maxSampleCount`参数，该参数主要用于通知通信管理实现，应用程序打算最多保存多少个事件样本。
+因此，通过调用此方法，您不仅可以告诉 “通信管理 ”实现，您现在有兴趣接收事件更新，同时还可以为绑定到事件包装器实例的事件建立 “本地缓存”，缓存的最大采样数是给定的。
+该缓存由 “通信管理 ”实现分配和填充，并将智能指针分配给应用程序，以便其访问事件样本数据。
+具体工作原理将在 6.2.3.3 小节中详细介绍。
+
 
 #### 6.2.3.2 Monitoring Event Subscription
 The call to the Subscribe method is `asynchronous` by nature. This means that at the point in time Subscribe returns, it is just the indication, that the Communication Management has accepted the order to care for subscription.
@@ -639,7 +644,7 @@ those mechanisms may depend on each other or may be tightly coupled implementati
 
 第二个 size_t 类型的参数控制着事件采样的最大数量，这些采样将从中间件缓冲区获取/反序列化，然后以调用 f 的形式呈现给应用程序。
 
-在调用`GetNewSamples()`时，ara::com 实现会首先检查应用程序持有的事件采样数是否已超过其在上次调用 Subscribe() 时承诺的最大值。
+在调用`GetNewSamples()`时，ara::com 实现会首先检查 应用程序持有的事件采样数 是否 已超过 其在上次调用 `Subscribe()` 时承诺的最大值。
 * 如果是，则返回 ara::core::ErrorCode。
 * 否则，ara::com 实现会检查底层缓冲区是否包含`新的事件样本`:
   如果是，则将其反序列化到样本槽中，然后调用应用程序提供的带有指向新事件样本的 SamplePtr 的 f。
@@ -1576,6 +1581,48 @@ If the connection is still open, it will be shut down before destroying the RawD
 
 
 # 9 Appendix
+本节主要面向 ara::com 绑定实现者和 AP 产品供应商。
+因此，我们没有把所有内容都放在一个方框中，而是在前面的注释中加以说明。
+当然，我们也欢迎 ara::com API 用户阅读本节。
+
+序列化（见 [7]）是将`某些数据结构`转换为`标准格式`，以便在发送方与接收方（可能是不同的接收方）之间交换的过程。
+从一个网络节点向另一个网络节点传输数据时，通常会有这种概念。
+当把数据放在网线上并读取回来时，你必须遵循准确的、约定俗成的规则，才能在接收方正确解释数据。对于网络
+对于网络通信用例来说，显然需要一种确定的方法来将进程中的数据表示转换成线格式，然后再转换回来。
+通信的盒子可能基于不同的微控制器，具有不同的内码和不同的数据字大小（16 位、32 位、64 位），因此采用完全不同的排列方式。
+在 AUTOSAR CP 中，序列化通常不用于`平台内部/节点内部`通信！
+在这里，内部内存数据表示可以直接从发送方复制到接收方。
+这是可能的，因为在典型的 CP 产品中有三个假设：
+- 所有本地SWCs的`字节序`相同。
+- 所有本地SWCs的某些数据结构的`对齐方式`是一致的。
+- 在内存中交换的数据结构是`连续的`。
+
+
+## 9.2 Service Discovery Implementation Strategies
+如前几章所述，ara::com 希望由产品供应商实现服务发现的功能。
+由于服务发现功能基本上是在 API 层面上定义的（参见第 6.4 节），其方法包括`FindService, OfferService and StopOfferService`（见第 6.4 节），因此协议和实施细节部分是开放的。
+当 AP 节点（更具体地说是`AP SWC`）通过网络`offer`一个service 或`require`另一个网络节点提供服务时， `service discovery/service registry`显然是通过线路进行的。
+所使用的通信协议必须完全规定通过网络发现服务的协议。
+对于 SOME/IP，SOME/IP 服务发现协议规范[9]对此进行了规定。
+但是，如果一个 ara::com 应用程序想与同一厂商 AP 中同一节点上的另一个 ara::com 应用程序通信，就必须有一个可用的本地服务发现变体。
+这里唯一的区别是，`本地服务发现的协议实现`完全由接入点产品供应商决定。
+
+一个AP产品供应商可以选择两种方法之间的区别：`集中式方法`和`分布式方法`。
+！！！`集中式方法`是指供应商决定拥有一个中央实体（例如一个守护进程），该实体：
+- 维护所有`服务实例`及其`位置信息`的`注册表`
+- 处理`本地`ara::com应用程序发出的所有`FindService、OfferService和StopOfferService`请求，从而`更新注册表（OfferService、StopOfferService）`或`查询注册表（FindService）`
+- 处理`来自网络的`所有SOME/IP SD消息，从而`更新其注册表（收到SOME/IP Offer Service）`或`查询注册表（收到SOME/IP Find Service）`
+- 通过`发送SOME/IP SD消息``将本地更新传播到网络`
+
+
+
+
+
+
+
+
+
+
 
 
 ## 9.3 Multi-Binding implications

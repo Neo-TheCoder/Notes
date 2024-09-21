@@ -1,7 +1,8 @@
 # 一些关键逻辑
-当someipd收到`控制信息`，根据类型，调用相应的`Handler`（就是简单的switch-case逻辑）
+someipd内部维护关于service的状态机
+当someipd收到`控制消息`，根据类型，调用相应的`Handler`（就是简单的switch-case逻辑）
 
-`client app`通过IPC向someipd发送两种消息，其发送的时机是这样的：
+## `client app`通过IPC向someipd发送两种消息，其发送的时机是这样的：
 # `find service`
 ## client app
 `StartFindService`() -> ... -> `send control message`
@@ -10,7 +11,7 @@
 `OnControlMessage()`
 someipd得知client app想要find service，发送`源IP是单播，目的IP是多播的SD--Find消息`
 
-# request service
+# `request service`
 ## client app
 `proxy obejct creation` -> ... -> `Proxy()`, and then `Preconstruct()` -> `CreateBackend()` -> `CreateClient()` -> `RequestService()`, `send control message`
 是method的请求
@@ -18,6 +19,9 @@ someipd得知client app想要find service，发送`源IP是单播，目的IP是�
 ## someipd
 `OnControlMessage()` -> `RequestService()`
 (当`IsOffered()`为true，才执行往下执行) -> `Connect()` -> `ConnectTCP()`，当`socket可写`，触发`回调`，改变`状态机状态`，设置为`Connected`
+
+
+
 
 # 关于someip_config.json的解析
 ```cpp
@@ -1154,7 +1158,6 @@ auto MessageWriter<Handler, ChangeWriteObservation>::TryToSendMessage(ara::core:
       });
 }
 ```
-
 轮询模式采用IPC
 
 
@@ -1233,31 +1236,73 @@ auto Send(NativeHandle native_handle, ara::core::Span<ConstIOBuffer> buffer) noe
 
 
 
-# 调用顺序    parameter server（`skeleton`）
-skeleton侧会调用
-`SomeIpDaemonClient`类型的成员的方法：
-* `Connect()`、  
-`Start ()`
-`ClientManager`类型的成员的方法`StartServiceDiscovery()`
+# 调用顺序    server app（`skeleton`）
+解析com相关的配置文件，进行初始化
+层次 依次为：
+  `socal`(TODO 设置成小标题)：
+    初始化reactor线程相关的配置
 
-## `InitializeCommunication(config)`
+## `Runtime::InitializeCommunication(config)`
+`Runtime::InitializeInternal()`内部实现：
+```cpp
+/*! \internal
+ * - If the Runtime instance is not alive for multi-threaded applications
+ *   - Call HandleErrorNotRunning.
+ * - Otherwise, Initialize the reactor thread.
+ * - Instantiating the binding pool and initialize all bindings.
+ * - Flag that signalizes that runtime and bindings have been initialized.
+ * - Start all dynamic actions of all bindings.
+ * \endinternal
+ */
+void Runtime::InitializeInternal() noexcept {
+  if (is_running_) {
+    HandleErrorAlreadyRunning();
+  }
 
-![image.png](https://atlas.pingcode.com/files/public/6530ce36b3a56a8dd49b042d/origin-url)
+  // Maximum number of callbacks the reactor needs to handle.
+  constexpr std::uint16_t max_reactor_callback_count{1024};
 
-`InitializeInternal()`内部实现：
+  // Initialize the reactor thread. Reactor required before binding initialization because bindings may initialize
+  // connections (e.g. SOME/IP).
+  // The real communication via the reactor must only be started after StartBindings() is called.
+  InitializeReactorAndTimerManager(max_reactor_callback_count);
+  InitializeReactorThread(GetReactorThreadConfig());
 
-判断Runtime实例是否存活
+  // Instantiating the binding pool and initialize all bindings.
+  logger_.LogDebug([](ara::log::LogStream& s) { s << "InitializeBindings"; }, __func__, __LINE__);
+  InitializeBindings();
 
-**InitializeReactorAndTimerManager**  (max_reactor_callback_count);
+  InitializeThreadPools();
 
-入参是“reactor要处理的最大callback数量”。
+  // Flag that signalizes that runtime and bindings have been initialized.
+  is_running_ = true;
 
-`InitializeReactorThread`  (GetReactorThreadConfig());
+  // Start all dynamic actions of all bindings (receive / transmit paths, timers etc.)
+  logger_.LogDebug([](ara::log::LogStream& s) { s << "StartBindings"; }, __func__, __LINE__);
+  StartBindings();
+}
+```
 
-`InitializeBindings();`
+### `InitializeBindings()`
+  ！！！重点：初始化各类型的`binding`
+```cpp
+InitializeBindings();
+```
 
+调用到someip_binding的初始化
+PS: src-gen
+```cpp
+// VECTOR NC AutosarC++17_10-A15.4.2: MD_SOCAL_AutosarC++17_10-A15.4.2_A15.5.1_A15.5.2_A15.5.3_BAUHAUS-15508
+// VECTOR NC AutosarC++17_10-A15.5.3: MD_SOCAL_AutosarC++17_10-A15.4.2_A15.5.1_A15.5.2_A15.5.3_BAUHAUS-15508
+void Runtime::InitializeBindings() noexcept {
+  {
+    // Initialize SOME/IP binding
+    ara::core::Result<void> const someip_binding_initialization_result{::amsr::someip_binding_transformation_layer::internal::InitializeComponent()};
+    static_cast<void>(someip_binding_initialization_result);
+  }
+}
+```
 调用`::amsr::someip_binding_transformation_layer::internal::InitializeComponent()`
-
 ```cpp
 ara::core::Result<void> InitializeComponent() noexcept {
   // Someip binding initializer/deinitializer class that holds the AraComSomeIpBinding instance
@@ -1273,7 +1318,6 @@ ara::core::Result<void> InitializeComponent() noexcept {
 ```
 
 重点是其中的initializer的`Initialize()调用`
-
 ```cpp
 ::ara::core::Result<void> SomeipBindingInitializer::Initialize() noexcept {
   ::ara::core::Result<void> result{::amsr::someip_binding::internal::SomeIpBindingErrc::error_not_ok};
@@ -1305,71 +1349,135 @@ ara::core::Result<void> InitializeComponent() noexcept {
 }
 ```
 
-通过getXXX函数获取单例对象，存入`ara::core::Optional<SomeIpBindingType>`类型的对象aracom_someip_binding_。（SomeIpBindingType是SOME/IP binding的全局实例化）
-
+通过`getXXX函数`获取单例对象，存入`ara::core::Optional<SomeIpBindingType>`类型的对象`aracom_someip_binding_`。
+（`SomeIpBindingType`，即`amsr::someip_binding_transformation_layer::internal::AraComSomeIpBinding<>`）
 
 
 **注意，无论是接收端还是发送端，都是用同一份代码，可能是便于模板生成。**
-`InitializeRequiredServiceInstances()`的实现是根据模型配置的，在server端根本不会有实现。  **InitializeServiceInterfaceProxyFactories**  ();同理。
+`InitializeRequiredServiceInstances()`的实现是根据模型配置的，在server端根本不会有实现。
+`InitializeServiceInterfaceProxyFactories();`同理。
 
-`InitializeServiceInterfaceSkeletonFactories()`内部实现：
-
-`AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesparameter_service_interface(aracom_someip_binding_->  **GetServerManager**  ());`
-
+#### `InitializeServiceInterfaceSkeletonFactories()`内部实现：
 ```cpp
-void AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesparameter_service_interface(
+void AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesStartApplicationCmService1_ServiceInterface(
     AraComSomeIpBindingSpecializationSkeleton::ServerManager& server_manager) {
-  // Instantiate and register a skeleton factory for the ServiceInterface '/smart/service_interface/parameter_service_interface'.
-  server_manager.AddSkeletonFactory(std::move(std::make_unique<parameter_service_interfaceSomeIpSkeletonFactory>(server_manager)));
+  // Instantiate and register a skeleton factory for the ServiceInterface '/vector/StartApplication/cm/ServiceInterface/StartApplicationCmService1_ServiceInterface'.
+  server_manager.AddSkeletonFactory(std::move(std::make_unique<StartApplicationCmService1_ServiceInterfaceSomeIpSkeletonFactory>(server_manager)));
 }
+```
+
+PS: ！！！此处一些核心类的的构造调用栈比较复杂：
+最外层：
+```cpp
+Runtime::InitializeBindings();
+```
+然后：
+```cpp
+::ara::core::Result<void> SomeipBindingInitializer::Initialize() {
+  // ...
+  ::vac::timer::ThreadSafeTimerManager& timer_manager{runtime_instance.GetTimerManager()};
+  bool is_processing_mode_polling{runtime_instance.GetProcessingMode() ==
+                                   ::amsr::socal::internal::configuration::RuntimeProcessingMode::kPolling};
+  // ...
+    aracom_someip_binding_.emplace(config, [&runtime_instance]() { static_cast<void>(runtime_instance.ProcessPolling()); },
+                                          &reactor, timer_manager, is_processing_mode_polling);
+  // ...
+}
+```
+此处 `runtime_instance`的set是在：解析`./etc/com_application.json`时得到，默认为
+```cpp
+// VECTOR NC VectorC++-V11.0.2: MD_SOCAL_VectorC++-V11.0.2_Shall_be_private
+class Configuration {
+  // ...
+  /*!
+   * \brief Processing mode of runtime
+   */
+  RuntimeProcessingMode processing_mode_{RuntimeProcessingMode::kSingleThreaded};
+  // ...
+};
+
+```
+
+通过调用`SomeipBindingInitializer::Initialize()`从而构造了`AraComSomeIpBinding<SomeIpDaemonClient<SomeIpDaemonClientDefaultTemplateConfiguration>>`对象
+```cpp
+/*!
+ * \brief Type-alias for the AraComSomeIpBinding template specialization used for binding initialization by generated code.
+ */
+using AraComSomeIpBindingSpecializationSkeleton =
+    AraComSomeIpBinding<::amsr::someip_daemon_client::internal::SomeIpDaemonClient<
+                            ::amsr::someip_daemon_client::internal::SomeIpDaemonClientDefaultTemplateConfiguration>>;
+
+
 ```
 
 操作：往`server_manager`中添加当前`service interface`对应的`Skeleton factory`。
+`ServerManager`是`AraComSomeIpBindingServerManager<SomeIpDaemonClient>`类型
+（ServerManager持有`SkeletonFactoryContainer`对象(即`std::vector<std::unique_ptr<AraComSomeIpSkeletonFactoryInterface>>;`)，用于存储someip skeleton factory实例。）
 
-`ServerManager`是`AraComSomeIpBindingServerManager<SomeIpDaemonClient>`
-
-（ServerManager持有SkeletonFactoryContainer对象，用于存储someip skeleton factory实例。）
-
-
-`InitializeSkeletonSomeIpEventBackends()`的内部实现：
-
+#### `InitializeSkeletonSomeIpEventBackends()`的内部实现：
 ```cpp
+// VECTOR NC AutosarC++17_10-M9.3.3, VectorC++-V5.0.1: MD_SOMEIPBINDING_AutosarC++17_10-M9.3.3_Method_can_be_declared_const
  void SomeipBindingInitializer::InitializeSkeletonSomeIpEventBackends() noexcept {
-  // Initialize skeleton event backends for ServiceInterface '/smart/service_interface/parameter_service_interface'
-  ::amsr::someip_binding_transformation_layer::internal::parameter_service::
-      AraComSomeIpBindingInitializeSkeletonSomeIpEventBackendsparameter_service_interface(aracom_someip_binding_->GetServerManager());
+  // Initialize skeleton event backends for ServiceInterface '/vector/StartApplication/cm/ServiceInterface/StartApplicationCmService1_ServiceInterface'
+  ::amsr::someip_binding_transformation_layer::internal::startapplication::cm::service1::
+      AraComSomeIpBindingInitializeSkeletonSomeIpEventBackendsStartApplicationCmService1_ServiceInterface(aracom_someip_binding_->GetServerManager());
 }
 ```
 
-
+根据event的数量，构造`StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventBackendStartApplicationEvent1`对象
+构造参数为：
+1. instance_id
+2. server_manager
 
 ```cpp
-void AraComSomeIpBindingInitializeSkeletonSomeIpEventBackendsparameter_service_interface(
+void AraComSomeIpBindingInitializeSkeletonSomeIpEventBackendsStartApplicationCmService1_ServiceInterface(
     AraComSomeIpBindingSpecializationSkeleton::ServerManager& server_manager) {
-  { // ServiceInstance: 0xC
-    { // Event: ParameterNotificationEvent
+  { // ServiceInstance: 0x57C
+    { // Event: StartApplicationEvent1
 
-      // SOME/IP Skeleton event backend type for event 'ParameterNotificationEvent'.
-      using parameter_service_interfaceSkeletonSomeIpEventBackendParameterNotificationEvent = ::amsr::someip_binding_transformation_layer::internal::SomeIpSkeletonEventBackend<parameter_service_interfaceSkeletonSomeIpEventConfigurationParameterNotificationEvent>;
+      // SOME/IP Skeleton event backend type for event 'StartApplicationEvent1'.
+      using StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventBackendStartApplicationEvent1 = ::amsr::someip_binding_transformation_layer::internal::SomeIpSkeletonEventBackend<StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventConfigurationStartApplicationEvent1>;
 
-      std::unique_ptr<parameter_service_interfaceSkeletonSomeIpEventBackendParameterNotificationEvent> event_backend{
-        std::make_unique<parameter_service_interfaceSkeletonSomeIpEventBackendParameterNotificationEvent>(12U, server_manager)};
-      parameter_service::parameter_service_interfaceSkeletonSomeIpEventManagerParameterNotificationEvent::EmplaceBackend(12U, std::move(event_backend));
+      std::unique_ptr<StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventBackendStartApplicationEvent1> event_backend{
+        std::make_unique<StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventBackendStartApplicationEvent1>(1404U, server_manager)};
+      startapplication::cm::service1::StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventManagerStartApplicationEvent1::EmplaceBackend(1404U, std::move(event_backend));
     }
 
+    { // Field notifier: StartApplicationField1
+
+      // SOME/IP Skeleton event backend type for field 'StartApplicationField1'.
+      using StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventBackendStartApplicationField1 = ::amsr::someip_binding_transformation_layer::internal::SomeIpSkeletonEventBackend<StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventConfigurationStartApplicationField1>;
+
+      std::unique_ptr<StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventBackendStartApplicationField1> event_backend{
+        std::make_unique<StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpEventBackendStartApplicationField1>(1404U, server_manager)};
+      startapplication::cm::service1::StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpFieldNotifierStartApplicationField1::EmplaceBackend(1404U, std::move(event_backend));
+    }
   }
 }
 ```
+创建了`SomeIpSkeletonEventBackend< SomeIpSkeletonEventBackend< event1> >`类型的unique_ptr，
+传入SomeIpSkeletonEventManager的`std::map<::amsr::someip_protocol::internal::InstanceId`,  `std::unique_ptr<EventBackend>>`类型的event_map_。
 
-创建了  **SomeIpSkeletonEventBackend**  <  **生成的具体event结构体**  >类型的unique_ptr，
+#### `RegisterServiceInstances();`的内部实现：
+注意到：
+1. instance_specifier是一个p-port的name
+2. instance_identifier是和具体协议相关的：如：Someip:1404
+3. `/vector/StartApplication/cm/ServiceInterface/StartApplicationCmService1_ServiceInterface`是`service_interface`的名字
+！！！核心是：把`<amsr::socal::internal::BindingInterface*, instance_specifier, instance_identifier, service_interface_name>`的四元组添加到`RUntime`所维护的`instance_specifier_table_`
+该四元组是以`<key, value>`的形式进行存储的
+  其中：
+    key是：
+      `instance_specifier`
+    value是：
+      `<amsr::socal::internal::BindingInterface*, instance_identifier, service_interface_name>`
 
-传入SomeIpSkeletonEventManager的std::map<::amsr::someip_protocol::internal::  **InstanceId**  ,  std::unique_ptr<  **EventBackend**  >>类型的event_map_。
+PS: 此处的`amsr::socal::internal::BindingInterface*`利用了多态
 
-
-
-**RegisterServiceInstances**  ();的内部实现：
-
+`RegisterServiceInstances`
 ```cpp
+// VECTOR NC AutosarC++17_10-M9.3.3, VectorC++-V5.0.1: MD_SOMEIPBINDING_AutosarC++17_10-M9.3.3_Method_can_be_declared_const
+// VECTOR NC AutosarC++17_10-A15.5.3: MD_SOMEIPBINDING_AutosarC++17_10-A15.4.2_A15.5.3_Exception_caught
+// VECTOR NC AutosarC++17_10-A15.4.2: MD_SOMEIPBINDING_AutosarC++17_10-A15.4.2_A15.5.3_Exception_caught
 void SomeipBindingInitializer::RegisterServiceInstances() noexcept {
   ::ara::com::Runtime& runtime_instance{::ara::com::Runtime::getInstance()};
   {
@@ -1378,47 +1486,71 @@ void SomeipBindingInitializer::RegisterServiceInstances() noexcept {
   {
     // ---- Register all known P-Port InstanceSpecifiers ----
     {
-      // Map P-Port /smart/excecutables/parameter_server/parameter_server_component/parameter_service_provided_port to instance /smart/applications/parameter_server_process/ServiceInterfaceDeployment_service_instance
-      ::ara::core::InstanceSpecifier const instance_specifier{"parameter_server/RootSwComponentPrototype/parameter_service_provided_port"_sv};
-      ::ara::com::InstanceIdentifier const instance_identifier{"SomeIp:12"_sv};
+      // Map P-Port /vector/StartApplication/cm/Server1/StartApplicationCmServer1/PPort_StartApplicationCmService1_ServiceInterface to instance /deployment/Provided/ProvidedSomeipStartApplicationCmService1_ServiceInterface
+      ::ara::core::InstanceSpecifier const instance_specifier{"startapplication_cm_server1/RootSwComponentPrototype/PPort_StartApplicationCmService1_ServiceInterface"_sv};
+      ::ara::com::InstanceIdentifier const instance_identifier{"SomeIp:1404"_sv};
       runtime_instance.MapInstanceSpecifierToInstanceId(
           &(aracom_someip_binding_.value()), instance_specifier, instance_identifier,
-          "/smart/service_interface/parameter_service_interface"_sv);
+          "/vector/StartApplication/cm/ServiceInterface/StartApplicationCmService1_ServiceInterface"_sv);
     }
   }
 }
 ```
 
-将instance名字和instance的id对应，
 
-调用  **Runtime**  对象的  **MapInstanceSpecifierToInstanceId**  ()：
+PS: `class InstanceSpecifierLookupTable`
+可以联想到文档里所说的`多重绑定`
+```cpp
+/*!
+ * \brief Manages the instance specifiers and relates them to their corresponding instance identifiers.
+ * \details Keeps also other information which are relevant to resolve service discovery calls, such as the binding
+ * specific instance identifier and pointers to the binding, to be able to route service discovery calls to the correct
+ * binding.
+ *
+ * The lookup table stores the mapping of an InstanceSpecifier (key) to 1..n mapping entries (each consisting of
+ * InstanceIdentifier, the parsed InstanceIdentifierString, pointer to binding implementation, ServiceShortnamePath).
+ *
+ * A lookup in the table can be done by
+ * - InstanceSpecifier -> Return list of all mapped entries (InstanceSpecifierLookupTableEntry)
+ * - InstanceIdentifier -> Return the InstanceSpecifierLookupTableEntry of the searched-for InstanceIdentifier
+ *
+ * Lookup table layout (multimap):
+ *   key                     values (1..n)
+ *   (InstanceSpecifier)     (InstanceSpecifierLookupTableEntry storing
+ *                            InstanceIdentifier, InstanceIdentifierString, BindingInterface*, ServiceShortnamePath)
+ * +-------------------------------------------------------------------------------------------------------------+
+ * |  "exec/rootSwc/rport0" | [ { "Ipc:5", "5", &ipc_binding, "/SWC/ServiceInterface/MyServiceA" },              |
+ * |                        |   { "SomeIp:48", "48", &someip_binding, "/SWC/ServiceInterface/MyServiceA" },      |
+ * |                        |     ...                                                                            |
+ * |                        | ]                                                                                  |
+ * +-------------------------------------------------------------------------------------------------------------+
+ * |  "exec/rootSwc/rport1" | [ { "Ipc:65535", "65535", &ipc_binding, "/SWC/ServiceInterface/MyServiceB" } ]     |
+ * +-------------------------------------------------------------------------------------------------------------+
+ */
+class InstanceSpecifierLookupTable {
+// ...
+};
+```
 
-操作是把  **<instance_name, instance id>**  存入  **InstanceSpecifierLookupTable**  类型的对象（其注释说明了到底存储的是什么类型的map：<ara::core::  **InstanceSpecifier**  ,   **InstanceSpecifierLookupTableEntry**  >
+`InstanceSpecifier`
+`startapplication_cm_server1/RootSwComponentPrototype/PPort_StartApplicationCmService1_ServiceInterface`
+（如何拼接：
+  `EXECUTABLE`的name + `EXECUTABLE`的`ROOT-SW-COMPONENT-PROTOTYPE`的name + `ADAPTIVE-APPLICATION-SW-COMPONENT-TYPE`的`P-PORT-PROTOTYPE`的name）
 
-**InstanceSpecifierLookupTableEntry**  ：  **InstanceIdentifier**  、  **InstanceIdentifierString**  、  **BindingInterface**  、  **ServiceShortNamePath**
-
-在本例中：
-
-**InstanceSpecifier**  是：  **parameter_server/RootSwComponentPrototype/parameter_service_provided_port**
-
-（如何拼接：ROOT-SW-COMPONENT-PROTOTYPE，EXECUTABLE的port prototype的名字。）
-
-**InstanceIdentifierString**  是：SomeIp:12
-
-**BindingInterface**  是：someip binding对象
-
-**service_shortname_path**  是：/smart/service_interface/parameter_service_interface
-
-）。
+`InstanceIdentifier`：
+  SomeIp:12
+`BindingInterface`：
+  aracom_someip_binding_
+`service_shortname_path`：
+  /smart/service_interface/parameter_service_interface
 
 
 
-**InitializeThreadPools**  ();
 
-初始化default_thread_pool_
+### `InitializeThreadPools();`
+初始化`default_thread_pool_`
 
-初始化用户定义线程池  **ThreadPoolConfigContainer**  ，用于proxy侧method方法响应。
-
+初始化用户定义线程池`ThreadPoolConfigContainer`，用于proxy侧method方法响应。
 ```cpp
 /*! \internal
  * - Initialize default thread-pool.
@@ -1471,10 +1603,21 @@ void Runtime::InitializeThreadPools() noexcept {
 
 
 
+### src-gen:  `StartBindings()`的内部实现：
+```cpp
+// VECTOR NC AutosarC++17_10-A15.4.2: MD_SOCAL_AutosarC++17_10-A15.4.2_A15.5.1_A15.5.2_A15.5.3_BAUHAUS-15508
+// VECTOR NC AutosarC++17_10-A15.5.3: MD_SOCAL_AutosarC++17_10-A15.4.2_A15.5.1_A15.5.2_A15.5.3_BAUHAUS-15508
+// VECTOR NC AutosarC++17_10-M9.3.3: MD_SOCAL_AutosarC++17_10-M9.3.3_Method_can_be_declared_static
+void Runtime::StartBindings() noexcept {
+  {
+    // Start SOME/IP binding
+    amsr::someip_binding_transformation_layer::internal::GetInstance().Start();
+  }
+}
+```
 
-### `StartBindings()`的内部实现：
-连接到SOME/IP daemon，为所有需要的service instance开始Service Discovery。
-
+连接到SOME/IP daemon，为所有需要的service instance开始`Service Discovery`。
+`SomeIpDaemonClient`类的`Start()`函数
 ```cpp
   void Start() {
     logger_.LogInfo([](::ara::log::LogStream& s) { s << "Starting SOME/IP binding."; }, __func__, __LINE__);
@@ -1491,14 +1634,15 @@ void Runtime::InitializeThreadPools() noexcept {
   }
 ```
 
-调用  **SomeIpDaemonClient**  对象的几个方法：
+主要是调用了`SomeIpDaemonClient`对象的几个方法：
 
-#### `Connect()`
-
+#### `SomeIpDaemonClient`的`Connect()`
 根据给定配置的地址，连接SOME/IP daemon。
-
 初始化了和SOME/IP daemon的一个新连接，并一直阻塞，除非连接建立或者发生错误。（前提是SOME/IP daemon在运行）
+`is_processing_mode_polling_`是在什么时候set?
 
+
+`Connect()`
 ```cpp
   void Connect() {
     logger_.LogDebug(
@@ -1527,12 +1671,9 @@ void Runtime::InitializeThreadPools() noexcept {
   }
 ```
 
-
-
 如果连接尚未建立，更新连接状态为“连接中”，
 
-建立异步连接，
-
+建立同步连接，
 1. 如果程序采用轮询模式（polling mode），则需要主动触发反应器线程（定期检查连接状态）。
 1. 如果不是使用轮询模式，那么程序需要等待连接的异步建立。这意味着程序会暂停执行，直到连接成功建立为止，而不是主动轮询。
 
@@ -2430,6 +2571,12 @@ auto Connection::ReceiveAsync(MessageAvailableCallback &&msg_available_callback,
     }
   }
 ```
+
+
+
+
+
+
 
 
 
@@ -3539,7 +3686,7 @@ client_manager_->HandleReceive(instance_id, someip_header, std::move(someip_mess
 `SomeipProxyEventBackend`的`OnEvent`
 ！！！和proxy event的`sample cache`相关联了，`sample cache`是多级的，分为用户可见 和 用户不可见
 
-该回调是为了把新读取到的数据存储到`invisible_sample_cache_`
+该回调是为了把新读取到的数据存储到`invisible_sample_cache_`，长度为`Subscribe`设置的参数
 需要记录序号(从0开始自增)，用于更新策略
 为每一个`event_manager`调用`HandleEventNotification()`
 同时维护一个`last_event_entry_`，只存储最新的条目
@@ -3699,6 +3846,10 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
 ## `ReceiveHandlerService1Event1`
 ### `Update()`, 后续被取消，不再沿用
 `ProxyEvent`的接口，调用了更底层的`Update`，注意IPC SOME/IP都有自己的Update()实现
+PS：如果发送端频率不快，并且接收端处理地也不慢，那么Subscribe(1)时，使用lastN还是newestN，没有差别（两个策略决定了，不可见内存到可见内存的数据拷贝规则(实际可能是指针)）
+  当发送很快来不及处理时，只能选择性处理，lastN表示处理最老的，newestN表示处理最新的(那么老数据是否还存在于内存？)
+
+
 更新用户可见的内存
 ```cpp
   /*!
@@ -3763,11 +3914,9 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
 
 
 
-
-
 以SOME/IP为例
 #### 更新策略`kNewestN`: 
-在这种策略下，每次调用 "更新 "时，缓存都会首先被清除，然后填入新的可用事件。
+在这种策略下，每次调用 "更新" 时，缓存都会首先被清除，然后填入新的可用事件。
 即使自上次调用`Update`后没有任何事件发生，缓存也会被清除。
 ```cpp
   /*!
@@ -3856,8 +4005,6 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
 
 
 
-
-
 #### 更新策略`kLastN`
 `SomeipProxyEventManager`的`UpdateLast`
 通过`SomeipProxyEventBackend<EventConfig>`的`GetSamples()`得到`last_known_sequence_`，
@@ -3866,7 +4013,7 @@ void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
 `last_known_sequence_`是`该 SomeipProxyEventManager 已"知道"的最高指定序列号`
 更新`base_sequence_`和`last_known_sequence_`（经过观察，发现这两个序号一直凝固在最后两位(如果`Subscribe(1)`)）
 
-
+`UpdateLast`
 ```cpp
   /*!
    * \brief       Apply the filter provided with the first argument to the last cache_capacity_
@@ -3997,8 +4144,7 @@ PS:
 
 `SomeIpSampleCacheEntry`的`GetSample()`
 `invisible_sample_cache_`存储的全是`std::shared_ptr`，`invisible_sample_cache_`这一`deque`持有的元素，什么时候`erase`？
-观察到序号一直增长，但是`invisible_sample_cache_`的size应该是限定在Subscribe的长度了(通过`assert`)，也就是一直为1，但是序号仍然在记录，是什么意思？
-
+观察到序号一直增长，但是`invisible_sample_cache_`的size应该是限定在Subscribe的长度了(`assert`)，也就是一直为1，但是序号仍然在记录，是什么意思？
 
 ```cpp
   /*!
@@ -4073,10 +4219,6 @@ PS:
 
 
 
-
-
-
-
 ### `GetCachedSamples()`
 直接就把`visible_sample_cache_`返回出去，注意到，返回的是`const类型`
 ```cpp
@@ -4091,7 +4233,7 @@ PS:
 
 
 #### ！！！总结
-首先，`OnEvent`接口每次调用维护队尾元素的序号`last_event_sequence_`。
+首先，`OnEvent`接口每次调用会维护队尾元素的序号`last_event_sequence_`。
 
 # New
 `UpdateNewest`不断维护一个`last_known_sequence_`
@@ -4242,7 +4384,7 @@ PS: `max_samples`是`Subscirbe()`的入参
   }
 ```
 
-### `ProxyEventXf`的`ReadSamples`(`ProxyEventXf`在src-gen实例化)
+### r20-11 `ProxyEventXf`的`ReadSamples`(`ProxyEventXf`对象是在src-gen实例化)
 ```cpp
   /*!
    * \brief   Reads the serialized samples from underlying receive buffers and deserializes them.
@@ -4336,7 +4478,272 @@ PS: `max_samples`是`Subscirbe()`的入参
   }
 ```
 
-#### `SampleReader`的`ReadSamples`
+其中的关键操作：
+```cpp
+      InvisibleSampleCache::SampleCacheContainer& sample_container{
+          // VCA_SOMEIPBINDING_ACCESSING_MEMBERS_OF_REFERENCE_CLASS_ATTRIBUTES
+          subscribed_proxy_event_xf.invisible_sample_cache->GetSamples(max_samples)};
+```
+
+`InvisibleSampleCache`持有的关键成员变量：（两个cache_的长度都和`Subscribe()`传进来的参数保持一致）
+PS: ？？？为什么设计两个cache_
+  相当于把对于socket可读事件接收到的`缓存`分为了`两段`：
+
+```cpp
+  /*!
+   * \brief Maximum number of stored events in the invisible cache.
+   */
+  std::size_t const capacity_{0U};
+
+  /*!
+   * \brief Event storage for events which are inteded to be processed by the application.
+   */
+  ::vac::container::StaticList<std::unique_ptr<SomeIpSampleCacheEntry>> app_cache_{};
+
+  /*!
+   * \brief Event storage for new events coming from the ractor.
+   */
+  ::vac::container::StaticList<std::unique_ptr<SomeIpSampleCacheEntry>> reactor_cache_{};
+```
+
+`InvisibleSampleCacheContainer`即`InvisibleSampleCache`，创建是在`CreateSubscribedProxyEventXf`, `CreateSubscribedProxyEventXf`的外层调用就是`Subscribe()`
+```cpp
+  /*!
+   * \brief Factory Method which creates all objects needed during subscribed state.
+   * \param[in] subscriber                 Pointer to the subscriber of the ProxyEventXf
+   * \param[in] cache_capacity             Capacity of the sample caches
+   * \param[in] deserializer               Event sample deserializer
+   * \param[in] e2e_result                 Reference to a e2e result which is shared between units
+   * \param[in] someip_event_identity      SOME/IP event identity
+   * \return A SubscribedProxyEventXf containing the objects
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Check serialization mode.
+   *   - If it is someip serialization
+   *     - Initialize someip event handler.
+   *     - Check e2e
+   *       - If it is e2e protected
+   *         - Initialize e2e sample reader.
+   *       - Otherwise
+   *         - Initialize sample reader.
+   *   - Otherwise
+   *     - Initialize signal based event handler.
+   *     - Check e2e
+   *       - If it is e2e protected
+   *         - Initialize e2e sample reader.
+   *       - Otherwise
+   *         - Initialize sample reader.
+   * - Return a SubscribedProxyEventXf containing the objects.
+   * \endinternal
+   */
+  SubscribedProxyEventXf CreateSubscribedProxyEventXf(
+      EventSubscriberInterface* subscriber, std::size_t const cache_capacity, DeserializerInterface& deserializer,
+      ThreadSafeE2eResult& e2e_result,
+      ::amsr::someip_binding_core::internal::SomeIpEventIdentity const& someip_event_identity) const noexcept {
+    bool const is_e2e_protected{e2e_parametrization_data_.has_value()};
+    std::size_t no_check_header_size{0};
+    std::size_t payload_offset{0};
+    // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOMEIPBINDING_AutosarC++17_10_A18.5.8_false_positive
+    std::unique_ptr<SampleReaderInterface<SampleType>> sample_reader{nullptr};
+    // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOMEIPBINDING_AutosarC++17_10_A18.5.8_false_positive
+    std::unique_ptr<ClientSubscriberInterface<SampleType>> client_subscriber{nullptr};
+    // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOMEIPBINDING_AutosarC++17_10_A18.5.8_false_positive
+    std::unique_ptr<InvisibleSampleCacheContainer> invisible_sample_cache{
+        // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        std::make_unique<InvisibleSampleCacheContainer>(cache_capacity)};
+    if (serialization_ == ::amsr::someip_binding::internal::configuration::EventConfig::Serialization::someip) {
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      client_subscriber =
+          // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+          std::make_unique<SomeIpEventHandler<SampleType>>(someip_event_identity, client_, *invisible_sample_cache);
+      if (is_e2e_protected) {
+        std::size_t const e2e_header_size{
+            ::amsr::e2e::profiles::ProfileChecker::GetHeaderSize(e2e_parametrization_data_.value().e2e_profile)};
+        payload_offset = ::amsr::someip_protocol::internal::kHeaderSize + e2e_header_size;
+        no_check_header_size = ::amsr::someip_protocol::internal::kHeaderLength;
+
+        // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        // VCA_SOMEIPBINDING_PASSING_REFERENCE
+        sample_reader = std::make_unique<E2eSampleReader<SampleType>>(
+            deserializer, *e2e_parametrization_data_->e2e_transformer_uptr, e2e_result,
+            e2e_parametrization_data_.value().is_e2e_check_disabled, payload_offset, no_check_header_size,
+            someip_event_identity);
+
+      } else {
+        payload_offset = ::amsr::someip_protocol::internal::kHeaderSize;
+        // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        sample_reader =
+            std::make_unique<SampleReader<SampleType>>(deserializer_, payload_offset, someip_event_identity);
+      }
+    } else {
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      client_subscriber = std::make_unique<SignalBasedEventHandler<SampleType>>(someip_event_identity, client_,
+                                                                                *invisible_sample_cache);
+      if (is_e2e_protected) {
+        no_check_header_size = ::amsr::someip_protocol::internal::kPduHeaderSize + pdu_payload_offset_;
+        payload_offset = no_check_header_size;
+
+        // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        // VCA_SOMEIPBINDING_PASSING_REFERENCE
+        sample_reader = std::make_unique<E2eSampleReader<SampleType>>(
+            deserializer, *e2e_parametrization_data_->e2e_transformer_uptr, e2e_result,
+            e2e_parametrization_data_.value().is_e2e_check_disabled, payload_offset, no_check_header_size,
+            someip_event_identity);
+      } else {
+        payload_offset = ::amsr::someip_protocol::internal::kPduHeaderSize + pdu_payload_offset_;
+        // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        sample_reader =
+            std::make_unique<SampleReader<SampleType>>(deserializer_, payload_offset, someip_event_identity);
+      }
+    }
+
+    return SubscribedProxyEventXf{
+        subscriber,
+        // Allocate one additional spare slot in VisibleSampleCache (see AUTOSAR_EXP_ARAComAPI for the rationale).
+        std::make_shared<VisibleSampleContainer>(cache_capacity + 1),  // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        std::move(invisible_sample_cache), std::move(sample_reader), std::move(client_subscriber)};
+  }
+```
+
+
+`InvisibleSampleCache`的`GetSamples`的细节：
+丢弃数据的关键逻辑就在这里：
+`Enqueue()`：把最老的数据丢弃
+  `Enqueue()`是通过reactor模式 监听到可读事件时，触发`OnEvent`回调时触发的，这种数据就塞进`reactor_cache_`
+由于各种原因，上层的`reactor_cache_`没来得及取走数据，就多次调用`Enqueue`，那么就丢失了
+
+经过判断，会把`reactor_cache_`的数据，move到`app_cache_`
+`app_cache_`可能仍然包含来自先前`GetSamples`调用的一些样本，只需将`reactor_cache_`的差异数 移动 以到达到`requested_sample_count`
+默认情况下，上层`GetNewSamples`的缺省参数使得`requested_sample_count`为最大值
+
+```cpp
+/*!
+ * \internal
+ * - Create lock for cache_mutex
+ * - When the cache has a capacity greater than zero
+ *   - Check if the cache is full
+ *     - Remove the oldest cache entry
+ *   - Create new entry within cache
+ * \endinternal
+ */
+bool InvisibleSampleCache::Enqueue(DataBufferSharedPtr packet, ::ara::core::Optional<TimeStamp> const& time_stamp) {
+  logger_.LogVerbose(static_cast<char const*>(__func__), __LINE__);
+
+  bool oldest_sample_dropped{false};
+
+  if (capacity_ != 0U) {
+    std::lock_guard<std::mutex> const cache_lock{cache_mutex_};
+    assert(reactor_cache_.size() <= capacity_);  // COV_MSR_INV_STATE_ASSERT
+
+    if (reactor_cache_.size() == capacity_) {
+      reactor_cache_.pop_front();
+      oldest_sample_dropped = true;
+    }
+
+    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+    reactor_cache_.emplace_back(
+        // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        std::make_unique<SomeIpSampleCacheEntry>(packet, time_stamp));
+  }
+
+  return oldest_sample_dropped;
+}
+```
+
+`GetSamples`
+```cpp
+/*!
+ * \internal
+ * - Create lock for cache_mutex
+ * - Calculate the number of stored samples within app cache and reactor cache
+ * - If this is greater than the capacity
+ *   - Drop excess from app cache
+ * - If the requested sample count is greater than the stored samples within app cache
+ *   - Calculate how many samples are needed from reactor cache
+ *   - Move those samples to the app cache
+ * \endinternal
+ */
+InvisibleSampleCache::SampleCacheContainer& InvisibleSampleCache::GetSamples(std::size_t const requested_sample_count) {
+  logger_.LogVerbose(
+      [requested_sample_count](::ara::log::LogStream& s) { s << "requested_sample_count: " << requested_sample_count; },
+      static_cast<char const*>(__func__), __LINE__);
+
+  std::lock_guard<std::mutex> const cache_lock{cache_mutex_};
+
+  // Drop samples which exceed the buffer capacity
+  std::size_t const total_cache_size{reactor_cache_.size() + app_cache_.size()};
+  // VECTOR NL AutosarC++17_10-A6.5.1: MD_SOMEIPBINDING_AutosarC++17_10-A6.5.1_loop_counter
+  for (std::size_t drop_index{capacity_}; drop_index < total_cache_size; ++drop_index) {    // ！！！app_cache_丢弃 react_cache_.size() + app_cache_.size() - capcacity，确保两个cache_相加得到最多capacity个，超出capacity的元素认为是没必要处理的，app_cache_ pop掉的元素，其实必然是最老的元素
+    // invariant is that app cache has always at least the excessive amount of samples
+    app_cache_.pop_front();
+  }
+
+  // move samples to application cache if needed
+  // (application cache might still contain some samples from
+  // previous GetSamples call, only move the difference from  PS: 因为可能有残留(单纯地是因为上层的 ReadSamples 没来得及处理完)，所以不用移动 samples_to_return 个元素，而是移动 samples_to_return - cleaned_app_cache_size个
+  // reactor cache to reach requested_sample_count)
+  std::size_t const cleaned_app_cache_size{app_cache_.size()};
+  std::size_t const available_samples_count{reactor_cache_.size() + cleaned_app_cache_size};  // 两大cache_之和，即为available_samples_count
+  std::size_t const samples_to_return{std::min(requested_sample_count, available_samples_count)};
+  // VECTOR NL AutosarC++17_10-A6.5.1: MD_SOMEIPBINDING_AutosarC++17_10-A6.5.1_loop_counter
+  for (std::size_t move_index{cleaned_app_cache_size}; move_index < samples_to_return; ++move_index) {  // ！！！从reactor_cache_转移 samples_to_return - app_cache_.size() 个元素 到app_cache_，优先移动老的元素，注意，因为这里都是移动操作，移后源对象仍然在，用完了才移除
+    // VCA_SOMEIPBINDING_PASSING_REFERENCE
+    app_cache_.push_back(std::move(reactor_cache_.front()));
+    reactor_cache_.pop_front();
+  }
+
+  // The reference returned here currently does not change,
+  // it is intended to be changed to a container type
+  // which restricts parallel usage
+  return app_cache_;    // 上层代码取出元素后，会pop()掉
+}
+```
+
+
+#### r20-11 `SampleReader`的`ReadSamples`
+`amsr-vector-fs-someipbinding/lib/someip_binding_transformation_layer/include/amsr/someip_binding_xf/internal/events/sample_reader.h`
+这一层的`ReadSamples`的操作是：
+每次从`serialized_samples_container`取出队头元素，调用`DeserializeSample`，然后队头元素出队
+
+`cache_size`用于设置`visible_sample_cache_`的`size`
+
+
+
+PS: `visible_sample_cache`表示的是：
+  `representing a cache for holding preallocated samples with a guarantee of no memory reallocation after its construction.`
+其实就是预分配 `Subscribe()`时传进来的参数 + 1 个的`vector<Ptr>`
+
+`SampleReader<SampleType>`的`ReadSamples()`
+PS: 核心是for循环遍历 min(max_samples, invisible_sample_container.size()) 次，
+  每次从`visible_sample_container`取出一个指针，调用`DeserializeSample`以接收反序列化数据
+    ！！！注意 ：传入`DeserializeSample`的是对visible_cache_slot进行`两级解引用`的结果
+      把`std::shared_ptr<socal::internal::events::MemoryWrapperInterface<SampleDataType>>`对象，进行两次解引用，第一次得到`MemoryWrapper<SampleType>`对象，他是一个派生类对象，对其解引用可以得到`SampleType&`类型
+      ！！！该基类指针实际指向的是派生类对象：`MemoryWrapper<SampleType>`，！！！因为`VisibleSampleCache`构造时就构造了`MemoryWrapper`对象
+      PS: shared_ptr支持虚析构：基类指针派生类对象时正确地析构
+      可以简单理解成：`MemoryWrapperInterface<SampleDataType>>*`，是一个二级指针类型，实际指向`MemoryWrapper<SampleType>`对象，第一次解引用得到`MemoryWrapper`类型，由于`MemoryWrapper`重载了`operator*()`，再解引用得到`MemoryWrapper`对象
+  PS: 反序列化需要递归地遍历结构体，这些递归遍历的代码生成在src-gen
+实际构造的对象是指向派生类对象的指针，这个指针被赋值给一个基类指针，从而实现基类指针，指向派生类对象：
+
+      ```cpp
+      cache_.emplace_back(std::make_shared<MemoryWrapper<SampleType>>());
+      ```
+
+      ```cpp
+      实际的数据类型，也分配在堆上
+    class MemoryWrapper {
+      // ...
+      private:
+        /*!
+        * \brief Default-initialized memory for SampleType.
+        */
+        SampleDataType sample_{};
+      }
+      ```
+
 ```cpp
   /*!
    * \brief Reads serialized samples from the given sample cache container, deserializes them and calls the provided
@@ -4434,14 +4841,118 @@ PS: `max_samples`是`Subscirbe()`的入参
   }
 ```
 
+PS: 此处的`GetNextFreeSample()`，返回一个自定义的指针出去（返回拷贝）
+```cpp
 
+  /*!
+   * \brief Gets the next free sample if available.
+   * \return The next free sample pointer if available. Otherwise a unique_ptr that owns nothing.
+   * \pre -
+   * \context ANY
+   * \threadsafe TRUE
+   * \reentrant TRUE
+   *
+   * \internal
+   * - Guard visible sample cache against parallel access.
+   * - If the cache is not empty, return the last element by removing it from the cache.
+   * - Otherwise, return a unique_ptr that owns nothing.
+   * \endinternal
+   */
+  auto GetNextFreeSample() noexcept -> CacheEntryType {
+    CacheEntryType sample{nullptr};
+    std::lock_guard<std::mutex> const guard{cache_mutex_};
+    if (!cache_.empty()) {
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      sample = std::move(cache_.back());
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      cache_.pop_back();
+    }
+    return sample;
+  }
+```
 
+`ReturnEntry`
+PS: 在`SamplePtr`调用`Release()`来释放时，也会调用该接口，添加到`CacheContainerType`对象里
+相应地，
+```cpp
+  /*!
+   * \brief Returns a CacheEntry to the cache.
+   * \param[in] entry A preallocated cache entry which is re-added to the cache. This must not be a nullptr.
+   * \pre -
+   * \context ANY
+   * \threadsafe TRUE
+   * \reentrant TRUE
+   *
+   * \internal
+   * - If cache entry to be returned back into the visible sample cache is a nullptr:
+   *   - Log fatal error and abort further process execution.
+   * - If no other user is using the cache entry anymore (shared ownership):
+   *   - Guard visible sample cache against parallel access.
+   *   - Put the cache entry back to the visible sample cache.
+   * - Otherwise:
+   *   - Release the ownership of the cache entry.
+   *     As there are still other users of the cache entry it's not returned back to the visible sample cache.
+   * \endinternal
+   */
+  void ReturnEntry(CacheEntryType&& entry) noexcept final {
+    if (entry == nullptr) {
+      ::amsr::someip_binding_core::internal::logging::AraComLogger const logger{
+          ::amsr::someip_binding_core::internal::logging::kSomeIpLoggerContextId,
+          ::amsr::someip_binding_core::internal::logging::kSomeIpLoggerContextDescription, "VisibleSampleCache"_sv};
 
+      constexpr char const* error_message{"Returned entry is nullptr."};
+      logger.LogFatal([](::ara::log::LogStream& s) { s << error_message; }, static_cast<char const*>(__func__),
+                      __LINE__);
+      ::ara::core::Abort(error_message);
+    }
 
+    // The assumption that use_count() returns a valid reference count relies on the correct usage described in
+    // DSGN-SomeIpBinding-Events-Reception under Pre-allocated visible sample cache.
+    if (entry.use_count() == 1) {
+      std::lock_guard<std::mutex> const guard{cache_mutex_};
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      cache_.emplace_back(std::move(entry));
+    } else {
+      // VCA_SPC_15_SOMEIPBINDING_STL_TYPE_FUNCTION
+      entry.reset();
+    }
+  }
+```
 
+PS: `DeserializeSample`
+！！！`ProxyEventXf<SampleType>`的`SampleType`把类型传递了 --> `SampleType& sample_placeholder`
+```cpp
+  /*!
+   * \brief       Performs deserialization of event sample payload
+   * \param[out]  sample_placeholder Sample placeholder
+   * \param[in]   payload_size Size of the payload
+   * \param[in]   packet_view View to the payload of the received sample
+   * \return      A bool indicating the success of the deserialization
+   * \context     App
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   */
+  bool DeserializeSample(SampleType& sample_placeholder, std::size_t const payload_size,
+                         ::vac::memory::MemoryBuffer<osabstraction::io::MutableIOBuffer>::MemoryBufferView const&
+                             packet_view) const noexcept {
+    ::amsr::someip_protocol::internal::deserialization::BufferView const serialized_packet_buffer_view{
+        // VECTOR Next Line AutosarC++17_10-M5.2.8:MD_SOMEIPBINDING_AutosarC++17_10-M5.2.8_conv_from_voidp
+        static_cast<std::uint8_t const*>(packet_view[0U].base_pointer), payload_size};
 
+    // Skip the headers
+    ::amsr::someip_protocol::internal::deserialization::BufferView const payload_buffer_view{
+        serialized_packet_buffer_view.subspan(payload_offset_, serialized_packet_buffer_view.size() - payload_offset_)};
 
+    // Deserialize Payload
+    // VECTOR NL AutosarC++17_10-A18.5.8:MD_SOMEIPBINDING_AutosarC++17_10-A18.5.8_Large_packets_allocated_on_stack
+    ::amsr::someip_protocol::internal::deserialization::Reader payload_reader{payload_buffer_view};
+    // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+    bool const deserialization_ok{deserializer_.Deserialize(payload_reader, sample_placeholder)};
 
+    return deserialization_ok;
+  }
+```
 
 
 **`ReceiveHandlerService1Event1()`的实现**
@@ -4851,10 +5362,6 @@ PS：其中`request.first`是`ara::core::Promise<Output>`类型
   }
 ```
 对`packet`解包，执行`Promise`的`set_value`
-
-
-
-
 
 
 

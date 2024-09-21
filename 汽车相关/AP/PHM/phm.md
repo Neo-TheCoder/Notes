@@ -46,5 +46,85 @@ PHM还提供了`PHM Base Service Library`：
 Alive使用最为普遍，大多数项目的监控中，都是使用Alive，其次是Deadline监控。
 
 
+# SMART
+当受监控实体发生异常时，PHM模块将异常通知给SM模块及FM模块；
+由`FM`将 `任务的异常监控结果` 映射为 `故障`，并执行相应的`故障后处理`，
+    如：通知算法模块进行功能退出，然后SM在进行重启功能组等操作。
+
+
+## demo程序分析
+
+```cpp
+class PhmTestAppApplication {
+// ...
+private:
+    ara::phm::PHM phm_;
+    ara::phm::SupervisedEntity<ara::phm::supervised_entities::alive_supervised_entity::Prototype0> phm_alive_supervision_test_interface_;
+};
+```
+
+`向PHM汇报状态`
+```cpp
+  while (!exit_requested_)l
+  {
+    next_run += (duration * expected_alive_indications);
+    //   log_.LogInfo() << "TEST: ReportCheckpoint";
+    phm_alive_supervision_test_interface_.ReportCheckpoint(ara::phm::supervised_entities::alive_supervised_entity::Checkpoints::AliveCheckpointTest);
+    std::this_thread::sleep_until(next_run);
+  }
+```
+
+自定义`enum class Checkpoints`
+```cpp
+namespace ara {
+namespace phm {
+namespace supervised_entities {
+namespace alive_supervised_entity {     // 此处的namespace是自定义的
+
+/*!
+ * \brief Definition of all checkpoints of this supervised entity
+ */
+enum class Checkpoints : EnumUnderlyingType { AliveCheckpointTest = 1U };
+/*!
+ * \brief Definition of the supervised entity - with the SE ID
+ */
+template <PrototypeType PrototypeId>
+using SE = Identifier<1U, PrototypeId, Checkpoints>;
+
+/*!
+ * \brief Definition of the supervised entity prototype - with prototype ID
+ */
+using Prototype0 = SE<0>;
+}
+}
+}
+}
+```
+
+`SupervisedEntity`是一个模板类，需要传递三个模板类型参数
+```cpp
+/*!
+ * \brief Part of the static application interface to report checkpoints of a supervised entity.
+ * \tparam InterfaceId Identifier of the supervised entity.
+ * \tparam PrototypeId Identifier of the prototype.
+ * \tparam Enum Type of reported checkpoint.
+ * \vpublic
+ * \unit ara::phm::PHM
+ */
+template <InterfaceType InterfaceId, PrototypeType PrototypeId, typename Enum>
+class SupervisedEntity<Identifier<InterfaceId, PrototypeId, Enum>> : private PHM {
+// ...
+};
+```
+
+
+
+
+
+
+
+
+
+
 
 
