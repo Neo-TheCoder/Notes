@@ -2294,8 +2294,162 @@ C++要求对一般的`内置函数`要用关键字iline声明
   也就是说，在cpp中进行`inline`声明
 
 
-
 # lambda按值捕获时，默认通过拷贝构造函数生成一个const类型的变量
+除非显式指定，否则就是const类型的
+
+
+
+# 手搓`shared_ptr`
+## `std::shared_ptr`使用引用计数控制对象的生命周期，从而使得在赋值运算符等场景不需要`delete`
+```cpp
+template<typename _Tp, _Lock_policy _Lp>
+     class __shared_ptr {
+// ...
+         __shared_ptr(_Yp* __p)
+         : _M_ptr(__p), _M_refcount(__p, typename is_array<_Tp>::type())  //包含的指针__p也传入到了引用计数里去了
+// ...
+       __shared_count<_Lp>  _M_refcount;    // Reference counter. 引用计数
+    };
+```
+
+`__shared_count`类 和 `_Sp_counted_ptr`类
+```cpp
+template<_Lock_policy _Lp>
+     class __shared_count {
+// ...
+       template<typename _Ptr>
+         explicit
+         __shared_count(_Ptr __p) : _M_pi(0)
+         {
+// ...
+               _M_pi = new _Sp_counted_ptr<_Ptr, _Lp>(__p);
+         };
+     };
+// ...
+   template<typename _Ptr, _Lock_policy _Lp>
+     class _Sp_counted_ptr final : public _Sp_counted_base<_Lp>
+     {
+     public:
+       explicit
+       _Sp_counted_ptr(_Ptr __p) noexcept
+       : _M_ptr(__p) { } //指针最后是存在了这里
+
+       virtual void
+       _M_dispose() noexcept
+       { delete _M_ptr; } //引用计数器回收的时候, 指针才会被删除掉
+     };
+```
+
+手搓版本
+```cpp
+#include<iostream>
+#include<string>
+
+
+namespace linearx{
+template<class T>
+class shared_ptr {
+public:
+    shared_ptr(): m_ptr_(nullptr), m_ref_count_(new unsigned int(1)) {}
+    shared_ptr(T* ptr): m_ptr_(nullptr), m_ref_count_(new unsigned int(1)) {}
+    
+    // 拷贝构造函数
+    shared_ptr(const shared_ptr& obj) {
+        m_ptr_ = obj.m_ptr_;
+        m_ref_count_ = obj.m_ref_count_;
+        if(m_ref_count_ != nullptr)
+            (*m_ref_count_)++;
+    }
+
+    shared_ptr& operator=(const shared_ptr& obj) {
+        // 必须考虑自赋值
+        if(obj.m_ptr_ == m_ptr_)
+            return *this;
+
+        if(m_ref_count_ != nullptr) {
+            (*m_ref_count_)--;
+            if(*m_ref_count_ == 0) {
+                delete m_ref_count_;
+                delete m_ptr_;
+            }
+        }
+        m_ref_count_ = obj.m_ref_count_;
+        m_ptr_ = obj.m_ptr_;
+        if(m_ref_count_ != nullptr) {   // 对空指针解引用是错误的，因此要判空，实际上确实有这种可能
+            *(m_ref_count_)++;
+        }
+        return *this;
+    }
+    
+    shared_ptr(shared_ptr&& dying_obj) : m_ptr_(nullptr), m_ref_count_(nullptr)
+    {
+        dying_obj.swap(*this);
+    }
+
+    shared_ptr& operator=(shared_ptr&& dying_obj) {
+        /*
+            创建临时对象，利用移动构造函数
+            再和this交换指针和引用计数
+        */
+        //因为this的内容被交换到了当前的临时创建的shared_ptr里，当临时对象析构的时候，原先的对象对应的引用计数自然-1
+        shared_ptr(std::move(dying_obj)).swap(*this);
+        return *this;
+    }
+
+    ~shared_ptr() {}
+
+    T* operator->() const
+    {
+        return m_ptr_;
+    }
+
+    T& operator*() const
+    {
+        return *m_ptr_;
+    }
+
+    T* get() const
+    {
+        return m_ptr_;
+    }
+
+    unsigned int use_count() const
+    {
+        return *m_ref_count_;
+    }
+
+private:
+    void swap(shared_ptr& other) {
+        std::swap(this->m_ptr_, other.m_ptr_);
+        std::swap(this->m_ref_count_, other.m_ref_count_);
+    }
+
+
+
+    T* m_ptr_ = nullptr;
+    unsigned int* m_ref_count_ = nullptr;   // 因为各个shared_ptr的引用计数需要是同一个值，随时更新和共享，因此只维护一个实例
+};
+
+};
+
+int main() {
+    linearx::shared_ptr<int> ptr(new int(123));
+    std::cout << ptr.use_count() << std::endl;
+    linearx::shared_ptr<int> ptr2(ptr);
+    std::cout << ptr.use_count() << std::endl;
+    return 0;
+}
+```
+
+
+
+
+
+
+
+
+
+
 
 
 

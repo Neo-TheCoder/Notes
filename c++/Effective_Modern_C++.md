@@ -58,8 +58,7 @@ void f(ParamType param);
 f(expr);                        //从expr中推导T和ParamType
 ```
 
-情景一：
-ParamType是一个`指针或引用`，但不是通用引用
+## 情景一：ParamType是一个`指针或引用`，但不是通用引用
 最简单的情况是ParamType是一个指针或者引用，但非通用引用。
 在这种情况下，类型推导会这样进行：
 1. 如果expr的类型是一个引用，**忽略引用部分**
@@ -121,6 +120,365 @@ f(px);                          //T是const int，param的类型是const int*
 ```
 到现在为止，你会发现你自己打哈欠犯困，因为C++的类型推导规则对引用和指针形参如此自然，书面形式来看这些非常枯燥。
 所有事情都那么理所当然！那正是在类型推导系统中你所想要的。
+
+
+## 情景二：ParamType是一个`通用引用`
+模板使用`通用引用形参`的话，那事情就不那么明显了。
+这样的形参被声明为像右值引用一样（也就是，在函数模板中假设有一个类型形参T，那么通用引用声明形式就是`T&&`)，它们的行为在传入左值实参时大不相同。
+完整的叙述请参见Item24，在这有些最必要的你还是需要知道：
+如果`expr`是`左值`，`T`和`ParamType`都会被推导为`左值引用`。
+这非常不寻常：
+- 第一，这是模板类型推导中唯一一种`T`被推导为`引用`的情况。
+- 第二，虽然ParamType被声明为右值引用类型，但是最后推导的结果是左值引用。
+如果`expr`是右值，就使用正常的（也就是情景一）推导规则
+举个例子：
+```cpp
+template<typename T>
+void f(T&& param);              //param现在是一个通用引用类型
+        
+int x = 27;                       //如之前一样
+const int cx = x;                 //如之前一样
+const int & rx = cx;              //如之前一样
+
+f(x);                           //x是左值，所以T是int&，
+                                //param类型也是int&
+
+f(cx);                          //cx是左值，所以T是const int&，
+                                //param类型也是const int&
+
+f(rx);                          //rx是左值，所以T是const int&，
+                                //param类型也是const int&
+
+f(27);                          //27是右值，所以T是int，
+                                //param类型就是int&&
+```
+`Item24`详细解释了为什么这些例子是像这样发生的。
+这里关键在于 `通用引用的类型推导规则` 是 不同于普通的左值或者右值引用的。
+尤其是，当通用引用被使用时，类型推导会区分`左值实参`和`右值实参`，但是对非通用引用时不会区分。
+
+## 情景三：ParamType既不是指针也不是引用
+当ParamType既不是指针也不是引用时，我们通过`传值（pass-by-value）`的方式处理：
+
+```cpp
+template<typename T>
+void f(T param);                //以传值的方式处理param
+```
+这意味着无论传递什么param都会成为它的一份`拷贝`————一个完整的新对象。
+事实上param成为一个新对象这一行为会影响T如何从expr中推导出结果。
+
+和之前一样，如果expr的类型是一个引用，忽略这个引用部分
+如果忽略expr的引用性（reference-ness）之后，expr是一个const，那就再忽略const。
+如果它是volatile，也忽略volatile（volatile对象不常见，它通常用于驱动程序的开发中。关于volatile的细节请参见Item40）
+因此
+```cpp
+int x=  27;                       //如之前一样
+const int cx = x;                 //如之前一样
+const int & rx = cx;              //如之前一样
+
+f(x);                           //T和param的类型都是int
+f(cx);                          //T和param的类型都是int
+f(rx);                          //T和param的类型都是int
+```
+注意即使cx和rx表示const值，param也不是const。这是有意义的。
+`param是一个完全独立于cx和rx的对象`————是cx或rx的一个拷贝。
+具有常量性的cx和rx不可修改并不代表param也是一样。
+这就是为什么expr的常量性constness（或易变性volatileness)在推导param类型时会被忽略：因为`expr不可修改 并不意味着 它的拷贝也不能被修改`。
+
+认识到只有在传值给形参时才会忽略const（和volatile）这一点很重要，正如我们看到的，对于reference-to-const和pointer-to-const形参来说，expr的常量性constness在推导时会被保留。
+但是考虑这样的情况，expr是一个const指针，指向const对象，expr通过传值传递给param：
+```cpp
+template<typename T>
+void f(T param);                //仍然以传值的方式处理param
+
+const char* const ptr =         //ptr是一个常量指针，指向常量对象 
+    "Fun with pointers";
+
+f(ptr);                         //传递const char * const类型的实参
+```
+在这里，解引用符号（`*`）的右边的const表示ptr本身是一个const：ptr不能被修改为指向其它地址，也不能被设置为null（解引用符号左边的const表示ptr指向一个字符串，这个字符串是const，因此字符串不能被修改）。
+当ptr作为实参传给f，组成这个指针的每一比特都被拷贝进param。
+像这种情况，ptr自身的值会被传给形参，根据类型推导的第三条规则，ptr自身的常量性constness将会被省略，所以`param`是`const char*`，也就是 `一个可变指针指向const字符串`。
+在类型推导中，这个指针指向的数据的常量性constness将会被保留，但是当拷贝ptr来创造一个新指针param时，ptr自身的常量性constness将会被忽略。
+
+
+## 数组实参
+上面的内容几乎覆盖了模板类型推导的大部分内容，但这里还有一些小细节值得注意，比如`数组类型`不同于`指针类型`，虽然它们两个有时候是可互换的。
+关于这个错觉最常见的例子是，**在很多上下文中数组会退化为指向它的第一个元素的指针**。
+这样的退化允许像这样的代码可以被编译：
+```cpp
+const char name[] = "J. P. Briggs";     //name的类型是const char[13]
+
+const char * ptrToName = name;          //数组退化为指针
+```
+在这里`const char*`指针ptrToName会由name初始化，而name的类型为`const char[13]`，这两种类型（const char*和const char[13]）是不一样的，但是由于数组退化为指针的规则，编译器允许这样的代码。
+
+但要是一个数组传值给一个模板会怎样？会发生什么？
+```cpp
+template<typename T>
+void f(T param);                        //传值形参的模板
+
+f(name);                                //T和param会推导成什么类型?
+```
+我们从一个简单的例子开始，这里有一个函数的形参是数组，是的，这样的语法是合法的，
+```cpp
+void myFunc(int param[]);
+```
+但是数组声明会被视作指针声明，这意味着myFunc的声明和下面声明是等价的：
+```cpp
+void myFunc(int* param);                //与上面相同的函数
+```
+数组与指针形参这样的等价是C语言的产物，C++又是建立在C语言的基础上，它让人产生了一种数组和指针是等价的的错觉。
+
+因为数组形参会视作指针形参，所以传值给模板的一个`数组类型`会被`推导为`一个`指针类型`。
+这意味着在模板函数f的调用中，它的类型形参T会被推导为`const char*`：
+```cpp
+f(name);                        //name是一个数组，但是T被推导为const char*
+```
+但是现在难题来了，虽然函数不能声明形参为真正的数组，但是`可以接受指向数组的引用`！所以我们修改f为传引用：
+```cpp
+template<typename T>
+void f(T& param);                       //传引用形参的模板
+```
+我们这样进行调用，
+```cpp
+f(name);                                //传数组给f
+```
+T被推导为了真正的数组！这个类型包括了`数组的大小`，在这个例子中T被推导为`const char[13]`，f的形参（该数组的引用）的类型则为`const char (&)[13]`。是的，这种语法看起来又臭又长，但是知道它将会让你在关心这些问题的人的提问中获得大神的称号。
+有趣的是，可声明指向数组的引用的能力，使得我们可以创建一个模板函数来`推导出数组的大小`：
+```cpp
+//在编译期间返回一个数组大小的常量值（//数组形参没有名字，
+//因为我们只关心数组的大小）
+template<typename T, std::size_t N>                     //关于
+constexpr std::size_t arraySize(T (&)[N]) noexcept      //constexpr
+{                                                       //和noexcept
+    return N;                                           //的信息
+}                                                       //请看下面
+```
+在Item15提到将一个函数声明为`constexpr`使得结果在`编译期间可用`。
+这使得我们可以用一个花括号声明一个数组，然后第二个数组可以使用第一个数组的大小作为它的大小，就像这样：
+```cpp
+int keyVals[] = { 1, 3, 7, 9, 11, 22, 35 };             //keyVals有七个元素
+
+int mappedVals[arraySize(keyVals)];                     //mappedVals也有七个
+// 当然作为一个现代C++程序员，你自然应该想到使用std::array而不是内置的数组：
+
+std::array<int, arraySize(keyVals)> mappedVals;         //mappedVals的大小为7
+```
+至于arraySize被声明为`noexcept`，会使得编译器生成更好的代码，具体的细节请参见Item14。
+
+## 函数实参
+在C++中不只是数组会退化为指针，`函数类型`也会退化为一个`函数指针`，我们对于数组类型推导的全部讨论都可以应用到函数类型推导和退化为函数指针上来。结果是：
+```cpp
+void someFunc(int, double);         //someFunc是一个函数，
+                                    //类型是void(int, double)
+
+template<typename T>
+void f1(T param);                   //传值给f1
+
+template<typename T>
+void f2(T& param);                 //传引用给f2
+
+f1(someFunc);                       // param被推导为指向函数的指针，
+                                    // 类型是 void(*)(int, double)
+f2(someFunc);                       // param被推导为指向函数的引用，
+                                    // 类型是 void(&)(int, double)
+```
+这个实际上没有什么不同，但是如果你知道数组退化为指针，你也会知道函数退化为指针。
+这里你需要知道：`auto`依赖于模板类型推导。
+正如我在开始谈论的，在大多数情况下它们的行为很直接。
+在通用引用中对于左值的特殊处理使得本来很直接的行为变得有些污点，然而，数组和函数退化为指针把这团水搅得更浑浊。
+有时你只需要编译器告诉你推导出的类型是什么。这种情况下，翻到item4,它会告诉你如何让编译器这么做。
+
+请记住：
+* 在模板类型推导时，有引用的实参会被视为无引用，他们的引用会被忽略
+* 对于通用引用的推导，左值实参会被特殊对待
+* 对于传值类型推导，const和/或volatile实参会被认为是non-const的和non-volatile的
+* 在模板类型推导时，数组名或者函数名实参会退化为指针，除非它们被用于初始化引用
+
+
+
+
+# 条款2：理解auto类型推导
+如果你已经读过Item1的模板类型推导，那么你几乎已经知道了auto类型推导的大部分内容，至于为什么不是全部，是因为这里有一个auto不同于模板类型推导的例外。
+但这怎么可能？模板类型推导包括模板，函数，形参，但auto不处理这些东西啊。
+你是对的，但没关系。
+`auto类型推导` 和 `模板类型推导`有一个直接的`映射关系`。
+它们之间可以通过一个 非常规范 非常系统化的 转换流程来转换彼此。
+在Item1中，模板类型推导使用下面这个函数模板
+```cpp
+template<typename T>
+void f(ParmaType param);
+```
+和这个调用来解释：
+```cpp
+f(expr);                        //使用一些表达式调用f
+```
+在f的调用中，编译器使用`expr`推导`T`和`ParamType`的类型。
+当一个变量使用auto进行声明时，`auto`扮演了`模板中T`的角色，`变量`的`类型说明符`扮演了`ParamType`的角色。
+废话少说，这里便是更直观的代码描述，考虑这个例子：
+```cpp
+auto x = 27;
+```
+这里x的类型说明符是`auto`自己，另一方面，在这个声明中：
+```cpp
+const auto cx = x;
+```
+类型说明符是`const auto`。另一个：
+```cpp
+const auto& rx = x;
+```
+类型说明符是`const auto&`。
+在这里例子中要推导x，cx和rx的类型，编译器的行为看起来就像是`认为这里每个声明都有一个模板`，然后使用`合适的初始化表达式`进行调用：
+以下代码试图说明的是：
+auto与模板类型推导的映射：
+```cpp
+template<typename T>            //概念化的模板用来推导x的类型
+void func_for_x(T param);
+
+func_for_x(27);                 //概念化调用：
+                                //param的推导类型是x的类型
+
+template<typename T>            //概念化的模板用来推导cx的类型
+void func_for_cx(const T param);
+
+func_for_cx(x);                 //概念化调用：
+                                //param的推导类型是cx的类型
+
+template<typename T>            //概念化的模板用来推导rx的类型
+void func_for_rx(const T& param);
+
+func_for_rx(x);                 //概念化调用：
+                                //param的推导类型是rx的类型
+```
+正如我说的，auto类型推导除了一个例外（我们很快就会讨论），其他情况都和模板类型推导一样。
+
+Item1基于ParamType————在函数模板中param的类型说明符————的不同特征，把模板类型推导分成三个部分来讨论。
+在使用auto作为类型说明符的变量声明中，类型说明符代替了ParamType，因此Item1描述的三个情景稍作修改就能适用于auto：
+* 情景一：类型说明符是一个指针或引用但不是通用引用
+* 情景二：类型说明符一个通用引用
+* 情景三：类型说明符既不是指针也不是引用
+我们早已看过情景一和情景三的例子：
+```cpp
+auto x = 27;                    //情景三（x既不是指针也不是引用）
+const auto cx = x;              //情景三（cx也一样）
+const auto & rx = cx;             //情景一（rx是非通用引用）, cx是const int类型，因此rx是const int&类型的左值
+```
+情景二像你期待的一样运作：
+```cpp
+auto&& uref1 = x;               //x是int左值，
+                                //所以uref1类型为int&
+auto&& uref2 = cx;              //cx是const int左值，
+                                //所以uref2类型为const int&
+auto&& uref3 = 27;              //27是int右值，
+                                //所以uref3类型为int&&
+```
+Item1讨论并总结了对于non-reference类型说明符，数组和函数名如何退化为指针。
+那些内容也同样适用于auto类型推导：
+```cpp
+const char name[] =             //name的类型是const char[13]
+ "R. N. Briggs";
+
+auto arr1 = name;               //arr1的类型是const char*，已经退化了，只有引用能够完整地保证数组具体类型
+auto& arr2 = name;              //arr2的类型是const char (&)[13]
+
+void someFunc(int, double);     //someFunc是一个函数，
+                                //类型为void(int, double)
+
+auto func1 = someFunc;          //func1的类型是void (*)(int, double)，退化了，变成指向函数的指针
+auto& func2 = someFunc;         //func2的类型是void (&)(int, double)
+```
+就像你看到的那样，auto类型推导和模板类型推导几乎一样的工作，它们就像一个硬币的两面。
+讨论完相同点接下来就是不同点，前面我们已经说到 auto类型推导 和 模板类型推导 有一个例外使得它们的工作方式不同，接下来我们要讨论的就是那个例外。
+
+我们从一个简单的例子开始，如果你想声明一个带有初始值27的int，C++98提供两种语法选择：
+```cpp
+int x1 = 27;
+int x2(27);
+```
+
+C++11由于也添加了用于支持`统一初始化（uniform initialization）`的语法：
+
+```cpp
+int x3 = { 27 };
+int x4{ 27 };
+```
+总之，这四种不同的语法只会产生一个相同的结果：变量类型为int值为27
+
+但是Item5解释了使用auto说明符代替指定类型说明符的好处，所以我们应该很乐意把上面声明中的int替换为auto，我们会得到这样的代码：
+```cpp
+auto x1 = 27;
+auto x2(27);
+auto x3 = { 27 };
+auto x4{ 27 };
+```
+这些声明都能通过编译，但是他们不像替换之前那样有相同的意义。前面两个语句确实声明了一个类型为int值为27的变量，
+！！！但是后面两个声明了一个`存储一个元素27`的 `std::initializer_list<int>`类型的变量。
+```cpp
+auto x1 = 27;                   //类型是int，值是27
+auto x2(27);                    //同上
+auto x3 = { 27 };               //类型是std::initializer_list<int>，
+                                //值是{ 27 }
+auto x4{ 27 };                  //同上
+```
+这就造成了auto类型推导不同于模板类型推导的特殊情况。
+！！！当用`auto`声明的变量使用`花括号`进行初始化，auto类型推导推出的类型则为`std::initializer_list`。
+如果这样的一个类型不能被成功推导（比如花括号里面包含的是不同类型的变量），编译器会拒绝这样的代码：
+```cpp
+auto x5 = { 1, 2, 3.0 };        //错误！无法推导std::initializer_list<T>中的T
+```
+就像注释说的那样，在这种情况下类型推导将会失败，但是对我们来说认识到这里确实发生了两种类型推导是很重要的。
+一种是由于auto的使用：x5的类型不得不被推导。
+因为x5使用花括号的方式进行初始化，x5必须被推导为`std::initializer_list`。
+但是`std::initializer_list`是一个模板。`std::initializer_list<T>`会被某种类型T实例化，所以这意味着`T`也会被推导。
+推导落入了这里发生的`第二种类型推导`————`模板类型推导的范围`。
+在这个例子中推导之所以失败，是因为在花括号中的值并不是同一种类型。
+**对于花括号的处理是auto类型推导和模板类型推导唯一不同的地方。**
+当 使用auto声明的变量 使用 花括号的语法 进行初始化的时候，会推导出`std::initializer_list<T>`的实例化，但是对于模板类型推导这样就行不通：
+```cpp
+auto x = { 11, 23, 9 };         //x的类型是std::initializer_list<int>
+
+template<typename T>            //带有与x的声明等价的
+void f(T param);                //形参声明的模板
+
+f({ 11, 23, 9 });               //错误！不能推导出T
+```cpp
+然而如果在模板中指定T是`std::initializer_list<T>`而留下未知T,模板类型推导就能正常工作：
+```cpp
+template<typename T>
+void f(std::initializer_list<T> initList);
+
+f({ 11, 23, 9 });               //T被推导为int，initList的类型为
+                                //std::initializer_list<int>
+```
+**因此auto类型推导和模板类型推导的真正区别在于，`auto`类型推导假定`花括号`表示`std::initializer_list`而模板类型推导不会这样（确切的说是不知道怎么办）。**
+你可能想知道为什么auto类型推导和模板类型推导对于花括号有不同的处理方式。
+我也想知道。哎，我至今没找到一个令人信服的解释。
+但是规则就是规则，这意味着你必须记住如果你使用auto声明一个变量，并用花括号进行初始化，auto类型推导总会得出`std::initializer_list`的结果。
+如果你使用**uniform initialization（花括号的方式进行初始化）**用得很爽你就得记住这个例外以免犯错，在C++11编程中一个典型的错误就是偶然使用了`std::initializer_list<T>`类型的变量，这个陷阱也导致了很多C++程序员抛弃花括号初始化，只有不得不使用的时候再做考虑。（在Item7讨论了必须使用时该怎么做）
+对于C++11故事已经说完了。但是对于C++14故事还在继续，`C++14允许auto用于函数返回值`并会被推导（参见Item3），而且C++14的lambda函数也允许在形参声明中使用auto。但是在这些情况下auto实际上使用模板类型推导的那一套规则在工作，而不是auto类型推导，所以说下面这样的代码不会通过编译：
+```cpp
+auto createInitList()
+{
+    return { 1, 2, 3 };         //错误！不能推导{ 1, 2, 3 }的类型
+}
+```
+同样在C++14的lambda函数中这样使用auto也不能通过编译：
+```cpp
+std::vector<int> v;
+// …
+auto resetV = [&v](const auto& newValue){ v = newValue; };        //C++14
+// …
+resetV({ 1, 2, 3 });            //错误！不能推导{ 1, 2, 3 }的类型
+```
+请记住：
+- auto类型推导通常和模板类型推导相同，但是auto类型推导假定花括号初始化代表`std::initializer_list`，而模板类型推导不这样做
+- 在C++14中auto允许出现在函数返回值或者lambda函数形参中，但是它的工作机制是`模板类型推导`那一套方案，而不是auto类型推导
+
+
+
+
+
+
 
 
 
@@ -199,7 +557,7 @@ decltype(auto) move(T&& param)          //C++14，仍然在std命名空间
 }
 ```
 看起来更简单，不是吗？
-因为std::move除了转换它的实参到右值以外什么也不做，有一些提议说它的名字叫`rvalue_cast`之类可能会更好。
+因为`std::move`除了转换它的实参到`右值`以外什么也不做，有一些提议说它的名字叫`rvalue_cast`之类可能会更好。
 虽然可能确实是这样，但是它的名字已经是std::move，所以记住std::move做什么和不做什么很重要。它只进行转换，不移动任何东西。
 当然，右值本来就是移动操作的候选者，所以，对一个对象使用std::move就是告诉编译器，这个对象很适合被移动。
 所以这就是为什么std::move叫现在的名字：更容易指定可以被移动的对象。
