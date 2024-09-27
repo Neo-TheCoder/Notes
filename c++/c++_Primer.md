@@ -66,19 +66,20 @@ const double pi = 3.14;
 const double *const pip = &pi;
 （从右往左看）
 
-顶层const表示指针本身是个常量
+`顶层const`表示`指针本身`是个`常量`
+```cpp
 int i = 0;
 int *const p1 = &i; // p1的值无法改变
-
-底层const表示指针所指的对象是一个常量
+```
+`底层const`表示指针`所指的对象`是一个`常量`
 底层const：
 当执行对象的拷贝操作时，拷入和拷出的对象必须具有相同的底层const资格，或者两个对象的数据类型可以转换。
-
+```cpp
 const int &r = ci;
-用于声明引用的const都是底层const
-
+```
+用于声明引用的const都是`底层const`
 当执行对象的拷贝操作时，常量是顶层const还是底层const区别明显，顶层const不受什么影响。
-
+```cpp
 int i = 0;
 int *const p1 = &i; // 顶层const，不能改变p1的值
 const int ci = 42;  // 不能改变ci的值，顶层const
@@ -87,20 +88,20 @@ const int *const p3 = p2;   // 左边的const是底层
 
 i = ci; // 正确 ci是顶层const
 p2 = p3;    // 正确，p2,p3指向的对象类型相同
-
+```
 底层const的限制不能忽视：
 拷贝操作时，拷入和拷出的对象必须具有相同的底层const资格
 或者数据类型可以转换
 非常量可以转换成常量
-
+```cpp
 int *p = p3;    // p3包含底层const的定义，而p没有
 p2 = p3;    // 正确
 p2 = &i;    // int 可以转为const int*
 int &r = ci;    // 错误，普通的int&不能绑定到int常量上
 const int &r2 = i;  // 正确
-
+```
 常量表达式
-constexpr
+`constexpr`
 值不会改变并且在编译过程就能得到计算结果的表达式
 
 const int t = 20;   // t是常量表达式
@@ -2221,7 +2222,7 @@ template int compare(const int&,const int&);    // 定义
 ## 16.2 模板实参推断
 
 ### 16.2.1 类型转换与模板类型参数
-顶层const传递给函数模板会被忽略
+`顶层const`传递给`函数模板`会被忽略
 
 如果函数形参是常量引用，但是传入的是指针（来源于数组），是无法转换的。
 将实参传递给带模板类型的函数形参时，能够自动应用的类型转换只有const转换、以及数组/函数到指针的转换。

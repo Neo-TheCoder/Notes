@@ -91,7 +91,7 @@ Its OS resources have been freed.
 例如 具有`Startup Configuration SC1`的`进程P1`运行在当前的功能组状态`FG1::S1`，
 而具有`Startup Configuration SC2`的`进程 P1`会处于下一个功能组状态`FG1::S2`。
 在从`FG1::S1`到`FG1::S2`的功能组状态转换期间，进程将被终止并以不同的启动配置：`Startup Configuration SC2`重新启动。
-***不同的`Startup Configuration`在不同的`FG的state`下被作为process的启动参数***
+***不同的`Startup Configuration` 在不同的`FG的state` 下被作为process的启动参数***
 如果两个功能组状态中的启动配置相同，则进程不会被触动。
 EM 通过分配一个操作系统进程来启动进程，该进程的属性已在启动配置中配置。
 如果进程在报告`Execution State`（见 2.1.1.7）运行后，但在功能组状态转换结束前异常终止（即退出状态不是`EXIT_SUCCESS`），则功能组状态转换失败。
@@ -124,11 +124,8 @@ EM 监控进程状态的变化。
 
 
 
-
-
 ### 2.1.2 State Management
 EM provides API which allows `SM` to `request a Function Group state change` as well as `fetching the current state of a given Function Group`.
-
 
 
 
@@ -176,7 +173,6 @@ That means, the callback it is not called if such a termination takes place duri
 `Shutdown`和`Restart`状态用于实现`Machine`的关机或重启。
 如果PHM请求进入`SafeState`，则进入`SafeState`。
 这是一个最终状态，不能再离开。
-
 
 
 

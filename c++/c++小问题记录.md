@@ -2171,6 +2171,38 @@ int main() {
 
 PS：C++中：派生类会覆盖基类的同名函数
 
+简单示例：
+编译器在编译时并不会检查 Child 类是否实现了 implementation 函数
+```cpp
+#include <iostream>
+using namespace std;
+
+template <typename Child>
+struct Base
+{
+	void interface()
+	{
+        // 基类指针，指向派生类对象
+		static_cast<Child*>(this)->implementation();    // 编译器在编译时并不会检查 Child 类是否实现了 implementation 函数
+	}
+};
+
+struct Derived : Base<Derived>
+{
+	void implementation()
+	{
+		cerr << "Derived implementation\n";
+	}
+};
+
+int main()
+{
+	Derived d;
+	d.interface();  // 调用基类接口，打印出独属于当前派生类的信息，Prints "Derived implementation"
+
+	return 0;
+}
+```
 
 
 
@@ -2445,12 +2477,29 @@ int main() {
 
 
 
+# 成员函数限定符
+```cpp
+#include<iostream>
 
+struct Foo {
+    void f() const & {}   // 成员函数限定符，此处，左右值对象都可以调用该函数
+    // 表示 f()函数 是一个常量左值引用限定符的成员函数。
+    // 这意味着 成员函数只能被 左值对象 调用 或者 只能被 右值对象 调用
+};
 
+int main() {
+    // const int val = 123;
+    // int&& r = std::move(val);
 
+    Foo t;
+    t.f();
+    Foo{}.f(); // OK
+    (Foo{}.*&Foo::f)(); // 成员函数指针
+    (Foo{}.Foo::f)();
 
-
-
+    return 0;
+}
+```
 
 
 

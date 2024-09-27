@@ -21,8 +21,6 @@ someipd得知client app想要find service，发送`源IP是单播，目的IP是�
 (当`IsOffered()`为true，才执行往下执行) -> `Connect()` -> `ConnectTCP()`，当`socket可写`，触发`回调`，改变`状态机状态`，设置为`Connected`
 
 
-
-
 # 关于someip_config.json的解析
 ```cpp
 /*!
@@ -1359,6 +1357,16 @@ ara::core::Result<void> InitializeComponent() noexcept {
 
 #### `InitializeServiceInterfaceSkeletonFactories()`内部实现：
 ```cpp
+// VECTOR NC AutosarC++17_10-M9.3.3, VectorC++-V5.0.1: MD_SOMEIPBINDING_AutosarC++17_10-M9.3.3_Method_can_be_declared_const
+void SomeipBindingInitializer::InitializeServiceInterfaceSkeletonFactories() noexcept {
+  // Instantiate and register a skeleton factory for ServiceInterface '/vector/StartApplication/cm/ServiceInterface/StartApplicationCmService1_ServiceInterface'
+  ::amsr::someip_binding_transformation_layer::internal::startapplication::cm::service1::
+      AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesStartApplicationCmService1_ServiceInterface(aracom_someip_binding_->GetServerManager());
+}
+```
+
+`AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesStartApplicationCmService1_ServiceInterface()`
+```cpp
 void AraComSomeIpBindingInitializeServiceInterfaceSkeletonFactoriesStartApplicationCmService1_ServiceInterface(
     AraComSomeIpBindingSpecializationSkeleton::ServerManager& server_manager) {
   // Instantiate and register a skeleton factory for the ServiceInterface '/vector/StartApplication/cm/ServiceInterface/StartApplicationCmService1_ServiceInterface'.
@@ -1380,7 +1388,7 @@ Runtime::InitializeBindings();
                                    ::amsr::socal::internal::configuration::RuntimeProcessingMode::kPolling};
   // ...
     aracom_someip_binding_.emplace(config, [&runtime_instance]() { static_cast<void>(runtime_instance.ProcessPolling()); },
-                                          &reactor, timer_manager, is_processing_mode_polling);
+                                          &reactor, timer_manager, is_processing_mode_polling);   // 此处的emplace()调用了构造函数
   // ...
 }
 ```
@@ -1395,7 +1403,6 @@ class Configuration {
   RuntimeProcessingMode processing_mode_{RuntimeProcessingMode::kSingleThreaded};
   // ...
 };
-
 ```
 
 通过调用`SomeipBindingInitializer::Initialize()`从而构造了`AraComSomeIpBinding<SomeIpDaemonClient<SomeIpDaemonClientDefaultTemplateConfiguration>>`对象
@@ -1406,8 +1413,6 @@ class Configuration {
 using AraComSomeIpBindingSpecializationSkeleton =
     AraComSomeIpBinding<::amsr::someip_daemon_client::internal::SomeIpDaemonClient<
                             ::amsr::someip_daemon_client::internal::SomeIpDaemonClientDefaultTemplateConfiguration>>;
-
-
 ```
 
 操作：往`server_manager`中添加当前`service interface`对应的`Skeleton factory`。
@@ -1497,7 +1502,6 @@ void SomeipBindingInitializer::RegisterServiceInstances() noexcept {
 }
 ```
 
-
 PS: `class InstanceSpecifierLookupTable`
 可以联想到文档里所说的`多重绑定`
 ```cpp
@@ -1543,8 +1547,6 @@ class InstanceSpecifierLookupTable {
   aracom_someip_binding_
 `service_shortname_path`：
   /smart/service_interface/parameter_service_interface
-
-
 
 
 ### `InitializeThreadPools();`
@@ -1640,7 +1642,6 @@ void Runtime::StartBindings() noexcept {
 根据给定配置的地址，连接SOME/IP daemon。
 初始化了和SOME/IP daemon的一个新连接，并一直阻塞，除非连接建立或者发生错误。（前提是SOME/IP daemon在运行）
 `is_processing_mode_polling_`是在什么时候set?
-
 
 `Connect()`
 ```cpp
