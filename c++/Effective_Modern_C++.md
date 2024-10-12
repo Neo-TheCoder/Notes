@@ -1482,14 +1482,14 @@ struct MyAllocList {                            //std::list<T, MyAlloc<T>>
 
 MyAllocList<Widget>::type lw;                   //用户代码
 ```
-更糟糕的是，如果你想使用在一个模板内使用typedef声明一个链表对象，而这个对象又使用了`模板形参`，你就不得不在typedef前面加上typename：
+更糟糕的是，如果你想使用在一个模板内使用`typedef`声明一个链表对象，而这个对象又使用了`模板形参`，你就不得不在typedef前面加上typename：
 ```cpp
 template<typename T>
 class Widget {                              //Widget<T>含有一个MyAllocLIst<T>对象作为数据成员
 private:
-    typename MyAllocList<T>::type list;     // 必须加typename是因为：这种::语法结构带来了歧义：因为也有可能是 静态成员变量 或 静态成员函数
+    typename MyAllocList<T>::type list;     // 必须加typename是因为：这种::语法结构带来了歧义：因为 type 也有可能是 静态成员变量 或 静态成员函数
     // …
-}; 
+};
 ```
 这里`MyAllocList<T>::type`使用了一个类型，这个类型依赖于模板参数T。
 
@@ -1497,7 +1497,7 @@ private:
 ！！！编译器在`实例化模板时`才能确定`MyAllocList<T>::type`的具体类型！！！
 
 因此`MyAllocList<T>::type`是一个`依赖类型（dependent type）`，在C++很多讨人喜欢的规则中的一个提到必须要在`依赖类型名`前加上`typename`。
-如果使用别名声明定义一个MyAllocList，就不需要使用typename（同时省略麻烦的“::type”后缀）：
+如果使用别名声明定义一个MyAllocList，就不需要使用`typename`（同时省略麻烦的“::type”后缀）：
 ```cpp
 template<typename T> 
 using MyAllocList = std::list<T, MyAlloc<T>>;   //同之前一样
@@ -1510,8 +1510,8 @@ private:
 };
 ```
 对你来说，`MyAllocList<T>`（使用了模板别名声明的版本）可能看起来和`MyAllocList<T>::type`（使用typedef的版本）一样都应该依赖模板参数T，但是你不是编译器。
-！！！当编译器处理Widget模板时遇到`MyAllocList<T>`（使用模板别名声明的版本），***它们知道`MyAllocList<T>`是一个类型名**，因为`MyAllocList`是一个别名模板：它一定是一个类型名。因此`MyAllocList<T>`就是一个非依赖类型（non-dependent type），就不需要也不允许使用typename修饰符。
-当编译器在Widget的模板中看到`MyAllocList<T>`::type（使用typedef的版本），它不能确定那是一个类型的名称。
+！！！当编译器处理Widget模板时遇到`MyAllocList<T>`（使用模板别名声明的版本），***它们知道`MyAllocList<T>`是一个类型名**，因为`MyAllocList`是一个别名模板：它一定是一个类型名。因此`MyAllocList<T>`就是一个`非依赖类型（non-dependent type）`，就不需要也不允许使用typename修饰符。
+当编译器在Widget的模板中看到`MyAllocList<T>::type`（使用typedef的版本），它不能确定那是一个类型的名称。
 因为可能存在一个MyAllocList的它们没见到的`特化版本`，那个版本的`MyAllocList<T>::type`指代了一种不是类型的东西。
 那听起来很不可思议，但不要责备编译器穷尽考虑所有可能。因为人确实能写出这样的代码。
 举个例子，一个误入歧途的人可能写出这样的代码：
@@ -1578,6 +1578,612 @@ using add_lvalue_reference_t =
 
 
 
+# 条款15：尽可能的使用constexpr
+如果要给C++11颁一个“最令人困惑新词”奖，`constexpr`十有八九会折桂。
+当用于对象上面，它本质上就是`const的加强形式`，但是当它用于`函数`上，意思就大不相同了。有必要消除困惑，因为你绝对会用它的，特别是当你发现constexpr “正合吾意”的时候。
+从概念上来说，constexpr表明一个值不仅仅是`常量`，还是`编译期可知的`。
+这个表述并不全面，因为当constexpr被用于函数的时候，事情就有一些细微差别了。
+为了避免我毁了结局带来的surprise，我现在只想说，**你不能假设`constexpr函数`的结果是`const`，也`不能保证`它们的（译注：返回）值是在`编译期可知`的**。
+最有意思的是，这些是特性。关于constexpr函数返回的结果不需要是const，也不需要编译期可知这一点是良好的行为！
+不过我们还是先从constexpr对象开始说起。
+这些对象，实际上，和const一样，它们是`编译期可知`的。（技术上来讲，它们的值在`翻译期（translation）决议`，所谓翻译不仅仅包含是`编译（compilation）`也包含`链接（linking）`，除非你准备写C++的编译器和链接器，否则这些对你不会造成影响，所以你编程时无需担心，把这些constexpr对象值看做编译期决议也无妨的。）
+编译期可知的值“享有特权”，它们可能被存放到`只读存储空间`中。！！！
+对于那些`嵌入式系统`的开发者，这个特性是相当重要的。
+更广泛的应用是：`“其值编译期可知”的 常量整数`会出现在需要“`整型常量表达式（integral constant expression）的 上下文`中，这类上下文包括`数组大小`，`整数模板参数`（包括`std::array对象的长度`），`枚举名的值`，`对齐修饰符`（译注：`alignas(val)`），等等。
+如果你想在这些上下文中使用变量，你一定会希望将它们声明为`constexpr`，因为编译器会确保它们是`编译期可知`的：
+```cpp
+int sz;                             //non-constexpr变量
+// …
+constexpr auto arraySize1 = sz;     //错误！sz的值在编译期不可知
+
+std::array<int, sz> data1;          //错误！一样的问题
+constexpr auto arraySize2 = 10;     //没问题，10是编译期可知常量
+
+std::array<int, arraySize2> data2;  //没问题, arraySize2是constexpr
+```
+注意`const不提供constexpr所能保证之事`，因为const对象不需要在编译期初始化它的值。
+```cpp
+int sz;                            //和之前一样
+// …
+const auto arraySize = sz;         //没问题，arraySize是sz的const复制   constexpr必须保证表达式的值编译期可知，比const更强烈
+std::array<int, arraySize> data;   //错误，arraySize值在编译期不可知
+```
+简而言之，`所有constexpr对象都是const，但不是所有const对象都是constexpr`。
+如果你想编译器保证一个变量有一个值，这个值可以放到那些需要编译期常量（compile-time constants）的上下文的地方，你需要的工具是constexpr而不是const。
+涉及到`constexpr函数`时，constexpr对象的使用情况就更有趣了。
+如果实参是`编译期常量`，这些函数将产出`编译期常量`；如果实参是`运行时才能知道的值`，它们就将产出`运行时值`。
+这听起来就像你不知道它们要做什么一样，那么想是错误的，请这么看：
+`constexpr函数`可以用于：`需求编译期常量的上下文`。
+如果你传给constexpr函数的实参在编译期可知，那么结果将在编译期计算。
+如果实参的值在编译期不知道，你的代码就会被拒绝。
+当一个constexpr函数被一个或者多个编译期不可知值调用时，它就像`普通函数`一样，运行时计算它的结果。这意味着`你不需要两个函数，一个用于编译期计算，一个用于运行时计算。constexpr全做了`。
+假设我们需要一个数据结构来存储一个实验的结果，而这个实验可能以各种方式进行。
+实验期间风扇转速，温度等等都可能导致亮度值改变，亮度值可以是高，低，或者无。
+如果有n个实验相关的环境条件，它们每一个都有三个状态，最终可以得到的组合有3^n个。
+储存所有实验结果的所有组合需要足够存放3^n个值的数据结构。
+假设每个结果都是int并且n是编译期已知的（或者可以被计算出的），一个std::array是一个合理的选择。
+我们需要一个方法`在编译期 计算3^n`。C++标准库提供了`std::pow`，它的数学功能正是我们所需要的，但是，对我们来说，这里还有两个问题。
+第一，std::pow是为浮点类型设计的，我们需要整型结果。
+第二，std::pow不是constexpr（即，不保证使用编译期可知值调用而得到编译期可知的结果），所以我们不能用它作为std::array的大小。
+幸运的是，我们可以应需写个pow。我将展示怎么快速完成它，不过现在让我们先看看它应该怎么被声明和使用：
+```cpp
+constexpr                                   //pow是 绝不抛异常的
+int pow(int base, int exp) noexcept         //constexpr函数
+{
+ …                                          //实现在下面
+}
+constexpr auto numConds = 5;                //（上面例子中）条件的个数
+std::array<int, pow(3, numConds)> results;  //结果有3^numConds个元素
+```
+回忆下pow前面的constexpr`不表明pow返回一个const值`，它只说了 `如果base和exp是编译期常量，pow的值可以被当成编译期常量使用`。
+如果base和/或exp不是编译期常量，pow结果将会在运行时计算。这意味着pow不止可以用于像`std::array`的大小这种需要编译期常量的地方，它也可以用于运行时环境：
+```cpp
+auto base = readFromDB("base");     //运行时获取这些值
+auto exp = readFromDB("exponent"); 
+auto baseToExp = pow(base, exp);    //运行时调用pow函数
+```
+`因为constexpr函数必须能在编译期值调用的时候返回编译期结果，就必须对它的实现施加一些限制`。这些限制在C++11和C++14标准间有所出入。
+C++11中，constexpr函数的代码不超过一行语句：一个return。听起来很受限，但实际上有两个技巧可以扩展constexpr函数的表达能力。
+第一，使用三元运算符“?:”来代替if-else语句，第二，使用递归代替循环。因此pow可以像这样实现：
+```cpp
+constexpr int pow(int base, int exp) noexcept
+{
+    return (exp == 0 ? 1 : base * pow(base, exp - 1));
+}
+```
+这样没问题，但是很难想象除了使用函数式语言的程序员外会觉得这样硬核的编程方式更好。在C++14中，constexpr函数的限制变得非常宽松了，所以下面的函数实现成为了可能：
+```cpp
+constexpr int pow(int base, int exp) noexcept   //C++14
+{
+    auto result = 1;
+    for (int i = 0; i < exp; ++i)
+        result *= base;
+    return result;
+}
+```
+constexpr函数限制为只能获取和返回字面值类型，这基本上意味着那些有了值的类型能在编译期决定。
+在C++11中，除了void外的所有内置类型，以及一些用户定义类型都可以是字面值类型，因为构造函数和其他成员函数可能是constexpr：
+```cpp
+class Point {
+public:
+    constexpr Point(double xVal = 0, double yVal = 0) noexcept
+    : x(xVal), y(yVal)
+    {}
+
+    constexpr double xValue() const noexcept { return x; } 
+    constexpr double yValue() const noexcept { return y; }
+
+    void setX(double newX) noexcept { x = newX; }
+    void setY(double newY) noexcept { y = newY; }
+
+private:
+    double x, y;
+};
+```
+Point的构造函数可被声明为`constexpr`，因为 `如果传入的参数在编译期可知，Point的数据成员也能在编译器可知`。
+因此这样初始化的Point就能为constexpr：
+```cpp
+constexpr Point p1(9.4, 27.7);  //没问题，constexpr构造函数
+                                //会在编译期“运行”
+constexpr Point p2(28.8, 5.3);  //也没问题
+```
+
+类似的，xValue和yValue的`getter（取值器）函数`也能是constexpr，因为如果对一个编译期已知的Point对象（如一个constexpr Point对象）调用getter，数据成员x和y的值也能在编译期知道。
+这使得我们可以写一个constexpr函数，里面调用Point的getter并初始化constexpr的对象：
+```cpp
+constexpr
+Point midpoint(const Point& p1, const Point& p2) noexcept
+{
+    return { (p1.xValue() + p2.xValue()) / 2,   //调用constexpr
+             (p1.yValue() + p2.yValue()) / 2 }; //成员函数
+}
+constexpr auto mid = midpoint(p1, p2);      //使用constexpr函数的结果
+                                            //初始化constexpr对象
+```
+这太令人激动了。它意味着mid对象通过调用构造函数，getter和非成员函数来进行初始化过程就能在`只读内存`中被创建出来！
+它也意味着你可以在`模板实参`或者`需要枚举名的值的表达式`里面使用像`mid.xValue() * 10`的表达式！（因为`Point::xValue返回double，mid.xValue() * 10`也是个double。
+**浮点数类型不可被用于实例化模板或者说明枚举名的值，但是它们可以被用来作为产生整数值的大表达式的一部分。**
+比如，`static_cast<int>(mid.xValue() * 10)`可以被用来实例化模板或者说明枚举名的值。）它也意味着 **以前相对严格的编译期完成的工作和运行时完成的工作的界限变得模糊，一些传统上在运行时的计算过程能并入编译时**。
+越多这样的代码并入，你的程序就越快。（然而，编译会花费更长时间）
+在C++11中，有两个限制使得Point的成员函数setX和setY不能声明为constexpr。
+第一，它们修改它们操作的对象的状态， 并且**在C++11中，`constexpr成员函数`是隐式的`const`**。
+第二，它们有void返回类型，void类型不是C++11中的字面值类型。
+这两个限制在C++14中放开了，所以C++14中Point的setter（赋值器）也能声明为constexpr：
+```cpp
+class Point {
+public:
+    // …
+    constexpr void setX(double newX) noexcept { x = newX; } //C++14
+    constexpr void setY(double newY) noexcept { y = newY; } //C++14
+    // …
+};
+```
+现在也能写这样的函数：
+```cpp
+//返回p相对于原点的镜像
+constexpr Point reflection(const Point& p) noexcept
+{
+    Point result;                   //创建non-const Point
+    result.setX(-p.xValue());       //设定它的x和y值
+    result.setY(-p.yValue());
+    return result;                  //返回它的副本
+}
+```
+客户端代码可以这样写：
+```cpp
+constexpr Point p1(9.4, 27.7);          //和之前一样
+constexpr Point p2(28.8, 5.3);
+constexpr auto mid = midpoint(p1, p2);
+
+constexpr auto reflectedMid =         //reflectedMid的值
+    reflection(mid);                  //(-19.1, -16.5)在编译期可知
+```
+本条款的建议是尽可能的使用`constexpr`，现在我希望大家已经明白缘由：constexpr对象和constexpr函数可以使用的范围比non-constexpr对象和函数大得多。
+使用constexpr关键字可以最大化你的对象和函数可以使用的场景。
+还有个重要的需要注意的是 `constexpr是对象和函数接口的一部分`。**加上constexpr相当于宣称“我能被用在C++要求常量表达式的地方”**。
+如果你声明一个对象或者函数是constexpr，客户端程序员就可能会在那些场景中使用它。
+如果你后面认为使用constexpr是一个错误并想移除它，你可能造成大量客户端代码不能编译。（为了debug或者性能优化而添加I/O到一个函数中这样简单的动作可能就导致这样的问题，因为I/O语句一般不被允许出现在constexpr函数里）“尽可能”的使用constexpr表示你需要长期坚持对某个对象或者函数施加这种限制。
+请记住：
+* constexpr对象是const，它被在编译期可知的值初始化
+* 当传递编译期可知的值时，constexpr函数可以产出编译期可知的结果
+* constexpr对象和函数可以使用的范围比non-constexpr对象和函数要大
+* constexpr是对象和函数接口的一部分
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 第4章 智能指针
+诗人和歌曲作家喜欢爱。有时候喜欢计数。很少情况下两者兼有。受伊丽莎白·巴雷特·勃朗宁（Elizabeth Barrett Browning）对爱和数的不同看法的启发（“我怎么爱你？让我数一数。”）和保罗·西蒙（Paul Simon）（“离开你的爱人必须有50种方法。”），我们可以试着枚举一些为什么原始指针很难被爱的原因：
+* 它的声明不能指示所指到底是单个对象还是数组。
+* 它的声明没有告诉你用完后是否应该销毁它，即`指针是否拥有所指之物`。
+如果你决定你应该销毁指针所指对象，没人告诉你该用delete还是其他析构机制（比如将指针传给专门的销毁函数）。
+如果你发现该用delete。原因1说了可能不知道该用单个对象形式（“`delete`”）还是数组形式（“`delete[]`”）。如果用错了结果是未定义的。
+假设你确定了指针所指，知道销毁机制，也很难确定你在所有执行路径上都执行了恰为一次销毁操作（包括异常产生后的路径）。
+少一条路径就会产生资源泄漏，销毁多次还会导致未定义行为。
+一般来说没有办法告诉你指针是否变成了`悬空指针`（dangling pointers），即内存中不再存在指针所指之物。在对象销毁后指针仍指向它们就会产生悬空指针。
+原始指针是强大的工具，当然，另一方面几十年的经验证明，只要注意力稍有疏忽，这个强大的工具就会攻击它的主人。
+
+`智能指针（smart pointers）`是解决这些问题的一种办法。
+智能指针包裹原始指针，它们的行为看起来像被包裹的原始指针，但避免了原始指针的很多陷阱。你应该更倾向于智能指针而不是原始指针。几乎原始指针能做的所有事情智能指针都能做，而且出错的机会更少。
+在C++11中存在四种智能指针：`std::auto_ptr，std::unique_ptr，std::shared_ptr， std::weak_ptr`。
+都是被设计用来帮助管理动态对象的生命周期，在适当的时间通过适当的方式来销毁对象，以避免出现资源泄露或者异常行为。
+std::auto_ptr是来自C++98的已废弃遗留物，它是一次标准化的尝试，后来变成了C++11的std::unique_ptr。
+要正确的模拟原生指针需要移动语义，但是C++98没有这个东西。
+取而代之，std::auto_ptr拉拢拷贝操作来达到自己的移动意图。这导致了令人奇怪的代码（拷贝一个std::auto_ptr会将它本身设置为null！）和令人沮丧的使用限制（比如不能将std::auto_ptr放入容器）。
+`std::unique_ptr`能做std::auto_ptr可以做的所有事情以及更多。它能高效完成任务，而且不会扭曲自己的原本含义而变成拷贝对象。在所有方面它都比std::auto_ptr好。现在std::auto_ptr唯一合法的使用场景就是代码使用C++98编译器编译。除非你有上述限制，否则你就该把std::auto_ptr替换为std::unique_ptr而且绝不回头。
+各种智能指针的API有极大的不同。唯一功能性相似的可能就是`默认构造函数`。
+因为有很多关于这些API的详细手册，所以我将只关注那些API概览没有提及的内容，比如值得注意的使用场景，运行时性能分析等，掌握这些信息可以更高效的使用智能指针。
+
+
+
+# 条款18：对于独占资源使用std::unique_ptr
+当你需要一个智能指针时，`std::unique_ptr通常是最合适的`。
+可以合理假设，默认情况下，std::unique_ptr大小等同于原始指针，而且对于大多数操作（包括取消引用），他们执行的指令完全相同。
+这意味着你甚至可以在内存和时间都比较紧张的情况下使用它。如果原始指针够小够快，那么std::unique_ptr一样可以。
+`std::unique_ptr`体现了`专有所有权（exclusive ownership）`语义。
+一个non-null std::unique_ptr始终拥有其指向的内容。
+移动一个std::unique_ptr将`所有权`从`源指针`转移到`目的指针`。（`源指针被设为null`。）
+拷贝一个std::unique_ptr是不允许的，因为如果你能拷贝一个std::unique_ptr，你会得到指向相同内容的两个std::unique_ptr，每个都认为自己拥有（并且应当最后销毁）资源，销毁时就会出现重复销毁。
+因此，std::unique_ptr是一种`只可移动类型（move-only type）`。当析构时，一个non-null std::unique_ptr`销毁它指向的资源`。默认情况下，资源析构通过对std::unique_ptr里原始指针`调用delete`来实现。
+
+`std::unique_ptr`的常见用法是：作为`继承层次结构中`对象的`工厂函数` `返回类型`。
+假设我们有一个投资类型（比如股票、债券、房地产等）的继承结构，使用基类Investment。
+```cpp
+class Investment { … };
+
+class Stock: public Investment { … };
+class Bond: public Investment { … };
+class RealEstate: public Investment { … };
+```
+
+这种`继承关系的工厂函数`在堆上分配一个对象然后返回指针，`调用方`在不需要的时候`有责任销毁对象`。
+这使用场景完美匹配`std::unique_ptr`，因为`调用者`对工厂返回的资源负责（即对该资源的专有所有权），并且`std::unique_ptr`在自己被销毁时会自动销毁指向的内容。
+Investment继承关系的工厂函数可以这样声明：
+```cpp
+template<typename... Ts>            //返回指向对象的std::unique_ptr，
+std::unique_ptr<Investment>         //对象使用给定实参创建
+makeInvestment(Ts&&... params);
+```
+
+调用者应该在单独的作用域中使用返回的`std::unique_ptr`智能指针：
+```cpp
+{
+    // …
+    auto pInvestment = makeInvestment( arguments );    //pInvestment是 std::unique_ptr<Investment> 类型
+    // …
+}                                       //销毁 *pInvestment
+```
+但是也可以在`所有权转移的场景中`使用它，比如将工厂返回的`std::unique_ptr`移入`容器`中，然后将 `容器元素` 移入一个`对象`的数据成员中，然后对象过后被销毁。
+发生这种情况时，这个对象的`std::unique_ptr`数据成员也被销毁，并且智能指针数据成员的析构将导致从工厂返回的资源被销毁。
+如果`所有权链` 由于 异常 或者 其他非典型控制流 出现中断（比如提前从函数`return`或者循环中的`break`），则拥有托管资源的`std::unique_ptr`将保证`指向内容`的`析构函数`被调用，销毁对应资源。（这个规则也有些例外。大多数情况发生于不正常的程序终止。如果一个`异常`传播到线程的基本函数（比如`程序初始线程的main函数`）外，或者违反`noexcept`说明（见Item14），`局部变量`可能`不会被销毁`；如果`std::abort`或者退出函数（如`std::_Exit`，`std::exit`，或`std::quick_exit`）被调用，局部变量一定没被销毁。）
+
+默认情况下，`销毁`将通过`delete`进行，但是在`构造`过程中，`std::unique_ptr`对象可以被设置为使用（对资源的）`自定义删除器`：
+    当资源需要销毁时 可调用的任意函数（或者函数对象，包括lambda表达式）。
+如果通过`makeInvestment`创建的对象不应仅仅被delete，而应该先做一些别的操作：比如先写一条日志，makeInvestment可以以如下方式实现。（代码后有说明，别担心有些东西的动机不那么明显。）
+```cpp
+// 自定义删除器
+auto delInvmt = [](Investment* pInvestment)
+                {
+                    makeLogEntry(pInvestment);  // log
+                    delete pInvestment; 
+                };
+
+template<typename... Ts>
+std::unique_ptr<Investment, decltype(delInvmt)>     //更改后的返回类型，需要通过delInvmt得到使用auto来推导的lambda表达式的类型
+makeInvestment(Ts&&... params)
+{
+    std::unique_ptr<Investment, decltype(delInvmt)> //应返回的指针
+        pInv(nullptr, delInvmt);
+    if (/*一个Stock对象应被创建*/)
+    {
+        pInv.reset(new Stock(std::forward<Ts>(params)...));
+    }
+    else if ( /*一个Bond对象应被创建*/ )   
+    {     
+        pInv.reset(new Bond(std::forward<Ts>(params)...));   
+    }   
+    else if ( /*一个RealEstate对象应被创建*/ )   
+    {     
+        pInv.reset(new RealEstate(std::forward<Ts>(params)...));   
+    }   
+    return pInv;
+}
+```
+稍后，我将解释其工作原理，但首先请考虑如果你是调用者，情况如何。
+假设你存储makeInvestment调用结果到auto变量中，那么你将在愉快中忽略在删除过程中需要特殊处理的事实。
+当然，你确实幸福，因为使用了unique_ptr意味着你不需要关心什么时候资源应被释放，不需要考虑在资源释放时的路径，以及确保只释放一次，std::unique_ptr自动解决了这些问题。从使用者角度，makeInvestment接口很棒。
+这个实现确实相当棒，如果你理解了：
+`delInvmt`是从makeInvestment返回的对象的`自定义的删除器`。
+所有的自定义的删除行为`接受要销毁对象的原始指针，然后执行所有必要行为实现销毁操作`。
+在上面情况中，操作包括调用`makeLogEntry`然后应用`delete`。
+使用`lambda`创建delInvmt是方便的，而且，正如稍后看到的，比编写常规的函数更有效。
+当使用自定义删除器时，删除器类型必须作为`第二个类型实参`传给`std::unique_ptr`。
+在上面情况中，就是delInvmt的类型，这就是为什么makeInvestment返回类型是`std::unique_ptr<Investment, decltype(delInvmt)>`。（对于decltype，更多信息查看Item3）
+makeInvestment的基本策略是创建一个空的std::unique_ptr，然后指向一个合适类型的对象，然后返回。为了将自定义删除器delInvmt与pInv关联，我们把delInvmt作为pInv构造函数的第二个实参。
+尝试将原始指针（比如new创建）赋值给std::unique_ptr通不过编译，因为是一种从原始指针到智能指针的隐式转换。（没法使用裸指针来赋值）
+这种隐式转换会出问题，所以C++11的智能指针禁止这个行为。这就是通过`reset`来让pInv接管通过new创建的对象的所有权的原因。
+使用new时，我们使用`std::forward`把传给makeInvestment的`实参`完美转发出去（查看Item25）。这使调用者提供的所有信息可用于正在创建的对象的构造函数。
+自定义删除器的一个形参，类型是`Investment*`，不管在makeInvestment内部创建的对象的真实类型（如Stock，Bond，或RealEstate）是什么，它最终在lambda表达式中，作为`Investment*`对象被删除。
+这意味着我们通过 `基类指针` `删除派生类实例`，为此，基类Investment必须有`虚析构函数`：
+```cpp
+class Investment {
+public:
+    // …
+    virtual ~Investment();          //关键设计部分！
+    // …
+};
+```
+
+在`C++14`中，`函数返回类型推导`的存在（参阅Item3），意味着makeInvestment可以以更简单，更封装的方式实现：
+```cpp
+template<typename... Ts>
+auto makeInvestment(Ts&&... params)                 //C++14
+{
+    auto delInvmt = [](Investment* pInvestment)
+                    {
+                        makeLogEntry(pInvestment);  //现在在makeInvestment函数内部
+                        delete pInvestment; 
+                    };
+
+    std::unique_ptr<Investment, decltype(delInvmt)> //同之前一样
+        pInv(nullptr, delInvmt);
+    if ( … )                                        //同之前一样
+    {
+        pInv.reset(new Stock(std::forward<Ts>(params)...));
+    }
+    else if ( … )                                   //同之前一样
+    {     
+        pInv.reset(new Bond(std::forward<Ts>(params)...));   
+    }   
+    else if ( … )                                   //同之前一样
+    {     
+        pInv.reset(new RealEstate(std::forward<Ts>(params)...));   
+    }   
+    return pInv;                                    //同之前一样
+}
+```
+我之前说过，当使用默认删除器时（如delete），你可以合理假设std::unique_ptr对象和原始指针大小相同。
+当自定义删除器时，情况可能不再如此。`函数指针形式的删除器`，通常会使`std::unique_ptr`的`大小` `从一个字（word）增加到两个`。
+对于函数对象形式的删除器来说，变化的大小取决于`函数对象中存储的状态多少`(使用捕获列表的话，还需要存储一些其他的对象)，无状态函数（stateless function）对象（比如不捕获变量的lambda表达式）对大小没有影响，这意味当自定义删除器可以实现为函数或者lambda时，尽量使用lambda：
+```cpp
+auto delInvmt1 = [](Investment* pInvestment)        //无状态lambda的自定义删除器
+                 {
+                     makeLogEntry(pInvestment);
+                     delete pInvestment; 
+                 };
+
+template<typename... Ts>                            //返回类型大小是
+std::unique_ptr<Investment, decltype(delInvmt1)>    //Investment*的大小
+makeInvestment(Ts&&... args);
+
+void delInvmt2(Investment* pInvestment)             //函数形式的
+{                                                   //自定义删除器
+    makeLogEntry(pInvestment);
+    delete pInvestment;
+}
+template<typename... Ts>                            //返回类型大小是
+std::unique_ptr<Investment, void (*)(Investment*)>  //Investment*的指针
+makeInvestment(Ts&&... params);                     //加至少一个函数指针的大小
+```
+具有很多状态的自定义删除器会产生大尺寸std::unique_ptr对象。如果你发现自定义删除器使得你的std::unique_ptr变得过大，你需要审视修改你的设计。
+工厂函数不是std::unique_ptr的唯一常见用法。
+作为实现`Pimpl Idiom（译注：pointer to implementation，一种隐藏实际实现而减弱编译依赖性的设计思想`，《Effective C++》条款31对此有过叙述）的一种机制，它更为流行。
+代码并不复杂，但是在某些情况下并不直观，所以这安排在Item22的专门主题中。
+`std::unique_ptr`有两种形式，一种用于`单个对象（std::unique_ptr<T>）`，一种用于`数组（std::unique_ptr<T[]>）`。
+结果就是，指向哪种形式没有歧义。std::unique_ptr的API设计会自动匹配你的用法，比如`operator[]`就是数组对象，解引用操作符（`operator*`和`operator->`）就是单个对象专有。
+你应该对`数组的std::unique_ptr`的存在兴趣泛泛，因为std::array，std::vector，std::string这些更好用的数据容器应该取代原始数组。
+`std::unique_ptr<T[]>`有用的唯一情况是：你使用`类似C的API` 返回 一个指向堆数组的 原始指针，而你想接管这个数组的所有权。
+
+std::unique_ptr是C++11中表示专有所有权的方法，但是其最吸引人的功能之一是它可以轻松高效的`转换为std::shared_ptr`：
+```cpp
+std::shared_ptr<Investment> sp =            //将std::unique_ptr
+    makeInvestment(arguments);              //转为std::shared_ptr
+```
+这就是std::unique_ptr非常适合用作工厂函数返回类型的原因的关键部分。
+工厂函数无法知道调用者是否要对它们返回的对象使用专有所有权语义，或者共享所有权（即std::shared_ptr）是否更合适。
+通过返回std::unique_ptr，工厂为调用者提供了最有效的智能指针，但它们并不妨碍调用者用其更灵活的兄弟替换它。（有关std::shared_ptr的信息，请转到Item19。)
+
+请记住：
+* std::unique_ptr是轻量级、快速的、只可移动（move-only）的管理专有所有权语义资源的智能指针
+* 默认情况，资源销毁通过delete实现，但是支持自定义删除器。有状态的删除器和函数指针会增加std::unique_ptr对象的大小
+* 将std::unique_ptr转化为std::shared_ptr非常简单
+
+
+
+# 条款19：对于共享资源使用std::shared_ptr
+使用带垃圾回收的语言的程序员指着C++程序员笑看他们如何防止资源泄露。
+“真是原始啊！”他们嘲笑着说：“你们没有从1960年的Lisp那里得到启发吗，机器应该自己管理资源的生命周期而不应该依赖人类。”C++程序员翻白眼：“你们得到的所谓启示就是只有内存算资源，而且资源回收的时间点是不确定的？我们更喜欢通用，可预料的销毁，谢谢你。”但我们的虚张声势可能底气不足。因为垃圾回收真的很方便，而且手动管理生命周期真的就像是使用石头小刀和兽皮制作RAM电路。
+为什么我们不能同时有两个完美的世界：一个自动工作的世界（像是垃圾回收），一个销毁可预测的世界（像是析构）？
+C++11中的`std::shared_ptr`将两者组合了起来。
+一个通过std::shared_ptr访问的对象其生命周期由指向它的有共享所有权（shared ownership）的指针们来管理。
+没有特定的std::shared_ptr拥有该对象。相反，所有指向它的std::shared_ptr都能相互合作确保在它不再使用的那个点进行析构。当最后一个指向某对象的std::shared_ptr不再指向那（比如因为std::shared_ptr被销毁或者指向另一个不同的对象），std::shared_ptr会销毁它所指向的对象。就垃圾回收来说，客户端不需要关心指向对象的生命周期，而对象的析构是确定性的。
+std::shared_ptr通过`引用计数（reference count）`来确保它是否是最后一个指向某种资源的指针，引用计数关联资源并跟踪有多少std::shared_ptr指向该资源。std::shared_ptr构造函数递增引用计数值（注意是通常————原因参见下面），析构函数递减值，拷贝赋值运算符做前面这两个工作。（如果sp1和sp2是std::shared_ptr并且指向不同对象，赋值“sp1 = sp2;”会使sp1指向sp2指向的对象。直接效果就是sp1引用计数减一，sp2引用计数加一。）**如果std::shared_ptr在计数值递减后发现引用计数值为零，没有其他std::shared_ptr指向该资源，它就会销毁资源。**
+
+引用计数暗示着`性能问题`：
+`std::shared_ptr`大小是原始指针的两倍，因为它内部包含`一个指向资源的原始指针`，还包含`一个指向资源的引用计数值的原始指针`。（这种实现法并不是标准要求的，但是我（指原书作者Scott Meyers）熟悉的所有标准库都这样实现。）
+`引用计数`的内存必须`动态分配`。
+概念上，引用计数与所指对象关联起来，但是实际上被指向的对象不知道这件事情（译注：不知道有一个关联到自己的计数值）。因此它们没有办法存放一个引用计数值。（一个好消息是任何对象————甚至是内置类型的————都可以由std::shared_ptr管理。）Item21会解释使用`std::make_shared`创建std::shared_ptr可以`避免引用计数的动态分配`，但是还存在一些std::make_shared不能使用的场景，这时候引用计数就会动态分配。
+`递增递减引用计数`必须是`原子性`的，因为多个reader、writer可能在不同的线程。比如，指向某种资源的std::shared_ptr可能在一个线程执行析构（于是递减指向的对象的引用计数），在另一个不同的线程，std::shared_ptr指向相同的对象，但是执行的却是拷贝操作（因此递增了同一个引用计数）。原子操作通常比非原子操作要慢，所以即使引用计数通常只有一个word大小，你也应该假定`读写它们是存在开销的`。
+我写道std::shared_ptr构造函数只是“通常”递增指向对象的引用计数会不会让你有点好奇？创建一个指向对象的std::shared_ptr就产生了又一个指向那个对象的std::shared_ptr，为什么我没说总是增加引用计数值？
+原因是`移动构造函数`的存在。从另一个std::shared_ptr`移动构造`新std::shared_ptr会将原来的std::shared_ptr设置为null，那意味着老的std::shared_ptr不再指向资源，同时新的std::shared_ptr指向资源。这样的结果就是不需要修改引用计数值。因此移动std::shared_ptr会比拷贝它要快：拷贝要求递增引用计数值，移动不需要。移动赋值运算符同理，所以移动构造比拷贝构造快，移动赋值运算符也比拷贝赋值运算符快。
+类似`std::unique_ptr`（参见Item18），std::shared_ptr使用delete作为资源的默认销毁机制，但是它也支持自定义的删除器。这种支持有别于std::unique_ptr。
+！！！对于`std::unique_ptr`来说，`删除器类型`是`智能指针类型的一部分`。对于`std::shared_ptr`则不是：
+为什么这样设计：
+    因为`std::unique_ptr`是独占所有权的，因此其和其删除器的类型联系紧密，删除器的类型是`std::unique_ptr`的类型的一部分。`std::unique_ptr`和`std::shared_ptr`使用场景不同。
+这种设计是怎么实现的：
+    通过模板类的模板参数来实现：
+```cpp
+  /// 20.7.1.2 unique_ptr for single objects.
+  template <typename _Tp, typename _Dp = default_delete<_Tp> >
+    class unique_ptr    // 对unique_ptr，deletor就是模板类型参数的一部分
+    {
+    // ...
+    };
+
+  template<typename _Tp>
+    class shared_ptr : public __shared_ptr<_Tp>
+    {
+        // ...
+    };
+```
+而每一个`shared_ptr`在构造的时候，可以独立构造自己的deletor
+
+```cpp
+auto loggingDel = [](Widget *pw)        // 自定义删除器
+                  {                     //（和条款18一样）
+                      makeLogEntry(pw);
+                      delete pw;
+                  };
+
+std::unique_ptr<Widget, decltype(loggingDel)> upw(new Widget, loggingDel);      //删除器类型是指针类型的一部分
+std::shared_ptr<Widget> spw(new Widget, loggingDel);        //删除器类型不是指针类型的一部分
+```
+`std::shared_ptr`的设计更为灵活。
+考虑有两个`std::shared_ptr<Widget>`，每个自带不同的删除器（比如通过lambda表达式自定义删除器）：
+```cpp
+auto customDeleter1 = [](Widget *pw) { … };     //自定义删除器，
+auto customDeleter2 = [](Widget *pw) { … };     //每种类型不同
+std::shared_ptr<Widget> pw1(new Widget, customDeleter1);
+std::shared_ptr<Widget> pw2(new Widget, customDeleter2);
+```
+因为`pw1`和`pw2`有相同的类型，所以它们都可以放到存放那个类型的对象的容器中：
+```cpp
+std::vector<std::shared_ptr<Widget>> vpw{ pw1, pw2 };
+```
+它们也能相互赋值，也可以传入一个形参为`std::shared_ptr<Widget>`的函数。
+但是自定义删除器类型不同的`std::unique_ptr`就不行，因为std::unique_ptr把删除器视作类型的一部分。
+
+另一个不同于`std::unique_ptr`的地方是，指定自定义删除器不会改变std::shared_ptr对象的大小。
+不管删除器是什么，一个std::shared_ptr对象都是两个指针大小。
+这是个好消息，但是它应该让你隐隐约约不安。自定义删除器可以是函数对象，函数对象可以包含任意多的数据。它意味着函数对象是任意大的。
+std::shared_ptr怎么能引用一个任意大的删除器而不使用更多的内存？
+它不能。它必须使用更多的内存。然而，`那部分内存不是std::shared_ptr对象的一部分`。
+那部分在堆上面，或者std::shared_ptr创建者利用std::shared_ptr对自定义分配器的支持能力，那部分内存随便在哪都行。我前面提到了std::shared_ptr对象包含了所指对象的引用计数的指针。没错，但是有点误导人。因为引用计数是另一个更大的数据结构的一部分，那个数据结构通常叫做`控制块（control block）`。
+每个`std::shared_ptr`管理的对象都有个相应的控制块。
+`控制块`除了包含`引用计数值`外还有一个`自定义删除器的拷贝`，当然前提是存在自定义删除器。
+如果用户还指定了`自定义分配器`，控制块也会包含一个`分配器的拷贝`。控制块可能还包含一些额外的数据，正如Item21提到的，一个`次级引用计数weak count`，但是目前我们先忽略它。
+
+当指向对象的std::shared_ptr一创建，对象的控制块就建立了。
+至少我们期望是如此。通常，对于一个创建指向对象的`std::shared_ptr`的函数来说不可能知道是否有其他std::shared_ptr早已指向那个对象，所以控制块的创建会遵循下面几条规则：
+* `std::make_shared`（参见Item21）总是创建一个`控制块`。
+**它创建一个要指向的新对象，所以可以肯定`std::make_shared`调用时对象不存在其他控制块。**
+* 当从`独占指针`（即std::unique_ptr或者std::auto_ptr）上构造出std::shared_ptr时会`创建控制块`。**独占指针没有使用控制块**，所以指针指向的对象没有关联控制块。（**作为构造的一部分，`std::shared_ptr`侵占独占指针所指向的对象的独占权，所以独占指针被设置为null**）
+* 当从`原始指针`上构造出`std::shared_ptr`时会创建控制块。
+    如果你想从一个早已存在控制块的对象上创建`std::shared_ptr`，你将假定传递一个`std::shared_ptr`或者`std::weak_ptr`（参见Item20）作为构造函数实参，而`不是原始指针`。
+    ！！！对于一个对象而言，只能绑定一个引用控制块，因为引用计数为0时就销毁了
+    用`std::shared_ptr`或者`std::weak_ptr`作为构造函数实参创建std::shared_ptr不会创建新控制块，因为它可以依赖传递来的智能指针指向控制块。
+这些规则造成的后果就是 从原始指针上构造 超过一个std::shared_ptr 就会让你走上未定义行为的快车道，因为指向的对象有多个控制块关联。
+多个控制块意味着多个引用计数值，多个引用计数值意味着对象将会被销毁多次（每个引用计数一次）。
+那意味着像下面的代码是有问题的，很有问题，问题很大：
+```cpp
+auto pw = new Widget;                           //pw是原始指针
+// …
+std::shared_ptr<Widget> spw1(pw, loggingDel);   //为*pw创建控制块
+// …
+std::shared_ptr<Widget> spw2(pw, loggingDel);   //为*pw创建第二个控制块
+```
+`创建原始指针pw`指向动态分配的对象很糟糕，因为它完全背离了这章的建议：倾向于使用智能指针而不是原始指针。（如果你忘记了该建议的动机，请翻到本章开头）。撇开那个不说，创建pw那一行代码虽然让人厌恶，但是至少不会造成未定义程序行为。
+
+现在，传给spw1的构造函数一个原始指针，它会为指向的对象创建一个`控制块`（因此有个引用计数值）。这种情况下，指向的对象是`*pw`（即pw指向的对象）。就其本身而言没什么问题，但是将同样的原始指针传递给spw2的构造函数会再次为`*pw`创建一个`控制块`（所以也有个引用计数值）。
+因此`*pw`有两个引用计数值，每一个最后都会变成零，然后最终导致*pw销毁两次。第二个销毁会产生未定义行为。
+
+std::shared_ptr给我们上了两堂课。
+* 第一，避免传给`std::shared_ptr`构造函数`原始指针`。
+通常替代方案是使用`std::make_shared`（参见Item21），不过上面例子中，我们使用了自定义删除器，用std::make_shared就没办法做到。
+* 第二，如果你必须传给`std::shared_ptr`构造函数原始指针，直接传new出来的结果，不要传指针变量。
+如果上面代码第一部分这样重写：
+```cpp
+std::shared_ptr<Widget> spw1(new Widget,    //直接使用new的结果 这样就不存在指针的具名对象，安全多了
+                             loggingDel);
+```
+会少了很多从原始指针上构造第二个std::shared_ptr的诱惑。
+相应的，创建spw2也会很自然的用spw1作为初始化参数（即用`std::shared_ptr`拷贝构造函数），那就没什么问题了：
+```cpp
+std::shared_ptr<Widget> spw2(spw1);         //spw2使用spw1一样的控制块
+```
+一个尤其令人意外的地方是：使用`this指针`作为`std::shared_ptr`构造函数实参的时候可能导致`创建多个控制块`。
+假设我们的程序使用`std::shared_ptr`管理Widget对象，我们有一个数据结构用于跟踪已经处理过的Widget对象：
+```cpp
+std::vector<std::shared_ptr<Widget>> processedWidgets;
+```
+继续，假设Widget有一个用于处理的成员函数：
+```cpp
+class Widget {
+public:
+    // …
+    void process();
+    // …
+};
+```
+对于Widget::process看起来合理的代码如下：
+```cpp
+void Widget::process()
+{
+    …                                       //处理Widget
+    processedWidgets.emplace_back(this);    //然后将它加到已处理过的Widget的列表中，这是错的！
+}
+```
+注释已经说了这是错的——或者至少大部分是错的。
+（错误的部分是传递this，而不是使用了emplace_back。如果你不熟悉emplace_back，参见Item42）。上面的代码可以通过编译，但是向std::shared_ptr的容器传递一个`原始指针（this）`，std::shared_ptr会由此为指向的Widget（*this）创建一个控制块。那看起来没什么问题，直到你意识到如果成员函数外面早已存在指向那个Widget对象的指针，它是未定义行为的Game, Set, and Match（译注：一部关于网球的电影，但是译者没看过。句子本意“压倒性胜利；比赛结束”）。
+
+`std::shared_ptr` API已有处理这种情况的设施。
+它的名字可能是C++标准库中最奇怪的一个：`std::enable_shared_from_this`，是一个模板类。
+如果你想创建一个用`std::shared_ptr`管理的类，`这个类能够用this指针安全地创建一个std::shared_ptr`，std::enable_shared_from_this就可作为基类的模板类。
+在我们的例子中，Widget将会继承自std::enable_shared_from_this：
+```cpp
+class Widget: public std::enable_shared_from_this<Widget> {
+public:
+    // …
+    void process();
+    // …
+};
+```
+正如我所说，`std::enable_shared_from_this`是一个基类模板。
+它的模板参数总是某个继承自它的类，所以Widget继承自`std::enable_shared_from_this<Widget>`。
+如果某类型继承自一个由该类型（译注：作为模板类型参数）进行模板化得到的基类这个东西让你心脏有点遭不住，别去想它就好了。代码完全合法，而且它背后的设计模式也是没问题的，并且这种设计模式还有个标准名字，尽管该名字和std::enable_shared_from_this一样怪异。
+这个标准名字就是`奇异递归模板模式（The Curiously Recurring Template Pattern（CRTP））`。如果你想学更多关于它的内容，请搜索引擎一展身手，现在我们要回到std::enable_shared_from_this上。
+`std::enable_shared_from_this`定义了一个成员函数`shared_from_this`，成员函数会创建指向当前对象的std::shared_ptr却不创建多余控制块。
+无论在哪当你想在成员函数中使用std::shared_ptr指向this所指对象时都请使用它。
+这里有个Widget::process的安全实现：
+```cpp
+void Widget::process()
+{
+    //和之前一样，处理Widget
+    // …
+    //把指向当前对象的std::shared_ptr加入processedWidgets
+    processedWidgets.emplace_back(shared_from_this());
+}
+```
+从内部来说，`shared_from_this` 先`查找当前对象控制块`，然后创建一个新的`std::shared_ptr`关联这个控制块。
+设计的依据是当前对象已经存在一个关联的控制块。
+要想符合设计依据的情况，必须已经存在一个指向当前对象的`std::shared_ptr`（比如调用shared_from_this的成员函数外面已经存在一个std::shared_ptr）。
+！！！如果没有std::shared_ptr指向当前对象（即当前对象没有关联控制块），行为是未定义的，shared_from_this通常抛出一个异常。（也就是说，`shared_from_this()`不负责创建控制块）
+
+要想防止客户端在存在一个指向对象的std::shared_ptr前先调用含有shared_from_this的成员函数，继承自std::enable_shared_from_this的类通常将它们的构造函数声明为private，并且让客户端通过返回std::shared_ptr的工厂函数创建对象。
+以Widget为例，代码可以是这样：
+```cpp
+class Widget: public std::enable_shared_from_this<Widget> {
+public:
+    //完美转发参数给private构造函数的工厂函数
+    template<typename... Ts>
+    static std::shared_ptr<Widget> create(Ts&&... params);
+    // …
+    void process();     //和前面一样
+    // …
+private:
+    Widget();           //构造函数
+};
+```
+现在，你可能隐约记得我们讨论控制块的动机是想了解有关std::shared_ptr的成本。既然我们已经知道了怎么避免创建过多控制块，就让我们回到原来的主题。
+控制块通常只占几个word大小，自定义删除器和分配器可能会让它变大一点。
+通常控制块的实现比你想的更复杂一些。它使用继承，甚至里面还有一个`虚函数`（！！！用来确保指向的对象被正确销毁）。
+这意味着使用std::shared_ptr还会招致控制块使用虚函数带来的成本。
+
+了解了动态分配控制块，任意大小的删除器和分配器，虚函数机制，原子性的引用计数修改，你对于std::shared_ptr的热情可能有点消退。
+可以理解，对每个资源管理问题来说都没有最佳的解决方案。但就它提供的功能来说，std::shared_ptr的开销是非常合理的。在通常情况下，使用默认删除器和默认分配器，使用std::make_shared创建std::shared_ptr，产生的控制块只需三个word大小。
+它的分配基本上是无开销的。（`开销 被并入了 指向的对象的分配成本里`。细节参见Item21）。对std::shared_ptr解引用的开销不会比原始指针高。执行需要原子引用计数修改的操作需要承担一两个原子操作开销，这些操作通常都会一一映射到机器指令上，所以即使对比非原子指令来说，原子指令开销较大，但是它们仍然只是`单个指令上的`。对于每个被std::shared_ptr指向的对象来说，控制块中的虚函数机制产生的开销通常只需要承受一次，即对象销毁的时候。
+
+作为这些轻微开销的交换，你得到了动态分配的资源的生命周期自动管理的好处。大多数时候，比起手动管理，使用std::shared_ptr管理共享性资源都是非常合适的。如果你还在犹豫是否能承受std::shared_ptr带来的开销，那就再想想你是否需要共享所有权。如果独占资源可行或者可能可行，用std::unique_ptr是一个更好的选择。它的性能表现更接近于原始指针，并且从std::unique_ptr升级到std::shared_ptr也很容易，因为std::shared_ptr可以从std::unique_ptr上创建。
+
+反之不行。当你的资源由std::shared_ptr管理，现在又想修改资源生命周期管理方式是没有办法的。
+即使引用计数为一，你也不能重新修改资源所有权，改用std::unique_ptr管理它。`资源和指向它的std::shared_ptr的签订的所有权协议是“除非死亡否则永不分开”。不能分离，不能废除，没有特许。`
+`std::shared_ptr不能处理的另一个东西是数组`。和std::unique_ptr不同的是，std::shared_ptr的API设计之初就是针对单个对象的，没有办法`std::shared_ptr<T[]>`。（译者注: 自 C++17 起 std::shared_ptr 可以用于管理动态分配的数组，使用 std::shared_ptr<T[]>）一次又一次，“聪明”的程序员踌躇于是否该使用`std::shared_ptr<T>`指向数组，然后传入自定义删除器来删除数组（即delete []）。
+这可以通过编译，但是是一个糟糕的主意。一方面，std::shared_ptr没有提供`operator[]`，所以数组索引操作需要借助怪异的指针算术。另一方面，`std::shared_ptr`支持转换为指向基类的指针，这对于单个对象来说有效，但是当用于数组类型时相当于在类型系统上开洞。（出于这个原因，`std::unique_ptr<T[]>` API禁止这种转换。）更重要的是，C++11已经提供了很多内置数组的候选方案（比如std::array，std::vector，std::string）。声明一个指向傻瓜数组的智能指针（译注：也是”聪明的指针“之意）几乎总是表示着糟糕的设计。
+
+请记住：
+* std::shared_ptr为有共享所有权的任意资源提供一种自动垃圾回收的便捷方式。
+* (较之于std::unique_ptr，std::shared_ptr对象通常大两倍，控制块会产生开销，需要原子性的引用计数修改操作。
+* 默认资源销毁是通过delete，但是也支持自定义删除器。删除器的类型是什么对于std::shared_ptr的类型没有影响。
+* 避免从原始指针变量上创建std::shared_ptr。
+
+
 
 
 
@@ -1628,6 +2234,303 @@ using add_lvalue_reference_t =
 void f(Widget&& w);
 ```
 形参w是一个左值，即使它的类型是一个`rvalue-reference-to-Widget`。（如果这里震惊到你了，请重新回顾从本书简介开始的关于左值和右值的总览。）
+
+
+
+# 条款22：当使用Pimpl惯用法，请在实现文件中定义特殊成员函数
+如果你曾经与`过多的编译次数`斗争过，你会对`Pimpl（pointer to implementation）惯用法`很熟悉。
+凭借这样一种技巧，你可以将类数据成员替换成一个指向包含具体实现的类（或结构体）的指针，并将放在主类（primary class）的数据成员们移动到实现类（implementation class）去，而这些数据成员的访问将`通过指针间接访问`。
+举个例子，假如有一个类Widget看起来如下：
+```cpp
+class Widget() {                    //定义在头文件“widget.h”
+public:
+    Widget();
+    // …
+private:
+    std::string name;
+    std::vector<double> data;
+    Gadget g1, g2, g3;              //Gadget是用户自定义的类型
+};
+```
+因为类Widget的数据成员包含有类型std::string，std::vector和Gadget，定义有这些类型的头文件在类Widget编译的时候，必须被包含进来，这意味着类Widget的使用者必须要`#include <string>`，`<vector>`以及`gadget.h`。
+这些头文件将会增加类Widget使用者的编译时间，并且让这些使用者依赖于这些头文件。
+如果一个头文件的内容变了，类Widget使用者也必须要重新编译。`标准库文件<string>和<vector>`不是很常变，但是`gadget.h`可能会经常修订。
+在C++98中使用Pimpl惯用法，可以把Widget的数据成员替换成一个原始指针，指向一个 `已经被声明过 却还未被定义的` 结构体，如下:
+
+`接口类`
+```cpp
+class Widget                        //仍然在“widget.h”中
+{
+public:
+    Widget();
+    ~Widget();                      //析构函数在后面会分析
+    // …
+
+private:
+    struct Impl;                    //使用前向声明  声明一个 实现结构体
+    Impl *pImpl;                    //以及指向它的指针
+};
+```
+
+因为类Widget不再提到类型std::string，std::vector以及Gadget，Widget的使用者不再需要为了这些类型而引入头文件。
+`这可以加速编译，并且意味着，如果这些头文件中有所变动，Widget的使用者不会受到影响。`
+一个已经被声明，却还未被实现的类型，被称为`不完整类型（incomplete type）`。
+Widget::Impl就是这种类型。 你能对一个不完整类型做的事很少，但是声明一个指向它的指针是可以的。Pimpl惯用法利用了这一点。
+* Pimpl惯用法的第一步，是声明一个数据成员，它是个指针，指向一个不完整类型。 
+* 第二步是动态分配和回收一个对象，该对象包含那些以前在原来的类中的数据成员。
+内存分配和回收的代码都写在实现文件里，比如，对于类Widget而言，写在Widget.cpp里:
+```cpp
+#include "widget.h"             //以下代码均在实现文件“widget.cpp”里
+#include "gadget.h"
+#include <string>
+#include <vector>
+
+struct Widget::Impl {           //含有之前在Widget中的数据成员的Widget::Impl类型的定义
+    std::string name;
+    std::vector<double> data;
+    Gadget g1, g2, g3;
+};
+
+Widget::Widget()                //为此Widget对象分配数据成员
+: pImpl(new Impl)   // ！！！
+{}
+
+Widget::~Widget()               //销毁数据成员
+{ delete pImpl; }   // ！！！
+```
+在这里我把#include命令写出来是为了明确一点，对于std::string，std::vector和Gadget的头文件的整体依赖依然存在。
+然而，这些依赖从头文件widget.h（它被所有Widget类的使用者包含，并且对他们可见）移动到了`widget.cpp`（该文件只被Widget类的实现者包含，并只对他可见）。
+我高亮了其中动态分配和回收Impl对象的部分（译者注：markdown高亮不了，实际高亮的是new Impl和delete pImpl;两个语句）。
+这就是为什么我们需要Widget的析构函数————我们需要Widget被销毁时回收该对象。
+但是，我展示给你们看的是一段C++98的代码，散发着一股已经过去了几千年的腐朽气息（没必要用裸指针）。
+它使用了原始指针，原始的new和原始的delete，一切都让它如此的...原始。
+这一章建立在“智能指针比原始指针更好”的主题上，并且，如果我们想要的只是在类Widget的构造函数动态分配Widget::impl对象，在Widget对象销毁时一并销毁它，`std::unique_ptr`（见Item18）是最合适的工具。
+在头文件中用std::unique_ptr替代原始指针，就有了头文件中如下代码:
+```cpp
+class Widget {                      //在“widget.h”中
+public:
+    Widget();
+    // …
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;    //使用智能指针而不是原始指针
+};
+```
+
+实现文件也可以改成如下：
+```cpp
+#include "widget.h"                 //在“widget.cpp”中
+#include "gadget.h"
+#include <string>
+#include <vector>
+
+struct Widget::Impl {               //跟之前一样
+    std::string name;
+    std::vector<double> data;
+    Gadget g1,g2,g3;
+};
+
+Widget::Widget()                    //根据条款21，通过std::make_unique
+: pImpl(std::make_unique<Impl>())   //来创建std::unique_ptr
+{}
+```
+你会注意到，Widget的析构函数不存在了。这是因为我们没有代码加在里面了。 
+std::unique_ptr在自身析构时，会自动销毁它所指向的对象，所以我们自己无需手动销毁任何东西。这就是智能指针的众多优点之一：它使我们从手动资源释放中解放出来。
+
+以上的代码能编译，但是，最普通的Widget用法却会导致编译出错：
+```cpp
+#include "widget.h"
+
+Widget w;                           //错误！
+```
+你所看到的错误信息根据编译器不同会有所不同，但是其文本一般会提到一些有关于“把sizeof或delete应用到不完整类型上”的信息。对于不完整类型，使用以上操作是禁止的。
+在`Pimpl惯用法`中使用`std::unique_ptr`会抛出错误，有点惊悚，因为：
+* 第一  std::unique_ptr宣称它支持不完整类型，
+* 第二  Pimpl惯用法是std::unique_ptr的最常见的使用情况之一。
+幸运的是，让这段代码能正常运行很简单。
+只需要对上面出现的问题的原因有一个基础的认识就可以了。
+在对象w被析构时（例如离开了作用域），问题出现了。
+在这个时候，它的`析构函数`被调用。我们在类的定义里使用了std::unique_ptr，所以我们没有声明一个析构函数，因为我们并没有任何代码需要写在里面。根据编译器自动生成的特殊成员函数的规则（见 Item17），编译器会自动为我们生成一个析构函数。 在这个析构函数里，编译器会插入一些代码来调用类Widget的数据成员pImpl的析构函数。 pImpl是一个`std::unique_ptr<Widget::Impl>`，也就是说，一个`使用默认删除器的std::unique_ptr`。
+默认删除器是一个函数，它使用delete来销毁内置于std::unique_ptr的原始指针。然而，在使用delete之前，通常会使 默认删除器使用C++11的特性 `static_assert`来确保 原始指针指向的类型不是一个不完整类型。 当编译器为Widget w的析构生成代码时，它会遇到`static_assert`检查并且失败，这通常是错误信息的来源。
+（也就是编译器在生成默认析构函数的时候，生成其代码时，对指针指向的类型是否是不完整的类型）
+这些错误信息只在对象w销毁的地方出现，因为类Widget的析构函数，正如其他的编译器生成的特殊成员函数一样，是暗含`inline`属性的。
+错误信息自身往往指向对象w被创建的那行，因为这行代码明确地构造了这个对象，导致了后面潜在的析构。
+**为了解决这个问题，你只需要确保在编译器生成销毁`std::unique_ptr<Widget::Impl>`的代码之前， `Widget::Impl`已经是一个`完整类型（complete type）`。**
+当编译器“看到”它的定义的时候，该类型就成为完整类型了。
+但是 Widget::Impl的定义在widget.cpp里。成功编译的关键，就是在widget.cpp文件内，让编译器在“看到” Widget的析构函数实现之前（也即编译器插入的，用来销毁std::unique_ptr这个数据成员的代码的，那个位置），`先定义Widget::Impl`。
+
+做出这样的调整很容易。只需要先在widget.h里，只声明类Widget的析构函数，但不要在这里定义它：
+```cpp
+class Widget {                  //跟之前一样，在“widget.h”中
+public:
+    Widget();
+    ~Widget();                  //只有声明语句
+    …
+
+private:                        //跟之前一样
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
+};
+```
+在widget.cpp文件中，在结构体Widget::Impl被定义之后，再定义析构函数：
+```cpp
+#include "widget.h"                 //跟之前一样，在“widget.cpp”中
+#include "gadget.h"
+#include <string>
+#include <vector>
+
+struct Widget::Impl {               //跟之前一样，定义Widget::Impl
+    std::string name;
+    std::vector<double> data;
+    Gadget g1, g2, g3;
+}
+
+Widget::Widget()                    //跟之前一样
+: pImpl(std::make_unique<Impl>())
+{}
+
+Widget::~Widget()                   //析构函数的定义（译者注：这里高亮）！！！使得编译器到这里才生成代码。此时Impl类已经有明确的定义
+{}
+```
+这样就可以了，并且这样增加的代码也最少，你声明Widget析构函数只是为了在 Widget 的实现文件中（译者注：指widget.cpp）写出它的定义，但是如果你想强调编译器自动生成的析构函数会做和你一样正确的事情，你可以直接使用“= default”定义析构函数体
+```cpp
+Widget::~Widget() = default;        //同上述代码效果一致
+```
+使用了Pimpl惯用法的类自然适合支持`移动操作`，因为编译器自动生成的移动操作正合我们所意：对其中的std::unique_ptr进行移动。
+正如Item17所解释的那样，`声明 一个类Widget的 析构函数 会阻止 编译器生成移动操作`（因为可能涉及资源的管理，默认生成的析构函数不够用了），所以如果你想要支持移动操作，你必须自己声明相关的函数。
+考虑到编译器自动生成的版本会正常运行，你可能会很想按如下方式实现它们：
+```cpp
+class Widget {                                  //仍然在“widget.h”中
+public:
+    Widget();
+    ~Widget();
+
+    Widget(Widget&& rhs) = default;             //  思路正确，
+    Widget& operator=(Widget&& rhs) = default;  //  但代码错误
+    …
+
+private:                                        //跟之前一样
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
+};
+```
+这样的做法会导致同样的错误，和之前的声明一个不带析构函数的类的错误一样，并且是因为同样的原因。
+编译器生成的移动赋值操作符，在重新赋值之前，需要先销毁指针pImpl指向的对象。
+然而在Widget的头文件里，pImpl指针指向的是一个不完整类型。
+移动构造函数的情况有所不同。 移动构造函数的问题是：`编译器自动生成的代码里，包含有 抛出异常的 事件，在这个事件里会生成销毁pImpl的代码`。
+然而，销毁pImpl需要Impl是一个完整类型。
+
+因为这个问题同上面一致，所以解决方案也一样————把移动操作的定义移动到实现文件里：
+```cpp
+class Widget {                          //仍然在“widget.h”中
+public:
+    Widget();
+    ~Widget();
+
+    Widget(Widget&& rhs);               //只有声明
+    Widget& operator=(Widget&& rhs);
+    // …
+
+private:                                //跟之前一样
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
+};
+
+#include <string>                   //跟之前一样，仍然在“widget.cpp”中
+// …
+    
+struct Widget::Impl { … };          //跟之前一样
+
+Widget::Widget()                    //跟之前一样
+: pImpl(std::make_unique<Impl>())
+{}
+
+Widget::~Widget() = default;        //跟之前一样
+
+Widget::Widget(Widget&& rhs) = default;             //这里定义
+Widget& Widget::operator=(Widget&& rhs) = default;
+```
+
+Pimpl惯用法是`用来 减少类的实现 和 类使用者之间的编译依赖 的一种方法`，但是，从概念而言，使用这种惯用法并不改变这个类的表现。
+原来的类Widget包含有std::string，std::vector和Gadget数据成员，并且，假设类型Gadget，如同std::string和std::vector一样，允许复制操作，所以类Widget支持复制操作也很合理。
+我们必须要自己来写这些函数，因为
+    第一，对包含有只可移动（move-only）类型，如`std::unique_ptr`的类，编译器不会生成复制操作；
+    第二，即使编译器帮我们生成了，生成的复制操作也只会复制std::unique_ptr（也即`浅拷贝`（shallow copy）），而实际上我们需要复制指针所指向的对象（也即深拷贝（deep copy））。
+
+使用我们已经熟悉的方法，我们在头文件里声明函数，而在实现文件里去实现他们:
+```cpp
+class Widget {                          //仍然在“widget.h”中
+public:
+    // …
+
+    Widget(const Widget& rhs);          //只有声明
+    Widget& operator=(const Widget& rhs);
+
+private:                                //跟之前一样
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
+};
+
+
+#include <string>                   //跟之前一样，仍然在“widget.cpp”中
+// …
+    
+struct Widget::Impl { … };          //跟之前一样
+
+Widget::~Widget() = default;		//其他函数，跟之前一样
+
+Widget::Widget(const Widget& rhs)   //  拷贝构造函数
+: pImpl(std::make_unique<Impl>(*rhs.pImpl)) // 触发Impl的拷贝构造函数，构造了新对象，是深拷贝
+{}
+
+Widget& Widget::operator=(const Widget& rhs)    //拷贝operator=
+{
+    *pImpl = *rhs.pImpl;
+    return *this;
+}
+```
+两个函数的实现都比较中规中矩。在每个情况中，我们都只从源对象（rhs）中，复制了结构体Impl的内容到目标对象中（*this）。
+我们利用了`编译器 会为我们自动生成结构体Impl的复制操作函数 的机制`，而不是逐一复制结构体Impl的成员，自动生成的复制操作能自动复制每一个成员。
+因此我们通过调用编译器生成的Widget::Impl的复制操作函数来实现了类Widget的复制操作。
+在复制构造函数中，注意，我们仍然遵从了Item21的建议，使用`std::make_unique`而非直接使用new。
+为了实现Pimpl惯用法，std::unique_ptr是我们使用的智能指针，因为位于对象内部的pImpl指针（例如，在类Widget内部），对所指向的对应实现的对象的享有`独占所有权`。
+然而，有趣的是，如果我们使用std::shared_ptr而不是std::unique_ptr来做pImpl指针，我们会发现本条款的建议不再适用。
+我们不需要在类Widget里声明析构函数，没有了用户定义析构函数，编译器将会愉快地生成移动操作，并且将会如我们所期望般工作。widget.h里的代码如下，
+```cpp
+class Widget {                      //在“widget.h”中
+public:
+    Widget();
+    // …                            //没有析构函数和移动操作的声明
+
+private:
+    struct Impl;
+    std::shared_ptr<Impl> pImpl;    //用std::shared_ptr
+};                                  //而不是std::unique_ptr
+```
+这是#include了widget.h的客户代码，
+```cpp
+Widget w1;
+auto w2(std::move(w1));     //移动构造w2
+w1 = std::move(w2);         //移动赋值w1
+```
+这些都能编译，并且工作地如我们所望：w1将会被默认构造，它的值会被移动进w2，随后值将会被移动回w1，然后两者都会被销毁（因此导致指向的Widget::Impl对象一并也被销毁）。
+
+`std::unique_ptr`和`std::shared_ptr`在pImpl指针上的表现上的区别的深层原因在于，他们`支持自定义删除器的方式不同`。
+* 对std::unique_ptr而言，删除器的类型是这个智能指针的一部分，这让编译器有可能生成更小的运行时数据结构和更快的运行代码。
+这种更高效率的后果之一就是`std::unique_ptr`指向的类型，在编译器的`生成特殊成员函数（如析构函数，移动操作）`被调用时，必须已经是一个`完整类型`。
+* 而对std::shared_ptr而言，删除器的类型不是该智能指针的一部分，这让它会生成更大的运行时数据结构和稍微慢点的代码，但是当编译器生成的特殊成员函数被使用的时候，指向的对象不必是一个完整类型。（译者注：知道std::unique_ptr和std::shared_ptr的实现，这一段才比较容易理解。）
+
+对于Pimpl惯用法而言，在std::unique_ptr和std::shared_ptr的特性之间，没有一个比较好的折中。
+因为对于像Widget的类以及像Widget::Impl的类之间的关系而言，他们是独享占有权关系，这让std::unique_ptr使用起来很合适。
+然而，有必要知道，在其他情况中，当共享所有权存在时，std::shared_ptr是很适用的选择的时候，就没有std::unique_ptr所必需的声明——定义（function-definition）这样的麻烦事了。
+
+请记住：
+* Pimpl惯用法通过减少在类实现和类使用者之间的编译依赖来减少编译时间。
+* 对于std::unique_ptr类型的pImpl指针，需要在头文件的类里声明特殊的成员函数，但是在实现文件里面来实现他们。即使是编译器自动生成的代码可以工作，也要这么做。
+* 以上的建议只适用于std::unique_ptr，不适用于std::shared_ptr。
+
+
 
 # 条款23：理解std::move和std::forward
 为了了解`std::move`和`std::forward`，一种有用的方式是从 `它们不做什么` 这个角度来了解它们。
@@ -1808,6 +2711,160 @@ public:
 
 
 
+# 条款24：区分通用引用与右值引用
+据说，真相使人自由，然而在特定的环境下，一个精心挑选的谎言也同样使人解放。这一条款就是这样一个谎言。因为我们在和软件打交道，然而，让我们避开“谎言（lie）”这个词，不妨说，本条款包含了一种“`抽象`（abstraction）”。
+为了声明一个指向某个类型T的右值引用，你写下了T&&。由此，一个合理的假设是，当你看到一个“T&&”出现在源码中，你看到的是一个右值引用。
+唉，事情并不如此简单:
+```cpp
+void f(Widget&& param);             //右值引用
+Widget&& var1 = Widget();           //右值引用
+auto&& var2 = var1;                 //不是右值引用
+
+template<typename T>
+void f(std::vector<T>&& param);     //右值引用
+
+template<typename T>
+void f(T&& param);                  //不是右值引用
+```
+事实上，“T&&”有两种不同的意思。
+* 第一种，当然是右值引用。这种引用表现得正如你所期待的那样：它们只绑定到右值上，并且它们主要的存在原因就是为了识别可以移动操作的对象。
+* “T&&”的另一种意思是，它既可以是右值引用，也可以是左值引用。
+这种引用在源码里看起来像右值引用（即“T&&”），但是它们可以表现得像是左值引用（即“T&”）。它们的二重性使它们既可以绑定到右值上（就像右值引用），也可以绑定到左值上（就像左值引用）。
+此外，它们还可以绑定到const或者non-const的对象上，也可以绑定到volatile或者non-volatile的对象上，甚至可以绑定到既const又volatile的对象上。
+它们可以绑定到几乎任何东西。
+这种空前灵活的引用值得拥有自己的名字。我把它叫做`通用引用（universal references）`。（Item25解释了std::forward几乎总是可以应用到通用引用上，并且在这本书即将出版之际，一些C++社区的成员已经开始将这种通用引用称之为转发引用（forwarding references））。
+
+在两种情况下会出现通用引用。
+最常见的一种是`函数模板形参`，正如在之前的示例代码中所出现的例子：
+```cpp
+template<typename T>
+void f(T&& param);                  //param是一个通用引用
+```
+
+第二种情况是`auto声明符`，它是从以上示例中拿出的：
+```cpp
+auto&& var2 = var1;                 //var2是一个通用引用
+```
+这两种情况的共同之处就是都存在`类型推导（type deduction）`。
+在模板f的内部，`param`的类型需要被推导，而在变量var2的声明中，`var2`的类型也需要被推导。
+同以下的例子相比较（同样来自于上面的示例代码），下面的例子不带有类型推导。
+如果你看见“T&&”不带有类型推导，那么你看到的就是一个右值引用：
+```cpp
+void f(Widget&& param);         //没有类型推导（因为已经明确了），
+                                //param是一个右值引用
+Widget&& var1 = Widget();       //没有类型推导，
+                                //var1是一个右值引用
+```
+因为通用引用是引用，所以它们必须被初始化。
+**一个`通用引用`的`初始值`决定了它是代表了右值引用还是左值引用。**
+如果初始值是一个右值，那么通用引用就会是对应的右值引用，如果初始值是一个左值，那么通用引用就会是一个左值引用。
+对那些是函数形参的通用引用来说，初始值在调用函数的时候被提供：
+```cpp
+template<typename T>
+void f(T&& param);              //param是一个通用引用
+
+Widget w;
+f(w);                           //传递给函数f一个左值；param的类型
+                                //将会是Widget&，也即左值引用
+
+f(std::move(w));                //传递给f一个右值；param的类型会是
+                                //Widget&&，即右值引用  （std::move将表达式强制转为右值类型）
+```
+对一个通用引用而言，类型推导是必要的，但是它还不够。
+引用声明的形式必须正确，并且该形式是被限制的。它必须恰好为“`T&&`”。再看看之前我们已经看过的代码示例：
+```cpp
+template <typename T>
+void f(std::vector<T>&& param);     //param是一个右值引用
+```
+当函数f被调用的时候，类型T会被推导（除非调用者显式地指定它，这种边缘情况我们不考虑）。
+但是param的类型声明并不是T&&，而是一个`std::vector<T>&&`。这排除了param是一个通用引用的可能性。
+param因此是一个右值引用————当你向函数f传递一个左值时，你的编译器将会乐于帮你确认这一点:
+```cpp
+std::vector<int> v;
+f(v);                           //错误！不能将左值绑定到右值引用
+```
+即使一个简单的`const`修饰符的出现，也足以使一个引用失去成为通用引用的资格:
+```cpp
+template <typename T>
+void f(const T&& param);        //param是一个右值引用
+```
+
+如果你在一个模板里面看见了一个函数形参类型为“T&&”，你也许觉得你可以假定它是一个通用引用。错！这是由于 `在模板内部并不保证一定会发生类型推导`。
+考虑如下push_back成员函数，来自`std::vector`：
+```cpp
+template<class T, class Allocator = allocator<T>>   //来自C++标准
+class vector
+{
+public:
+    void push_back(T&& x);
+    // …
+}
+```
+push_back函数的形参当然有一个通用引用的正确形式，然而，在这里并没有发生类型推导。
+**因为`push_back`在有一个特定的vector实例之前不可能存在，而实例化vector时的类型已经决定了push_back的声明。**（`push_back`不是一个模板函数）
+也就是说，
+```cpp
+std::vector<Widget> v;
+```
+将会导致std::vector模板被实例化为以下代码：
+```cpp
+class vector<Widget, allocator<Widget>> {
+public:
+    void push_back(Widget&& x);             //右值引用
+    // …
+};
+```
+现在你可以清楚地看到，函数push_back不包含任何类型推导。
+`push_back`对于`vector<T>`而言（有两个函数————它被重载了）总是声明了一个类型为`rvalue-reference-to-T`的形参。
+
+作为对比，std::vector内的概念上相似的成员函数`emplace_back`，却确实包含`类型推导`（因为它是模板函数）:
+```cpp
+template<class T, class Allocator = allocator<T>>   //依旧来自C++标准
+class vector {
+public:
+    template <class... Args>
+    void emplace_back(Args&&... args);
+    // …
+};
+```
+这儿，类型参数（type parameter）Args是独立于vector的类型参数T的，所以Args会在每次emplace_back被调用的时候被推导。（好吧，Args实际上是一个`parameter pack`，而不是一个类型参数，但是为了方便讨论，我们可以把它当作是一个类型参数。）
+
+虽然函数emplace_back的类型参数被命名为Args，但是它仍然是一个通用引用，这补充了我之前所说的，通用引用的格式必须是“T&&”。
+你使用的名字T并不是必要的。
+举个例子，如下模板接受一个通用引用，因为形式（“type&&”）是正确的，并且param的类型将会被推导（重复一次，不考虑边缘情况，即当调用者明确给定类型的时候）。
+```cpp
+template<typename MyTemplateType>           //param是通用引用
+void someFunc(MyTemplateType&& param);
+```
+我之前提到，类型为auto的变量可以是通用引用。
+更准确地说，类型声明为`auto&&`的变量是通用引用，因为会发生类型推导，并且它们具有正确形式(T&&)。
+auto类型的通用引用不如函数模板形参中的通用引用常见，但是它们在C++11中常常突然出现。
+而它们在C++14中出现得更多，因为C++14的lambda表达式可以声明`auto&&`类型的形参。
+举个例子，如果你想写一个C++14标准的lambda表达式，来`记录任意函数调用的时间开销`，你可以这样写：
+```cpp
+auto timeFuncInvocation =
+    [](auto&& func, auto&&... params)           //C++14
+    {
+        start timer;
+        std::forward<decltype(func)>(func)(     //对params调用func
+            std::forward<delctype(params)>(params)...
+        );
+        stop timer and record elapsed time;
+    };
+```
+如果你对lambda里的代码“`std::forward<decltype(blah blah blah)>`”反应是“这是什么鬼...?!”，只能说你可能还没有读Item33。
+别担心。在本条款，重要的事是lambda表达式中声明的`auto&&`类型的形参。func是一个通用引用，可以被绑定到任何可调用对象，无论左值还是右值。
+args是0个或者多个通用引用（即它是个通用引用parameter pack），它可以`绑定到 任意数目、任意类型的 对象上`。
+多亏了auto类型的通用引用，函数timeFuncInvocation可以对近乎任意（pretty much any）函数进行计时。(如果你想知道任意（any）和近乎任意（pretty much any）的区别，往后翻到Item30)。
+牢记整个本条款————通用引用的基础————是一个谎言，噢不，是一个“抽象”。
+其底层真相被称为`引用折叠（reference collapsing）`，Item28的专题将致力于讨论它。
+但是这个真相并不降低该抽象的有用程度。区分右值引用和通用引用将会帮助你更准确地阅读代码（“究竟我眼前的这个T&&是只绑定到右值还是可以绑定任意对象呢？”），并且，当你在和你的合作者交流时，它会帮助你避免歧义（“在这里我在用一个通用引用，而非右值引用”）。
+它也可以帮助你弄懂Item25和26，它们依赖于右值引用和通用引用的区别。所以，拥抱这份抽象，陶醉于它吧。就像牛顿的力学定律（本质上不正确），比起爱因斯坦的广义相对论（这是真相）而言，往往更简单，更易用。所以通用引用的概念，相较于穷究引用折叠的细节而言，是更合意之选。
+
+请记住：
+* 如果一个函数模板形参的类型为`T&&`，并且T`需要被推导`得知，或者如果一个对象被声明为`auto&&`，这个形参或者对象就是一个通用引用。
+* 如果类型声明的形式不是标准的`type&&`，或者如果类型推导没有发生，那么`type&&`代表一个右值引用。
+* 通用引用，如果它被右值初始化，就会对应地成为右值引用；如果它被左值初始化，就会成为左值引用。
 
 
 
@@ -1830,6 +2887,301 @@ public:
 
 
 
+
+
+# 第6章 lambda表达式
+lambda表达式是C++编程中的游戏规则改变者。
+这有点令人惊讶，因为它没有给语言带来新的表达能力。lambda可以做的所有事情都可以通过其他方式完成。但是lambda是创建函数对象相当便捷的一种方法，对于日常的C++开发影响是巨大的。
+没有lambda时，STL中的“`_if`”算法（比如，`std::find_if`，`std::remove_if`，`std::count_if`等）通常需要繁琐的谓词，但是当有lambda可用时，这些算法使用起来就变得相当方便。用比较函数（比如，`std::sort`，`std::nth_element`，`std::lower_bound`等）来自定义算法也是同样方便的。
+在STL外，lambda可以快速创建std::unique_ptr和std::shared_ptr的自定义删除器（见Item18和19），并且使线程API中条件变量的谓词指定变得同样简单（参见Item39）。除了标准库，lambda有利于即时的回调函数，接口适配函数和特定上下文中的一次性函数。lambda确实使C++成为更令人愉快的编程语言。
+与lambda相关的词汇可能会令人疑惑，这里做一下简单的回顾：
+lambda表达式（lambda expression）就是一个表达式。下面是部分源代码。在
+```cpp
+std::find_if(container.begin(), container.end(),
+             [](int val){ return 0 < val && val < 10; });   //译者注：本行高亮
+```
+中，代码的高亮部分就是lambda。
+`闭包（enclosure）`
+    是lambda创建的运行时 `对象`。创建的对象，学名叫闭包。
+    依赖捕获模式，闭包`持有被捕获数据的 副本 或者 引用`。在上面的std::find_if调用中，闭包是作为第三个实参在运行时传递给std::find_if的对象。
+
+`闭包类（closure class）`
+    是从中实例化闭包的类。
+    每个lambda都会使编译器生成唯一的`闭包类`。lambda中的语句 成为 其闭包类的 成员函数中的 可执行指令。
+
+lambda通常被用来创建闭包，该闭包仅用作函数的实参。上面对std::find_if的调用就是这种情况。然而，闭包通常可以拷贝，所以可能有多个闭包对应于一个lambda。比如下面的代码：
+```cpp
+{
+    int x;                                  //x是局部对象
+    // …
+
+    auto c1 =                               //c1是lambda产生的闭包的副本
+        [x](int y) { return x * y > 55; };
+
+    auto c2 = c1;                           //c2是c1的拷贝
+
+    auto c3 = c2;                           //c3是c2的拷贝
+    // …
+}
+```
+c1，c2，c3都是lambda产生的闭包的副本。
+
+非正式的讲，模糊lambda，闭包和闭包类之间的界限是可以接受的。
+但是，在随后的Item中，区分什么存在于编译期（lambdas 和闭包类），什么存在于运行时（闭包）以及它们之间的相互关系是重要的。
+
+
+条款31：避免使用默认捕获模式
+C++11中有两种默认的捕获模式：`按引用捕获`和`按值捕获`。
+但默认按引用捕获模式可能会带来`悬空引用`的问题，而默认按值捕获模式可能会诱骗你让你以为能解决悬空引用的问题（实际上并没有），还会让你以为你的闭包是独立的（事实上也不是独立的）。
+这就是本条款的一个总结。如果你偏向技术，渴望了解更多内容，就让我们从按引用捕获的危害谈起吧。
+`按引用捕获`会导致闭包中包含了 `对某个局部变量 或者 形参的引用`，变量或形参只在定义lambda的作用域中可用。
+如果 该lambda创建的闭包 生命周期 超过了 局部变量或者形参的 生命周期，那么闭包中的引用将会变成悬空引用。
+举个例子，假如我们有元素是过滤函数（filtering function）的一个容器，该函数接受一个int，并返回一个bool，该bool的结果表示传入的值是否满足过滤条件：
+```cpp
+using FilterContainer =                     //“using”参见条款9，
+    std::vector<std::function<bool(int)>>;  //std::function参见条款2
+
+FilterContainer filters;                    //过滤函数
+```
+我们可以添加一个过滤器，用来过滤掉5的倍数：
+```cpp
+filters.emplace_back(                       //emplace_back的信息见条款42
+    [](int value) { return value % 5 == 0; }
+);
+```
+然而我们可能需要的是能够在运行期计算除数（divisor），即不能将5硬编码到lambda中。因此添加的过滤器逻辑将会是如下这样：
+```cpp
+void addDivisorFilter()
+{
+    auto calc1 = computeSomeValue1();
+    auto calc2 = computeSomeValue2();
+
+    auto divisor = computeDivisor(calc1, calc2);
+
+    filters.emplace_back(                               //危险！对divisor的引用
+        [&](int value) { return value % divisor == 0; } //将会悬空！
+    );
+}
+```
+这个代码实现是一个定时炸弹。lambda`对局部变量divisor进行了引用`，但该变量的生命周期会在addDivisorFilter返回时结束，刚好就是在语句filters.emplace_back返回之后。因此添加到filters的函数添加完，该函数就死亡了。
+使用这个过滤器（译者注：就是那个添加进filters的函数）会导致未定义行为，这是由它被创建那一刻起就决定了的。
+现在，同样的问题也会出现在divisor的显式按引用捕获。
+```cpp
+filters.emplace_back(
+    [&divisor](int value) 			    // 危险！对divisor的引用将会悬空！
+    { return value % divisor == 0; }
+);
+```
+但通过显式的捕获，能更容易看到lambda的可行性依赖于变量divisor的生命周期。
+另外，写下“divisor”这个名字 能够 `提醒` 我们要注意确保divisor的生命周期至少跟lambda闭包一样长。比起“`[&]`”传达的意思，显式捕获能让人更容易想起“确保没有悬空变量”。
+
+如果你知道一个闭包将会被马上使用（例如被传入到一个STL算法中）并且不会被拷贝，那么在它的lambda被创建的环境中，将不会有闭包的引用比父函数的局部变量和形参活得长的风险。
+在这种情况下，你可能会争论说，没有悬空引用的危险，就不需要避免使用默认的引用捕获模式。
+例如，我们的过滤lambda只会用做`C++11中std::all_of`的一个实参，返回满足条件的所有元素：
+```cpp
+template<typename C>
+void workWithContainer(const C& container)
+{
+    auto calc1 = computeSomeValue1();               //同上
+    auto calc2 = computeSomeValue2();               //同上
+    auto divisor = computeDivisor(calc1, calc2);    //同上
+
+    using ContElemT = typename C::value_type;       //容器内元素的类型
+    using std::begin;                               //为了泛型，见条款13
+    using std::end;
+
+    if (std::all_of(                                //如果容器内所有值都为
+            begin(container), end(container),       //除数的倍数
+            [&](const ContElemT& value)
+            { return value % divisor == 0; })
+        ) {
+        …                                           //它们...
+    } else {
+        …                                           //至少有一个不是的话...
+    }
+}
+```
+的确如此，这是安全的做法，但这种安全是不确定的。
+如果发现lambda在其它上下文中很有用（例如 作为一个函数被添加在filters容器中），然后拷贝粘贴到一个 divisor变量已经死亡，但闭包生命周期还没结束的 上下文中，你又回到了悬空的使用上了。
+同时，在该捕获语句中，也没有特别提醒了你注意分析divisor的生命周期。
+
+从长期来看，`显式列出lambda依赖的局部变量和形参，是更加符合软件工程规范的做法`。
+
+额外提一下，C++14支持了在lambda中使用auto来声明变量，上面的代码在C++14中可以进一步简化，ContElemT的别名可以去掉，if条件可以修改为：
+```cpp
+if (std::all_of(begin(container), end(container),
+               [&](const auto& value)               // C++14
+               { return value % divisor == 0; }))			
+```
+一个解决问题的方法是，divisor默认`按值捕获`进去，也就是说可以按照以下方式来添加lambda到filters：
+```cpp
+filters.emplace_back( 							    //现在divisor不会悬空了
+    [=](int value) { return value % divisor == 0; }
+);
+```
+这足以满足本实例的要求，但在通常情况下，按值捕获并不能完全解决悬空引用的问题。
+这里的问题是：如果你`按值捕获`的是`一个指针`，你将该指针拷贝到lambda对应的闭包里，但这样并不能避免lambda外delete这个指针的行为，从而导致你的副本指针变成悬空指针。
+也许你要抗议说：“这不可能发生。看过了第4章，我对智能指针的使用非常热衷。只有那些失败的C++98的程序员才会用裸指针和delete语句。”这也许是正确的，但却是不相关的，因为事实上你的确会使用裸指针，也的确存在被你delete的可能性。
+只不过在现代的C++编程风格中，不容易在源代码中显露出来而已。
+假设在一个Widget类，可以实现向过滤器的容器添加条目：
+```cpp
+class Widget {
+public:
+    …                       //构造函数等
+    void addFilter() const; //向filters添加条目
+private:
+    int divisor;            //在Widget的过滤器使用
+};
+```
+这是Widget::addFilter的定义：
+```cpp
+void Widget::addFilter() const
+{
+    filters.emplace_back(
+        [=](int value) { return value % divisor == 0; }
+    );
+}	
+```
+这个做法看起来是安全的代码。lambda依赖于divisor，但默认的按值捕获确保divisor被拷贝进了lambda对应的所有闭包中，对吗？
+    错误，完全错误。
+
+**捕获 只能应用于 `lambda被创建时` 所在作用域里的 `non-static局部变量（包括形参）`**。
+在`Widget::addFilter`的视线里，divisor并不是一个局部变量，而是Widget类的一个成员变量。它不能被捕获。
+而如果默认捕获模式被删除，代码就不能编译了：
+```cpp
+void Widget::addFilter() const
+{
+    filters.emplace_back(                               //错误！
+        [](int value) { return value % divisor == 0; }  //divisor不可用
+    ); 
+} 
+```
+另外，如果尝试去显式地捕获divisor变量（或者按引用或者按值——这不重要），也一样会编译失败，因为divisor不是一个局部变量或者`形参`。
+```cpp
+void Widget::addFilter() const
+{
+    filters.emplace_back(
+        [divisor](int value)                //错误！没有名为divisor局部变量可捕获
+        { return value % divisor == 0; }
+    );
+}
+```
+所以如果 默认按值捕获 不能捕获divisor，而不用默认按值捕获代码就不能编译，这是怎么一回事呢？
+
+解释就是 这里`隐式使用了一个原始指针：this`。
+每一个`non-static成员函数`都有一个this指针，每次你使用一个类内的数据成员时都会使用到这个指针。
+例如，在任何Widget成员函数中，`编译器会在内部将divisor替换成this->divisor`。
+在默认按值捕获的Widget::addFilter版本中，
+```cpp
+void Widget::addFilter() const
+{
+    filters.emplace_back(
+        [=](int value) { return value % divisor == 0; }
+    );
+}
+```
+真正被捕获的是`Widget的this指针`，而不是divisor。
+编译器会将上面的代码看成以下的写法：
+```cpp
+void Widget::addFilter() const
+{
+    auto currentObjectPtr = this;
+
+    filters.emplace_back(
+        [currentObjectPtr](int value)
+        { return value % currentObjectPtr->divisor == 0; }
+    );
+}
+```
+明白了这个就相当于明白了lambda闭包的生命周期与Widget对象的关系，闭包内含有Widget的this指针的拷贝。
+特别是考虑以下的代码，参考第4章的内容，只使用智能指针：
+```cpp
+using FilterContainer = 					//跟之前一样
+    std::vector<std::function<bool(int)>>;
+
+FilterContainer filters;                    //跟之前一样
+
+void doSomeWork()
+{
+    auto pw =                               //创建Widget；std::make_unique
+        std::make_unique<Widget>();         //见条款21
+
+    pw->addFilter();                        //添加使用Widget::divisor的过滤器
+
+    // …
+}                                           //销毁Widget；filters现在持有悬空指针！
+```
+当调用doSomeWork时，就会创建一个过滤器，其生命周期依赖于由std::make_unique产生的Widget对象，即一个含有 `指向Widget的` 指针————Widget的this指针————的过滤器。
+这个过滤器被添加到filters中，但当doSomeWork结束时，Widget会由管理它的std::unique_ptr来销毁（见Item18）。从这时起，filter会含有一个存着悬空指针的条目。
+
+这个特定的问题可以通过给你想捕获的数据成员做一个局部副本，然后捕获这个副本去解决：
+```cpp
+void Widget::addFilter() const
+{
+    auto divisorCopy = divisor;                 //拷贝数据成员 这样就不隐含地拷贝this指针了
+
+    filters.emplace_back(
+        [divisorCopy](int value)                //捕获副本
+        { return value % divisorCopy == 0; }	//使用副本
+    );
+}
+```
+事实上如果采用这种方法，默认的按值捕获也是可行的。
+```cpp
+void Widget::addFilter() const
+{
+    auto divisorCopy = divisor;                 //拷贝数据成员
+
+    filters.emplace_back(
+        [=](int value)                          //捕获副本
+        { return value % divisorCopy == 0; }	//使用副本
+    );
+}
+```
+但为什么要冒险呢？当一开始你认为你捕获的是divisor的时候，默认捕获模式就是造成可能意外地捕获this的元凶。
+
+在C++14中，一个更好的捕获成员变量的方式时使用通用的lambda捕获：
+```cpp
+void Widget::addFilter() const
+{
+    filters.emplace_back(                   //C++14：
+        [divisor = divisor](int value)      //拷贝divisor到闭包
+        { return value % divisor == 0; }	//使用这个副本
+    );
+}
+```
+这种通用的lambda捕获并没有默认的捕获模式，因此在C++14中，本条款的建议————避免使用默认捕获模式————仍然是成立的。
+
+使用默认的按值捕获还有另外的一个缺点，它们预示了相关的闭包是独立的并且不受外部数据变化的影响。
+一般来说，这是不对的。
+lambda可能会依赖局部变量和形参（它们可能被捕获），还有静态存储生命周期（static storage duration）的对象。
+这些对象定义在全局空间或者命名空间，或者在类、函数、文件中声明为static。
+这些对象也能在lambda里使用，但它们不能被捕获。
+但默认按值捕获可能会因此误导你，让你以为捕获了这些变量。
+参考下面版本的addDivisorFilter函数：
+```cpp
+void addDivisorFilter()
+{
+    static auto calc1 = computeSomeValue1();    //现在是static
+    static auto calc2 = computeSomeValue2();    //现在是static
+    static auto divisor =                       //现在是static！！！
+    computeDivisor(calc1, calc2);
+
+    filters.emplace_back(
+        [=](int value)                          //什么也没捕获到！
+        { return value % divisor == 0; }        //引用上面的static，是不行的！！！
+    );
+
+    ++divisor;                                  //调整divisor
+}
+```
+随意地看了这份代码的读者可能看到“`[=]`”，就会认为“好的，lambda拷贝了所有使用的对象，因此这是独立的”。但其实不独立。这个lambda没有使用任何的non-static局部变量，所以它没有捕获任何东西。
+然而lambda的代码引用了static变量divisor，在每次调用addDivisorFilter的结尾，divisor都会递增，通过这个函数添加到filters的所有lambda都展示新的行为（分别对应新的divisor值）。
+这个lambda是通过引用捕获divisor，这和默认的按值捕获表示的含义有着直接的矛盾。如果你一开始就避免使用默认的按值捕获模式，你就能解除代码的风险。
+
+请记住：
+* 默认的按引用捕获可能会导致悬空引用。
+* 默认的按值捕获对于悬空指针很敏感（尤其是this指针），并且它会误导人产生lambda是独立的想法。
 
 
 
@@ -1961,12 +3313,446 @@ C++标准实际上并不要求使用线程池或者工作窃取，实际上C++11
 
 
 
+# 条款37：使std::thread在所有路径最后都不可结合
+每个`std::thread`对象处于两个状态之一：`可结合的（joinable）` 或者 `不可结合的（unjoinable）`。
+`可结合状态`的`std::thread`对应于 `正在运行` 或者 `可能要运行的` 异步执行线程。
+比如，对应于一个 `阻塞的（blocked）` 或者 `等待调度的` 线程的std::thread是可结合的，对应于`运行结束的`线程的`std::thread`也可以认为是可结合的。
+
+`不可结合`的`std::thread`正如所期待：一个不是可结合状态的std::thread。
+不可结合的std::thread对象包括：
+* `默认构造`的std::threads。
+    这种std::thread没有函数执行，因此没有对应到底层执行线程上。
+* `已经被移动走`的std::thread对象。
+    移动的结果就是一个std::thread原来对应的执行线程现在对应于另一个std::thread。
+* `已经被join`的std::thread 。
+    `在join之后`，std::thread不再对应于已经运行完了的执行线程。
+* `已经被detach`的std::thread 。
+    detach断开了std::thread对象与执行线程之间的连接。
+（译者注：std::thread可以视作`状态保存的对象`，保存的状态可能也包括可调用对象，有没有具体的线程承载 就是 有没有连接）
+
+std::thread的可结合性如此重要的原因之一就是 `当可结合的线程的析构函数被调用，程序执行会终止`。
+比如，假定有一个函数doWork，使用一个过滤函数filter，一个最大值maxVal作为形参。
+doWork检查是否满足计算所需的条件，然后 使用在0到maxVal之间的通过过滤器的所有值 进行计算。
+如果进行过滤非常耗时，并且确定doWork条件是否满足也很耗时，则将两件事并发计算是很合理的。
+我们希望为此采用`基于任务的`设计（参见Item35），但是假设我们希望 设置做过滤的线程的优先级。
+Item35阐释了那需要线程的原生句柄，只能通过std::thread的API来完成；基于任务的API（比如future）做不到。
+所以最终采用基于线程而不是基于任务。
+我们可能写出以下代码：
+代码如下：
+```cpp
+constexpr auto tenMillion = 10000000;           //constexpr见条款15
+
+bool doWork(std::function<bool(int)> filter,    //返回计算是否执行；
+            int maxVal = tenMillion)            //std::function见条款2
+{
+    std::vector<int> goodVals;                  //满足filter的值
+
+    std::thread t([&filter, maxVal, &goodVals]  //填充goodVals
+                  {
+                      for (auto i = 0; i <= maxVal; ++i)
+                          { if (filter(i)) goodVals.push_back(i); }
+                  });
+
+    auto nh = t.native_handle();                //使用t的原生句柄
+    …                                           //来设置 t的优先级
+
+    if (conditionsAreSatisfied()) {
+        t.join();                               //等t完成
+        performComputation(goodVals);
+        return true;                            //执行了计算
+    }
+    return false;                               //未执行计算
+}
+```
+在解释这份代码为什么有问题之前，我先把tenMillion的初始化值弄得更可读一些，这利用了C++14的能力，使用单引号作为数字分隔符：
+```cpp
+constexpr auto tenMillion = 10'000'000;         //C++14
+```
+还要指出，在开始运行之后 设置t的优先级就像把马放出去之后再关上马厩门一样（译者注：太晚了）。
+更好的设计是 `在挂起状态时 开始t（这样可以在执行任何计算前调整优先级）`，但是我不想你为考虑那些代码而分心。
+如果你对代码中忽略的部分感兴趣，可以转到Item39，那个Item告诉你如何以开始那些挂起状态的线程。
+
+返回doWork。
+如果`conditionsAreSatisfied()`返回true，没什么问题，但是如果返回false或者抛出异常，在doWork结束、调用t的析构函数时，std::thread对象t会是可结合的。这造成程序执行中止。
+
+你可能会想，为什么std::thread析构的行为是这样的，那是因为另外两种显而易见的方式更糟：
+* 隐式join 。
+    这种情况下，`std::thread的析构函数`将等待其底层的异步执行线程完成。
+    这听起来是合理的，但是可能会导致难以追踪的异常表现。比如，如果conditonAreStatisfied()已经返回了false，doWork继续等待过滤器应用于所有值就很违反直觉。
+
+* 隐式detach 。
+    这种情况下，std::thread析构函数会分离std::thread与其底层的线程。底层线程继续运行。听起来比join的方式好，但是可能导致更严重的调试问题。
+    比如，在doWork中，goodVals是通过引用捕获的局部变量。它也被lambda修改（通过调用push_back）。
+    假定，lambda异步执行时，conditionsAreSatisfied()返回false。这时，doWork返回，同时局部变量（包括goodVals）被销毁。栈被弹出，并在doWork的调用点继续执行线程。
+
+调用点之后的语句有时会进行其他函数调用，并且至少一个这样的调用可能会占用曾经被doWork使用的栈位置（原先存在局部变量的栈位被使用，导致出错）。我们调用那么一个函数f。当f运行时，doWork启动的lambda仍在继续异步运行。该lambda可能在栈内存上调用push_back，该内存曾属于goodVals，但是现在是f的栈内存的某个位置。这意味着对f来说，内存被自动修改了！想象一下调试的时候“乐趣”吧。
+
+标准委员会认为，销毁可结合的线程如此可怕以至于实际上禁止了它（`规定销毁可结合的线程 导致 程序终止`）。
+这使你有责任确保使用std::thread对象时，在所有的路径上超出定义所在的作用域时都是不可结合的。
+但是覆盖每条路径可能很复杂，可能包括自然执行通过作用域，或者通过return，continue，break，goto或异常跳出作用域，有太多可能的路径。
+每当你想在执行跳至块之外的每条路径执行某种操作，最通用的方式就是将该操作放入局部对象的析构函数中。这些对象称为`RAII对象（RAII objects）`，从RAII类中实例化。（RAII全称为 “Resource Acquisition Is Initialization”（资源获得即初始化），尽管技术关键点在析构上而不是实例化上）。
+RAII类在标准库中很常见。比如`STL容器（每个容器析构函数都销毁容器中的内容物并释放内存）`，`标准智能指针（Item18-20解释了，std::uniqu_ptr的析构函数调用他指向的对象的删除器，std::shared_ptr和std::weak_ptr的析构函数递减引用计数）`，`std::fstream对象（它们的析构函数关闭对应的文件）`等。
+但是标准库没有std::thread的RAII类，可能是因为标准委员会拒绝将join和detach作为默认选项，不知道应该怎么样完成RAII。
+幸运的是，完成自行实现的类并不难。
+比如，下面的类实现允许调用者指定ThreadRAII对象（一个std::thread的RAII对象）析构时，调用join或者detach：
+```cpp
+class ThreadRAII {
+public:
+    enum class DtorAction { join, detach };     //enum class的信息见条款10
+    
+    ThreadRAII(std::thread&& t, DtorAction a)   //析构函数中对t实行a动作
+    : action(a), t(std::move(t)) {}
+
+    ~ThreadRAII()
+    {                                           //可结合性测试见下
+        if (t.joinable()) {
+            if (action == DtorAction::join) {
+                t.join();
+            } else {
+                t.detach();
+            }
+        }
+    }
+
+    std::thread& get() { return t; }            //见下
+
+private:
+    DtorAction action;
+    std::thread t;
+};
+```
+我希望这段代码是不言自明的，但是下面几点说明可能会有所帮助：
+
+构造器只接受std::thread右值，因为我们想要把传来的std::thread对象`移动`进ThreadRAII。（std::thread不可以复制。）
+构造器的形参顺序设计的符合调用者直觉（首先传递std::thread，然后选择析构执行的动作，这比反过来更合理），但是` 成员初始化列表 设计的匹配 成员声明的顺序 `。
+将std::thread对象放在声明最后。
+在这个类中，这个顺序没什么特别之处，但是通常，！！！可能`一个数据成员的初始化依赖于另一个，因为std::thread对象可能会在初始化结束后就立即执行函数了，所以在最后声明是一个好习惯`。
+这样就能保证 **一旦构造结束，在前面的所有数据成员都初始化完毕，可以供std::thread数据成员绑定的异步运行的线程安全使用**。
+
+ThreadRAII提供了get函数访问内部的std::thread对象。这类似于标准智能指针提供的get函数，可以`提供访问原始指针的入口`。
+    提供get函数避免了ThreadRAII复制完整std::thread接口的需要，也意味着ThreadRAII可以在需要std::thread对象的上下文环境中使用。
+在ThreadRAII析构函数调用std::thread对象t的成员函数之前，`检查t是否可结合`。这是必须的，因为在不可结合的std::thread上调用join或detach会导致未定义行为。
+客户端可能会构造一个std::thread，然后用它构造一个ThreadRAII，使用get获取t，然后移动t，或者调用join或detach，每一个操作都使得t变为不可结合的。
+
+如果你担心下面这段代码
+```cpp
+if (t.joinable()) { // 也许判断完了，其他线程又改变了其状态
+    if (action == DtorAction::join) {
+        t.join();
+    } else {
+        t.detach();
+    }
+}
+```
+存在竞争，因为在`t.joinable()`的执行和调用join或detach的中间，可能有其他线程改变了t为不可结合，你的直觉值得表扬，但是这个担心不必要。
+只有调用成员函数才能使std::thread对象从可结合变为不可结合状态，比如join，detach或者移动操作。在ThreadRAII对象析构函数调用时，应当没有其他线程在那个对象上调用`成员函数`。
+如果同时进行调用，那肯定是有竞争的，但是不在析构函数中，是`在客户端代码中试图同时在一个对象上调用两个成员函数（析构函数和其他函数）`。
+通常，仅当所有都为const成员函数时，在一个对象同时调用多个成员函数才是安全的。
+在doWork的例子上使用ThreadRAII的代码如下：
+```cpp
+bool doWork(std::function<bool(int)> filter,        //同之前一样
+            int maxVal = tenMillion)
+{
+    std::vector<int> goodVals;                      //同之前一样
+
+    ThreadRAII t(                                   //使用RAII对象
+        std::thread([&filter, maxVal, &goodVals]
+                    {
+                        for (auto i = 0; i <= maxVal; ++i)
+                            { if (filter(i)) goodVals.push_back(i); }
+                    }),
+                    ThreadRAII::DtorAction::join    //RAII动作
+    );
+
+    auto nh = t.get().native_handle();
+    // …
+
+    if (conditionsAreSatisfied()) {
+        t.get().join();
+        performComputation(goodVals);
+        return true;
+    }
+
+    return false;
+}
+```
+这种情况下，我们选择 在ThreadRAII的析构函数 对异步执行的线程进行join，因为在先前分析中，detach可能导致噩梦般的调试过程。
+我们之前也分析了join可能会导致表现异常（坦率说，也可能调试困难），但是在未定义行为（detach导致），程序终止（使用原生std::thread导致），或者表现异常之间选择一个后果，可能表现异常是最好的那个。
+
+哎，Item39表明了使用ThreadRAII来保证在`std::thread`的析构时执行join有时不仅可能`导致程序表现异常，还可能导致程序挂起`。
+“适当”的解决方案是 此类程序应该和异步执行的lambda通信，告诉它不需要执行了，可以直接返回，但是C++11中不支持可中断线程（interruptible threads）。
+可以自行实现，但是这不是本书讨论的主题。（关于这一点，Anthony Williams的《C++ Concurrency in Action》（Manning Publications，2012）的section 9.2中有详细讨论。）（译者注：此书中文版已出版，名为《C++并发编程实战》，且本文翻译时（2020）已有第二版出版。）
+Item17说明因为ThreadRAII声明了一个析构函数，因此不会有编译器生成移动操作，但是没有理由ThreadRAII对象不能移动。
+如果要求编译器生成这些函数，函数的功能也正确，所以显式声明来告诉编译器自动生成也是合适的：
+```cpp
+class ThreadRAII {
+public:
+    enum class DtorAction { join, detach };         //跟之前一样
+
+    ThreadRAII(std::thread&& t, DtorAction a)       //跟之前一样
+    : action(a), t(std::move(t)) {}
+
+    ~ThreadRAII()
+    {
+        // …                                        //跟之前一样
+    }
+
+    ThreadRAII(ThreadRAII&&) = default;             //支持移动
+    ThreadRAII& operator=(ThreadRAII&&) = default;
+
+    std::thread& get() { return t; }                //跟之前一样
+
+private: // as before
+    DtorAction action;
+    std::thread t;
+};
+```
+请记住：
+* 在所有路径上保证thread最终是不可结合的。
+* 析构时join会导致难以调试的表现异常问题。
+* 析构时detach会导致难以调试的未定义行为。
+* 声明类数据成员时，最后声明std::thread对象。
 
 
 
+# 条款39：对于一次性事件通信考虑使用void的futures
+有时，`一个任务 通知 另一个异步执行的任务 发生了 特定的事件`很有用，因为第二个任务要等到这个事件发生之后才能继续执行。
+事件也许是一个数据结构已经初始化，也许是计算阶段已经完成，或者检测到重要的传感器值。这种情况下，线程间通信的最佳方案是什么？
+一个明显的方案就是使用`条件变量（condition variable，简称condvar）`。
+如果我们将检测条件的任务称为`检测任务（detecting task）`，对条件作出反应的任务称为`反应任务（reacting task）`，
+策略很简单：反应任务等待一个条件变量，检测任务在事件发生时改变条件变量。
+代码如下：
+```cpp
+std::condition_variable cv;         //事件的条件变量
+std::mutex m;                       //配合cv使用的mutex
+```
+`检测任务`中的代码不能再简单了：
+```cpp
+…                                   //检测事件
+cv.notify_one();                    //通知反应任务
+```
+如果有多个反应任务需要被通知，使用`notify_all`代替`notify_one`，但是这里，我们假定只有一个反应任务需要通知。
+反应任务的代码稍微复杂一点，因为在对条件变量调用wait之前，必须通过`std::unique_lock`对象锁住互斥锁。
+（`在等待条件变量前 锁住互斥锁`对线程库来说是经典操作。
+通过`std::unique_lock`锁住互斥锁的需要仅仅是C++11 API要求的一部分。）
+`反应任务`概念上的代码如下：
+```cpp
+…                                       //反应的准备工作
+{                                       //开启关键部分
 
+    std::unique_lock<std::mutex> lk(m); //锁住互斥锁
 
+    cv.wait(lk);                        //等待通知，但是这是错的！
+    
+    …                                   //对事件进行反应（m已经上锁）
+}                                       //关闭关键部分；通过lk的析构函数解锁m
+…                                       //继续反应动作（m现在未上锁）
+```
+这份代码的第一个问题就是有时被称为`代码异味（code smell）`的一种情况：即使代码正常工作，但是有些事情也不是很正确。
+在这个情况中，这种问题源自于使用`互斥锁`。
+互斥锁被用于保护共享数据的访问，但是可能检测任务和反应任务可能不会同时访问共享数据，比如说，检测任务会初始化一个全局数据结构，然后给反应任务用，如果检测任务在初始化之后不会再访问这个数据结构，而在检测任务表明数据结构准备完了之前反应任务不会访问这个数据结构，这两个任务在程序逻辑下互不干扰，也就没有必要使用互斥锁。但是条件变量的方法必须使用互斥锁，这就留下了令人不适的设计。
 
+即使你忽略掉这个问题，还有两个问题需要注意：
+* 如果 在反应任务wait之前检测任务通知了条件变量，反应任务会挂起。
+    为了能使条件变量唤醒另一个任务，`任务必须等待在条件变量上`。如果在反应任务wait之前检测任务就通知了条件变量，反应任务就会丢失这次通知，永远不被唤醒。
+* `wait语句虚假唤醒`。
+线程API的存在一个事实（在许多语言中————不只是C++），等待一个条件变量的代码即使在条件变量没有被通知时，也可能被唤醒，这种唤醒被称为虚假唤醒（spurious wakeups）。
+正确的代码 通过 `确认要等待的条件确实已经发生` 来处理这种情况，并`将这个操作作为唤醒后的第一个操作`。
+C++条件变量的API使得这种问题很容易解决，因为允许把一个`测试要等待的条件的lambda（或者其他函数对象）`传给wait。
+因此，可以将反应任务wait调用这样写：
+```cpp
+cv.wait(lk, 
+        []{ return whether the evet has occurred; });
+```
+要利用这个能力 需要 反应任务 能够确定其等待的条件是否为真。
+但是我们考虑的场景中，它正在等待的条件是 检测线程负责识别的事件的发生情况。
+反应线程可能无法确定等待的事件是否已发生。这就是为什么它在等待一个条件变量！
+
+在很多情况下，使用条件变量进行任务通信非常合适，但是也有不那么合适的情况。
+对于很多开发者来说，他们的下一个诀窍是`共享的布尔型flag`。flag被初始化为false。当检测线程识别到发生的事件，将flag置位：
+```cpp
+std::atomic<bool> flag(false);          //共享的flag；std::atomic见条款40
+…                                       //检测某个事件
+flag = true;                            //告诉反应线程
+```
+就其本身而言，反应线程轮询该flag。
+当发现flag被置位，它就知道等待的事件已经发生了：
+```cpp
+…                                       //准备作出反应
+while (!flag);                          //等待事件
+…                                       //对事件作出反应
+```
+这种方法不存在基于条件变量的设计的缺点。
+不需要互斥锁，在反应任务开始轮询之前检测任务就对flag置位也不会出现问题，并且不会出现虚假唤醒。好，好，好。
+不好的一点是反应任务中轮询的`开销`。
+在任务等待flag被置位的时间里，任务基本被阻塞了，但是一直在运行。
+这样，反应线程占用了可能能给另一个任务使用的硬件线程，每次启动或者完成它的时间片都增加了上下文切换的开销，并且保持核心一直在运行状态，否则的话本来可以停下来省电。
+一个真正阻塞的任务不会发生上面的任何情况。这也是基于条件变量的优点，因为wait调用中的任务真的阻塞住了。
+**将`条件变量`和`flag`的设计组合起来很常用**。
+一个flag表示是否发生了感兴趣的事件，但是通过互斥锁同步了对该flag的访问。
+因为互斥锁阻止并发访问该flag，所以如Item40所述，不需要将flag设置为`std::atomic`。
+一个简单的bool类型就可以，检测任务代码如下：
+```cpp
+std::condition_variable cv;             //跟之前一样
+std::mutex m;
+bool flag(false);                       //不是std::atomic
+…                                       //检测某个事件
+{
+    std::lock_guard<std::mutex> g(m);   //通过g的构造函数锁住m
+    flag = true;                        //通知反应任务（第1部分）
+}                                       //通过g的析构函数解锁m
+cv.notify_one();                        //通知反应任务（第2部分）
+```
+反应任务代码如下:
+```cpp
+…                                       //准备作出反应
+{                                       //跟之前一样
+    std::unique_lock<std::mutex> lk(m); //跟之前一样
+    cv.wait(lk, [] { return flag; });   //使用lambda来避免虚假唤醒
+    …                                   //对事件作出反应（m被锁定）
+}
+…                                       //继续反应动作（m现在解锁）
+```
+这份代码解决了我们一直讨论的问题。
+无论在检测线程对条件变量发出通知之前，反应线程是否调用了wait都可以工作，即使出现了虚假唤醒也可以工作，而且不需要轮询。
+（如果条件先满足了，反应线程也不会无脑wait，不会错过；如果因为某种原因被唤醒而条件尚未满足，也会再一次判断条件是否满足，避免虚假唤醒）
+（
+PS: 为什么会虚假唤醒？
+1. 由于线程调度不可预测，可能会有多个线程被同时唤醒，即便在只调用一次`pthread_cond_signal`的情况下。
+
+2. 有些`硬件平台/操作系统`就是会在没有明确唤醒信号的情况下恢复线程。
+    pthread 的条件变量等待 `pthread_cond_wait` 是使用 `阻塞的系统调用`实现的（比如 Linux 上的 `futex`），这些阻塞的系统调用在`进程被信号中断（如键盘输入、硬件中断、或者其他进程发来的软件信号）`后，通常会中止阻塞、直接返回 EINTR 错误。
+    同样是阻塞系统调用，你从 read 拿到 EINTR 错误后可以直接决定重试，因为这通常不影响它本身的语义。
+    而条件变量等待则不能，因为本线程拿到 EINTR 错误和重新调用 futex 等待之间，可能别的线程已经通过 pthread_cond_signal 或者 pthread_cond_broadcast发过通知了。 所以，虚假唤醒的一个可能性是条件变量的等待被信号中断。
+
+    或者说 因为`操作系统的通知不可信`，自己再校验一次，如果是虚假唤醒就再wait一次。
+3. 多个线程同时等待一个条件变量，信号的传递可能导致不止一个线程被唤醒。
+
+4. 可能由于线程调度的原因，被条件变量唤醒的线程在本线程内真正执行「加锁并返回」前，另一个线程插了进来，完整地进行了一套「拿锁、改条件、还锁」的操作。使得条件又不满足了
+
+）
+但是仍然有些古怪(`实际上就是说 检测线程的通知不可靠，还得让反应线程再做检查`)，因为检测任务通过奇怪的方式与反应线程通信。
+（译者注：下面的话挺绕的，可以参考原文）
+检测任务通过通知条件变量告诉反应线程，等待的事件可能发生了，但是反应线程必须通过检查flag来确保事件发生了。
+检测线程置位flag来告诉反应线程事件确实发生了，但是检测线程仍然还要先需要通知条件变量，以唤醒反应线程来检查flag。这种方案是可以工作的，但是`不太优雅`。
+
+一个替代方案是：让`反应任务`通过在检测任务设置的`future`上`wait`来`避免使用条件变量，互斥锁和flag`。
+这可能听起来也是个古怪的方案。毕竟，Item38中说明了future代表了从被调用方到（通常是异步的）调用方的通信信道的接收端，这里的检测任务和反应任务没有调用-被调用的关系。
+然而，Item38中也说说明了发送端是个`std::promise`，接收端是个`future`的通信信道不是只能用在调用-被调用场景。
+这样的通信信道可以用在任何你需要从程序一个地方传递信息到另一个地方的场景。这里，我们用来在检测任务和反应任务之间传递信息，传递的信息就是感兴趣的事件已经发生。
+方案很简单。`检测任务`有一个`std::promise对象（即通信信道的写入端）`，`反应任务`有对应的`future`。
+当检测任务看到事件已经发生，设置std::promise对象（即写入到通信信道）。同时，wait会阻塞住反应任务直到std::promise被设置。
+现在，std::promise和futures（即std::future和std::shared_future）都是需要类型参数的模板。
+形参表明通过通信信道被传递的信息的类型。
+在这里，没有数据被传递，只需要让反应任务知道它的future已经被设置了。
+我们在std::promise和future模板中需要的东西是：`表明 通信信道中 没有数据被传递的一个类型`。
+这个类型就是`void`。
+`检测任务`使用`std::promise<void>`，`反应任务`使用`std::future<void>`或者`std::shared_future<void>`。
+当感兴趣的事件发生时，`检测任务`设置`std::promise<void>`，`反应任务`在`future`上`wait`。
+尽管`反应任务 不从 检测任务 那里接收任何数据`，通信信道也可以让反应任务知道，检测任务什么时候已经通过对`std::promise<void>`调用`set_value`“写入”了void数据。
+所以，有
+```cpp
+std::promise<void> p;                   //通信信道的promise
+```
+检测任务代码很简洁：
+```cpp
+…                                       //检测某个事件
+p.set_value();                          //通知反应任务
+```
+反应任务代码也同样简单：
+```cpp
+…                                       //准备作出反应
+p.get_future().wait();                  //等待对应于p的那个future
+…                                       //对事件作出反应
+```
+像使用flag的方法一样，此设计`不需要互斥锁`，无论在反应线程调用wait之前检测线程是否设置了std::promise都可以工作，并且**不受`虚假唤醒`的影响（只有条件变量才容易受到此影响）**。
+与基于条件变量的方法一样，反应任务在调用wait之后是真被阻塞住的，不会一直占用系统资源。是不是很完美？
+当然不是，基于future的方法没有了上述问题，但是有其他新的问题。
+比如，Item38中说明，`std::promise`和`future`之间有个`共享状态`，并且共享状态是`动态分配`的。因此你应该假定`此设计会产生 基于堆的 分配和释放开销`。
+也许更重要的是，**`std::promise`只能`设置一次`**。
+`std::promise`和`future`之间的通信是`一次性的`：不能重复使用。
+这是与基于条件变量或者基于flag的设计的明显差异，条件变量和flag都可以通信多次。（条件变量可以被重复通知，flag也可以重复清除和设置。）
+一次通信可能没有你想象中那么大的限制。
+假定你想创建一个挂起的系统线程。就是，你想避免多次线程创建的那种经常开销，以便想要使用这个线程执行程序时，避免潜在的线程创建工作。或者你想创建一个挂起的线程，以便 在线程运行前 对其进行设置 这样的设置包括`优先级`或者`核心亲和性（core affinity）`。
+C++并发API没有提供这种设置能力，但是std::thread提供了`native_handle成员函数`，它的结果就是提供给你对平台原始线程API的访问（通常是`POSIX`或者`Windows`的线程）。这些低层次的API使你可以对线程设置优先级和亲和性。
+假设你仅仅想要`对某线程挂起一次（在创建后，运行线程函数前）`，使用void的future就是一个可行方案。
+这是这个技术的关键点：
+```cpp
+std::promise<void> p;
+void react();                           //反应任务的函数
+void detect()                           //检测任务的函数
+{
+    std::thread t([]                    //创建线程
+                  {
+                      p.get_future().wait();    //挂起t直到future被置位
+                      react();
+                  });
+    …                                   //这里，t在 调用react前 挂起
+
+    p.set_value();                      //解除挂起t（因此调用react）
+
+    …                                   //做其他工作
+    
+    t.join();                           //使t不可结合（见条款37）
+}
+```
+因为 所有离开detect的路径中t都要是不可结合的，所以使用类似于Item37中ThreadRAII的RAII类很明智。
+代码如下：
+```cpp
+void detect()
+{
+    ThreadRAII tr(                      //使用RAII对象
+        std::thread([]
+                    {
+                        p.get_future().wait();
+                        react();
+                    }),
+        ThreadRAII::DtorAction::join    //有危险！（见下）
+    );
+    …                                   //tr中的线程在这里被挂起    ？？？
+    p.set_value();                      //解除挂起tr中的线程
+    …
+}
+```
+这样看起来安全多了。
+问题在于第一个“…”区域中（注释了“tr中的线程在这里被挂起”的那句），**如果`异常`发生，p上的`set_value`永远不会调用，这意味着lambda中的`wait`永远不会返回**。
+那意味着在lambda中运行的线程不会结束，这是个问题，因为RAII对象tr在析构函数中被设置为在（tr中创建的）那个线程上实行join。
+换句话说，如果在第一个“…”区域中发生了异常，函数挂起，因为`tr的析构函数永远无法完成`。
+？？？有很多方案解决这个问题，但是我把这个经验留给读者。（一个开始研究这个问题的好地方是我的博客The View From Aristeia中，2013年12月24日的文章“ThreadRAII + Thread Suspension = Trouble?”）
+
+这里，我只想展示如何扩展原始代码（即不使用RAII类）使其挂起然后取消挂起不仅一个反应任务，而是`多个任务`。
+简单概括，关键就是在react的代码中使用`std::shared_future`代替`std::future`。
+一旦你知道`std::future`的`share成员函数`将`共享状态所有权`转移到share产生的`std::shared_future`中，代码自然就写出来了。
+唯一需要注意的是，每个反应线程都需要自己的`std::shared_future`副本，该副本引用共享状态，因此通过share获得的shared_future要被在反应线程中运行的`lambda按值捕获`：
+```cpp
+std::promise<void> p;                   //跟之前一样
+void detect()                           //现在针对多个反映线程
+{
+    auto sf = p.get_future().share();   //sf的类型是std::shared_future<void>
+    std::vector<std::thread> vt;        //反应线程容器
+    for (int i = 0; i < threadsToRun; ++i) {
+        vt.emplace_back(
+                        [sf] {
+                                sf.wait();    //在sf的局部副本上wait；
+                                react();
+                            }
+                        );  //emplace_back见条款42
+    }
+    …                                   //如果这个“…”抛出异常，detect挂起！
+    p.set_value();                      //所有线程解除挂起
+    …
+    for (auto& t : vt) {                //使所有线程不可结合；
+        t.join();                       //“auto&”见条款2
+    }
+}
+```
+使用future的设计可以实现这个功能值得注意，这也是你应该考虑将其应用于一次通信的原因。
+
+请记住：
+* 对于简单的事件通信，基于条件变量的设计需要一个`多余的互斥锁`，对检测和反应任务的相对进度有约束，并且需要`反应任务`来`验证事件是否已发生`。
+* 基于`flag`的设计避免的上一条的问题，但是是基于`轮询`，而不是阻塞。
+* `条件变量`和`flag`可以组合使用，但是产生的通信机制很不自然。
+* 使用std::promise和future的方案避开了这些问题，但是这个方法使用了堆内存存储共享状态，同时有只能使用一次通信的限制。
 
 
 

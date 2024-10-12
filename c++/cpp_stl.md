@@ -209,7 +209,7 @@ un_initialized_fill_n()
 
 template<class T1>
 inline void construct(T1* p){
-    new ((void*)p) T1();  // 其实就是placement new，调用了T1的构造函数（无参数）
+    new ((void*)p) T1();  // 其实就是placement new，调用了T1的构造函数（无参数）  这里的new语句，就是所谓的placement new语法：在给定的内存位置构造对象
 }
 
 template<class T1, class T2>

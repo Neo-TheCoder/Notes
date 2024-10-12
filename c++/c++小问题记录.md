@@ -1810,6 +1810,7 @@ __gnu_cxx::__aligned_buffer<_Tp> _M_storage;
 	noexcept(std::is_nothrow_destructible<_Up>::value)
 	{ __p->~_Up(); }
 ```
+相比`std::shared_ptr`，`std::unique_ptr`根本就不用引用计数
 
 
 
