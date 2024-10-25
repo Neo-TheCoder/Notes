@@ -1578,6 +1578,213 @@ using add_lvalue_reference_t =
 
 
 
+# 条款12：使用override声明重写函数
+在C++面向对象的世界里，涉及的概念有类，继承，虚函数。
+这个世界最基本的概念是`派生类的虚函数 重写 基类同名函数`。令人遗憾的是虚函数重写可能一不小心就错了。
+似乎这部分语言的设计理念是不仅仅要遵守墨菲定律，还应该尊重它。
+虽然“重写（overriding）”听起来像“重载（overloading）”，然而两者完全不相关，所以让我澄清一下，正是虚函数重写机制的存在，才使我们可以通过基类的接口调用派生类的成员函数：
+```cpp
+class Base {
+public:
+    virtual void doWork();          //基类虚函数
+    …
+};
+
+class Derived: public Base {
+public:
+    virtual void doWork();          //重写Base::doWork
+    …                               //（这里“virtual”是可以省略的）
+}; 
+
+std::unique_ptr<Base> upb =         //创建基类指针指向派生类对象
+    std::make_unique<Derived>();    //关于std::make_unique
+…                                   //请参见Item21
+
+
+upb->doWork();                      //通过基类指针调用doWork，
+                                    //实际上是派生类的doWork
+                                    //函数被调用
+```
+要想重写一个函数，必须满足下列要求：
+* 基类函数必须是virtual
+* 基类和派生类函数名必须完全一样（除非是析构函数)
+* 基类和派生类函数形参类型必须完全一样
+* 基类和派生类函数常量性constness必须完全一样
+* 基类和派生类函数的返回值和异常说明（exception specifications）必须兼容
+除了这些C++98就存在的约束外，C++11又添加了一个：
+* 函数的`引用限定符（reference qualifiers）`必须完全一样。
+成员函数的`引用限定符`是C++11很少抛头露脸的特性，所以如果你从没听过它无需惊讶。它可以`限定成员函数只能用于左值或者右值`。
+成员函数不需要virtual也能使用它们：
+```cpp
+class Widget {
+public:
+    …
+    void doWork() &;    //只有*this为左值的时候才能被调用
+    void doWork() &&;   //只有*this为右值的时候才能被调用
+}; 
+
+…
+Widget makeWidget();    //工厂函数（返回右值）
+Widget w;               //普通对象（左值）
+…
+w.doWork();             //调用被左值引用限定修饰的Widget::doWork版本
+                        //（即Widget::doWork &）
+makeWidget().doWork();  //调用被右值引用限定修饰的Widget::doWork版本
+                        //（即Widget::doWork &&）
+```
+后面我还会提到引用限定符修饰成员函数，但是现在，只需要记住如果基类的虚函数有引用限定符，派生类的重写就必须具有相同的引用限定符。
+如果没有，那么新声明的函数还是属于派生类，但是不会重写父类的任何函数。
+这么多的重写需求意味着哪怕一个小小的错误也会造成巨大的不同。
+代码中包含重写错误通常是有效的，但它的意图不是你想要的。
+因此你不能指望当你犯错时编译器能通知你。比如，下面的代码是完全合法的，咋一看，还很有道理，但是它没有任何虚函数重写————没有一个派生类函数联系到基类函数。你能识别每种情况的错误吗，换句话说，为什么派生类函数没有重写同名基类函数？
+```cpp
+class Base {
+public:
+    virtual void mf1() const;
+    virtual void mf2(int x);
+    virtual void mf3() &;
+    void mf4() const;
+};
+
+class Derived: public Base {
+public:
+    virtual void mf1();
+    virtual void mf2(unsigned int x);
+    virtual void mf3() &&;
+    void mf4() const;
+};
+```
+需要一点帮助吗？
+mf1在Base基类声明为const，但是Derived派生类没有这个常量限定符
+mf2在Base基类声明为接受一个int参数，但是在Derived派生类声明为接受unsigned int参数
+mf3在Base基类声明为左值引用限定，但是在Derived派生类声明为右值引用限定
+mf4在Base基类没有声明为virtual虚函数
+
+你可能会想，“哎呀，实际操作的时候，这些warnings都能被编译器探测到，所以我不需要担心。”你说的可能对，也可能不对。就我目前检查的两款编译器来说，这些代码编译时没有任何warnings，即使我开启了输出所有warnings。（其他编译器可能会为这些问题的部分输出warnings，但不是全部。）
+（也就是说，编译器不一定认为这是一种错误）
+由于正确声明派生类的重写函数很重要，但很容易出错，C++11提供一个方法让你可以显式地指定一个派生类函数是基类版本的重写：将它声明为`override`。
+还是上面那个例子，我们可以这样做：
+```cpp
+class Derived: public Base {
+public:
+    virtual void mf1() override;
+    virtual void mf2(unsigned int x) override;
+    virtual void mf3() && override;
+    virtual void mf4() const override;
+};
+```
+代码不能编译，当然了，因为这样写的时候，编译器会抱怨所有与重写有关的问题。
+这也是你想要的，以及为什么要在所有重写函数后面加上override。
+使用override的代码编译时看起来就像这样（假设我们的目的是Derived派生类中的所有函数重写Base基类的相应虚函数）:
+```cpp
+class Base {
+public:
+    virtual void mf1() const;
+    virtual void mf2(int x);
+    virtual void mf3() &;
+    virtual void mf4() const;
+};
+
+class Derived: public Base {
+public:
+    virtual void mf1() const override;
+    virtual void mf2(int x) override;
+    virtual void mf3() & override;
+    void mf4() const override;          //可以添加virtual，但不是必要
+}; 
+```
+注意在这个例子中mf4有别于之前，它在Base中的声明有virtual修饰，所以能正常工作。
+大多数和重写有关的错误都是在`派生类`引发的，但也可能是基类的不正确导致。
+
+比起让编译器（译注：通过warnings）告诉你想重写的而实际没有重写，不如给你的派生类重写函数全都加上override。
+如果你考虑修改修改基类虚函数的函数签名，override还可以帮你评估后果。
+如果派生类全都用上override，你可以只改变基类函数签名，重编译系统，再看看你造成了多大的问题（即，多少派生类不能通过编译），然后决定是否值得如此麻烦更改函数签名。
+没有override，你只能寄希望于完善的单元测试，因为，正如我们所见，派生类虚函数本想重写基类，但是没有，编译器也没有探测并发出诊断信息。
+C++既有很多关键字，C++11引入了两个上下文关键字（contextual keywords），`override`和`final`（**向`虚函数`添加`final`可以`防止派生类重写`**。final也能用于类，这时这个类不能用作基类）。
+这两个关键字的特点是它们是保留的，它们只是位于特定上下文才被视为关键字。对于override，它只在成员函数声明结尾处才被视为关键字。这意味着如果你以前写的代码里面已经用过override这个名字，那么换到C++11标准你也无需修改代码：
+```cpp
+class Warning {         //C++98潜在的传统类代码
+public:
+    …
+    void override();    //C++98和C++11都合法（且含义相同）
+    …
+};
+```
+关于override想说的就这么多，但对于`成员函数引用限定（reference qualifiers）`还有一些内容。我之前承诺我会在后面提供更多的关于它们的资料，现在就是"后面"了。
+如果我们想写一个函数只接受左值实参，我们声明一个non-const左值引用形参：
+```cpp
+void doSomething(Widget& w);    //只接受左值Widget对象
+```
+如果我们想写一个函数只接受右值实参，我们声明一个右值引用形参：
+```cpp
+void doSomething(Widget&& w);   //只接受右值Widget对象
+```
+成员函数的引用限定可以很容易的区分一个成员函数被哪个对象（即`*this`）调用。它和在成员函数声明尾部添加一个`const`很相似，暗示了`调用这个成员函数的对象（即*this）是const的`。
+对成员函数添加引用限定不常见，但是可以见。举个例子，假设我们的Widget类有一个std::vector数据成员，我们提供一个访问函数让客户端可以直接访问它：
+```cpp
+class Widget {
+public:
+    using DataType = std::vector<double>;   //“using”的信息参见Item9
+    …
+    DataType& data() { return values; }
+    …
+private:
+    DataType values;
+};
+```
+这是最具封装性的设计，只给外界保留一线光。但先把这个放一边，思考一下下面的客户端代码：
+```cpp
+Widget w;
+…
+auto vals1 = w.data();  //拷贝w.values到vals1
+```
+`Widget::data`函数的返回值是一个左值引用（准确的说是`std::vector<double>&`）, 因为左值引用是左值，所以vals1是从左值初始化的。
+因此vals1由w.values拷贝构造而得，就像注释说的那样。
+现在假设我们有一个创建Widgets的工厂函数，
+```cpp
+Widget makeWidget();
+```
+我们想用makeWidget返回的Widget里的std::vector初始化一个变量：
+```cpp
+auto vals2 = makeWidget().data();   //拷贝Widget里面的值到vals2
+```
+再说一次，`Widgets::data`返回的是左值引用，还有，左值引用是左值。
+所以，我们的对象（vals2）得从Widget里的values拷贝构造。
+这一次，Widget是makeWidget返回的临时对象（即`右值`），所以将其中的`std::vector`进行拷贝纯属浪费。最好是`移动`，但是因为data返回左值引用，C++的规则要求编译器不得不生成一个拷贝。（这其中有一些优化空间，被称作“as if rule”，但是你依赖编译器使用这个优化规则就有点傻。）（译注：`“as if rule”简单来说就是在不影响程序的“外在表现”情况下做一些改变`）
+我们需要的是指明当data被右值Widget对象调用的时候结果也应该是一个右值。
+现在就可以使用引用限定，为左值Widget和右值Widget写一个data的重载函数来达成这一目的：
+```cpp
+class Widget {
+public:
+    using DataType = std::vector<double>;
+    …
+    DataType& data() &              //对于左值Widgets,
+    { return values; }              //返回左值
+    
+    DataType data() &&              //对于右值Widgets,
+    { return std::move(values); }   //返回右值
+    …
+
+private:
+    DataType values;
+};
+```
+注意data重载的返回类型是不同的，左值引用重载版本返回一个左值引用（即一个左值），右值引用重载返回一个临时对象（即一个右值）。
+这意味着现在客户端的行为和我们的期望相符了：
+```cpp
+auto vals1 = w.data();              //调用左值重载版本的Widget::data，
+                                    //拷贝构造vals1
+auto vals2 = makeWidget().data();   //调用右值重载版本的Widget::data, 
+                                    //移动构造vals2
+```
+这真的很棒，但别被这结尾的暖光照耀分心以致忘记了该条款的中心。这个条款的中心是只要你在派生类声明想要重写基类虚函数的函数，就加上override。
+
+请记住：
+* 为重写函数加上`override`
+* 成员函数引用限定让我们可以区别对待左值对象和右值对象(即`*this`)
+
+
+
 # 条款15：尽可能的使用constexpr
 如果要给C++11颁一个“最令人困惑新词”奖，`constexpr`十有八九会折桂。
 当用于对象上面，它本质上就是`const的加强形式`，但是当它用于`函数`上，意思就大不相同了。有必要消除困惑，因为你绝对会用它的，特别是当你发现constexpr “正合吾意”的时候。
@@ -1751,31 +1958,374 @@ constexpr auto reflectedMid =         //reflectedMid的值
 
 
 
+# 条款16：让const成员函数线程安全
+如果我们在数学领域中工作，我们就会发现用一个类表示多项式是很方便的。
+在这个类中，使用一个函数来计算多项式的根是很有用的，也就是多项式的值为零的时候（译者注：通常也被叫做零点，即使得多项式值为零的那些取值）。
+这样的一个函数它不会更改多项式。所以，它自然被声明为`const函数`。
+```cpp
+class Polynomial {
+public:
+    using RootsType =           //数据结构保存多项式为零的值
+          std::vector<double>;  //（“using” 的信息查看条款9）
+    // …
+    RootsType roots() const;
+    // …
+};
+```
+计算多项式的根是很复杂的，因此如果不需要的话，我们就不做。
+如果必须做，我们肯定不想再做第二次。
+所以，如果必须计算它们，就`缓存多项式的根`，然后实现roots来返回缓存的值。下面是最基本的实现：
+```cpp
+class Polynomial {
+public:
+    using RootsType = std::vector<double>;
+    
+    RootsType roots() const
+    {
+        if (!rootsAreValid) {               //如果缓存不可用
+            // …                            //计算根
+                                            //用rootVals存储它们
+            rootsAreValid = true;
+        }
+        
+        return rootVals;
+    }
+    
+private:
+    mutable bool rootsAreValid{ false };    //初始化器（initializer）的更多信息请查看条款7
+    mutable RootsType rootVals{};
+};
+```
+从概念上讲，roots并不改变它所操作的Polynomial对象。
+但是作为缓存的一部分，它也许会改变rootVals和rootsAreValid的值。
+这就是`mutable`的经典使用样例，这也是为什么它是数据成员声明的一部分。
+假设现在有两个线程同时调用Polynomial对象的roots方法:
+```cpp
+Polynomial p;
+// …
+
+/*------ Thread 1 ------*/      /*-------- Thread 2 --------*/
+auto rootsOfp = p.roots();      auto valsGivingZero = p.roots();
+```
+这些用户代码是非常合理的。
+roots是const成员函数，那就表示着它是一个`读操作`。
+**在没有同步的情况下，让`多个线程`执行`读操作`是安全的**。它最起码应该做到这点。
+在本例中却没有做到线程安全。
+因为在roots中，这些线程中的一个或两个可能尝试修改成员变量rootsAreValid和rootVals。
+这就意味着在没有同步的情况下，这些代码会有不同的线程读写相同的内存，这就是数据竞争（data race）的定义。这段代码的行为是未定义的。
+问题就是roots被`声明为const`，但`不是线程安全的`。
+const声明在C++11中与在C++98中一样正确（检索多项式的根并不会更改多项式的值），因此需要纠正的是线程安全的缺乏。
+
+解决这个问题最普遍简单的方法就是——使用`mutex（互斥量）`：
+```cpp
+class Polynomial {
+public:
+    using RootsType = std::vector<double>;
+    
+    RootsType roots() const
+    {
+        std::lock_guard<std::mutex> g(m);       //锁定互斥量
+        
+        if (!rootsAreValid) {                   //如果缓存无效
+            …                                   //计算/存储根值
+            rootsAreValid = true;
+        }
+        
+        return rootsVals;
+    }                                           //解锁互斥量
+    
+private:
+    mutable std::mutex m;
+    mutable bool rootsAreValid { false };
+    mutable RootsType rootsVals {};
+};
+```
+`std::mutex m`被声明为`mutable`，因为锁定和解锁它的都是non-const成员函数。在roots（const成员函数）中，m却被视为const对象。
+值得注意的是，因为std::mutex是一种只可移动类型（move-only type，一种可以移动但不能复制的类型），所以将m添加进Polynomial中的副作用是使Polynomial失去了被复制的能力。
+不过，它仍然可以移动。 （译者注：`实际上 std::mutex 既不可移动，也不可复制。因而包含他们的类也同时是不可移动和不可复制的。`）
+在某些情况下，`互斥量的副作用`显会得过大。
+例如，如果你所做的只是计算成员函数被调用了多少次，使用`std::atomic 修饰的计数器`（保证其他线程视它的操作为不可分割的整体，参见item40）通常会是一个开销更小的方法。
+（然而它是否轻量取决于你使用的硬件和标准库中互斥量的实现。）以下是如何使用`std::atomic`来统计调用次数。
+```cpp
+class Point {                                   //2D点
+public:
+    …
+    double distanceFromOrigin() const noexcept  //noexcept的使用
+    {                                           //参考条款14
+        ++callCount;                            //atomic的递增
+        
+        return std::sqrt((x * x) + (y * y));
+    }
+
+private:
+    mutable std::atomic<unsigned> callCount{ 0 };
+    double x, y;
+};
+```
+与std::mutex一样，std::atomic是只可移动类型，所以在Point中存在callCount就意味着Point也是只可移动的。（译者注：与 std::mutex 类似的，实际上 std::atomic 既不可移动，也不可复制。因而包含他们的类也同时是不可移动和不可复制的。）
+因为**对`std::atomic变量`的操作通常比`互斥量`的获取和释放的`消耗更小`**，所以你可能会过度倾向与依赖std::atomic。
+例如，在一个类中，缓存一个开销昂贵的int，你就会尝试使用一对std::atomic变量而不是互斥量。
+```cpp
+class Widget {
+public:
+    // …
+    int magicValue() const
+    {
+        if (cacheValid)
+            return cachedValue;
+        else {
+            auto val1 = expensiveComputation1();
+            auto val2 = expensiveComputation2();
+            cachedValue = val1 + val2;              //第一步
+            cacheValid = true;                      //第二步
+            return cachedValid;
+        }
+    }
+    
+private:
+    mutable std::atomic<bool> cacheValid{ false };
+    mutable std::atomic<int> cachedValue;
+};
+```
+这是可行的，但难以避免有时出现`重复计算`的情况。考虑：
+一个线程调用Widget::magicValue，将cacheValid视为false，执行这两个昂贵的计算，并将它们的和分配给cachedValue。
+此时，第二个线程调用Widget::magicValue，也将cacheValid视为false，因此执行刚才完成的第一个线程相同的计算。（这里的“第二个线程”实际上可能是其他几个线程。）
+
+这种行为与使用缓存的目的背道而驰。
+将cachedValue和CacheValid的赋值顺序交换可以解决这个问题，但结果会更糟：
+```cpp
+class Widget {
+public:
+    // …
+    int magicValue() const
+    {
+        if (cacheValid)
+            return cachedValue;
+        else {
+            auto val1 = expensiveComputation1();
+            auto val2 = expensiveComputation2();
+            cacheValid = true;                      //第一步
+            return cachedValue = val1 + val2;       //第二步
+        }
+    }
+    // …
+}
+```
+假设cacheValid是false，那么：
+一个线程调用Widget::magicValue，刚执行完将cacheValid设置true的语句。
+在这时，第二个线程调用Widget::magicValue，检查cacheValid。**看到它是true，就返回cacheValue，即使第一个线程还没有给它赋值。** 因此返回的值是不正确的。
+这里有一个坑。
+**对于需要同步的是`单个的 变量 或者 内存位置`，使用`std::atomic`就足够了**。
+不过，**一旦你需要对`两个以上的 变量或内存位置 作为一个单元`来操作的话，就应该使用`互斥量`**。对于Widget::magicValue是这样的。
+```cpp
+class Widget {
+public:
+    // …
+    int magicValue() const
+    {
+        std::lock_guard<std::mutex> guard(m);   //锁定m
+        
+        if (cacheValid)
+            return cachedValue;
+        else {
+            auto val1 = expensiveComputation1();
+            auto val2 = expensiveComputation2();
+            cachedValue = val1 + val2;
+            cacheValid = true;
+            return cachedValue;
+        }
+    }                                           //解锁m
+    …
+
+private:
+    mutable std::mutex m;
+    mutable int cachedValue;                    //不再用atomic
+    mutable bool cacheValid{ false };           //不再用atomic
+};
+```
+现在，这个条款是基于，`多个线程 可以同时在一个对象上 执行一个const成员函数 这个假设的`。
+如果你不是在这种情况下编写一个const成员函数————你可以保证在一个对象上永远不会有多个线程执行该成员函数————该函数的线程安全是无关紧要的。
+比如，**为独占单线程使用而设计的类的成员函数是否线程安全并不重要**。
+在这种情况下，你可以避免因使用互斥量和std::atomics所消耗的资源，以及包含它们的类~~只能使用移动语义~~（译者注：既不能移动也不能复制）带来的副作用。
+然而，这种线程无关的情况越来越少见，而且很可能会越来越少。
+可以肯定的是，`const成员函数`应支持`并发执行`，这就是为什么你应该确保const成员函数是线程安全的。
+
+请记住：
+* 确保const成员函数线程安全，除非你确定它们永远不会在并发上下文（concurrent context）中使用。
+* 使用std::atomic变量可能比互斥量提供更好的性能，但是它只适合操作单个变量或内存位置。
 
 
 
+# 条款17：理解特殊成员函数的生成
+在C++术语中，`特殊成员函数`是指`C++自己生成的函数`。
+C++98有四个：`默认构造函数`，`析构函数`，`拷贝构造函数`，`拷贝赋值运算符`。
+当然在这里有些细则要注意。
+这些函数`仅在需要的时候才生成`，比如某个代码使用它们但是它们没有在类中明确声明。
+`默认构造函数` 仅在 `类完全没有构造函数的时候`才生成。（防止编译器为某个类生成构造函数，但是你希望那个构造函数有参数）生成的特殊成员函数是`隐式public`且`inline`，它们是非虚的，除非相关函数是在派生类中的析构函数，派生类继承了有虚析构函数的基类。在这种情况下，编译器为派生类生成的析构函数是虚的。
+但是你早就知道这些了。好吧好吧，都说古老的历史：美索不达米亚，商朝，FORTRAN，C++98。
+但是时代改变了，C++生成特殊成员的规则也改变了。要留意这些新规则，知道什么时候编译器会悄悄地向你的类中添加成员函数，因为没有什么比这件事对C++高效编程更重要。
+C++11特殊成员函数俱乐部迎来了两位新会员：`移动构造函数`和`移动赋值运算符`。
+它们的签名是：
+```cpp
+class Widget {
+public:
+    // …
+    Widget(Widget&& rhs);               //移动构造函数
+    Widget& operator=(Widget&& rhs);    //移动赋值运算符
+    // …
+};
+```
+掌控它们生成和行为的规则类似于拷贝系列。
+`移动操作`仅在需要的时候生成，如果生成了，就会对类的non-static数据成员执行逐成员的移动。
+那意味着**`移动构造函数` 根据rhs参数里面对应的成员`移动构造`出新non-static部分，移动赋值运算符根据参数里面对应的non-static成员移动赋值**。
+移动构造函数也移动构造基类部分（如果有的话），移动赋值运算符也是移动赋值基类部分。
+现在，当我对一个数据成员或者基类使用移动构造或者移动赋值时，没有任何保证移动一定会真的发生。
+逐成员移动，实际上，更像是`逐成员移动请求`，因为**对`不可移动类型`（即对移动操作没有特殊支持的类型，比如大部分C++98传统类）使用“移动”操作实际上执行的是拷贝操作**。
+逐成员移动的核心是对对象使用`std::move`，然后`函数决议时`会选择执行移动还是拷贝操作。Item23包括了这个操作的细节。本条款中，简单记住如果支持移动就会逐成员移动类成员和基类成员，如果不支持移动就执行拷贝操作就好了。
+像拷贝操作情况一样，如果你自己声明了移动操作，编译器就不会生成。然而它们生成的精确条件与拷贝操作的条件有点不同。
+**两个拷贝操作是独立的**：
+    声明一个不会限制编译器生成另一个。所以**如果你声明一个`拷贝构造函数`，但是没有声明拷贝赋值运算符，如果写的代码用到了拷贝赋值，编译器会帮助你`生成拷贝赋值运算符`**。
+同样的，如果你声明拷贝赋值运算符但是没有拷贝构造函数，代码用到拷贝构造函数时编译器就会生成它。上述规则在C++98和C++11中都成立。
+**两个移动操作不是相互独立的**。
+    如果你声明了其中一个，编译器就不再生成另一个。
+    如果你给类声明了，比如，一个移动构造函数，就表明对于移动操作应怎样实现，与编译器应生成的默认逐成员移动有些区别。
+    如果逐成员移动构造有些问题，那么逐成员移动赋值同样也可能有问题。所以声明移动构造函数阻止移动赋值运算符的生成，声明移动赋值运算符同样阻止编译器生成移动构造函数。
+再进一步，**如果一个类显式声明了拷贝操作，编译器就不会生成移动操作**。
+    这种限制的解释是如果声明拷贝操作（构造或者赋值）就暗示着平常拷贝对象的方法（逐成员拷贝）不适用于该类，编译器会明白如果逐成员拷贝对拷贝操作来说不合适，逐成员移动也可能对移动操作来说不合适。
+这是另一个方向。
+**声明移动操作（构造或赋值）使得编译器禁用拷贝操作**。
+    （编译器通过给拷贝操作加上`delete`来保证，参见Item11。）
+    （译注：禁用的是自动生成的拷贝操作，对于用户声明的拷贝操作不受影响）毕竟，如果逐成员移动对该类来说不合适，也没有理由指望逐成员拷贝操作是合适的。
+    听起来会破坏C++98的某些代码，因为C++11中拷贝操作可用的条件比C++98更受限，但事实并非如此。C++98的代码没有移动操作，因为C++98中没有移动对象这种概念。只有一种方法能让老代码使用用户声明的移动操作，那就是使用C++11标准然后添加这些操作，使用了移动语义的类必须接受C++11特殊成员函数生成规则的限制。
+也许你早已听过`_Rule of Three_`规则。
+    这个规则告诉**我们如果你声明了`拷贝构造函数，拷贝赋值运算符，或者析构函数`三者之一，你应该也声明其余两个**。
+    它来源于长期的观察，即**用户接管`拷贝操作`的需求几乎都是因为该类会`做其他资源的管理`**，这也几乎意味着
+    （1）无论哪种资源管理如果在一个拷贝操作内完成，也应该在另一个拷贝操作内完成
+    （2）类的析构函数也需要参与资源的管理（通常是释放）。
+    通常要管理的资源是内存，这也是为什么标准库里面那些管理内存的类（如会动态内存管理的STL容器）都声明了“the big three”：拷贝构造，拷贝赋值和析构。
+`Rule of Three`带来的后果就是：只要出现`用户定义的析构函数`就意味着`简单的逐成员拷贝操作不适用于该类`。
+    那意味着如果一个类声明了析构，拷贝操作可能不应该自动生成，因为它们做的事情可能是错误的。
+    在C++98提出的时候，上述推理没有得倒足够的重视，所以C++98用户声明析构函数不会左右编译器生成拷贝操作的意愿。
+    C++11中情况仍然如此，但仅仅是因为限制拷贝操作生成的条件会破坏老代码。
+`Rule of Three`规则背后的解释依然有效，再加上对声明拷贝操作阻止移动操作隐式生成的观察，使得C++11不会为那些有用户定义的析构函数的类生成移动操作。
+所以仅当下面条件成立时才会生成移动操作（当需要时）：
+* 类中没有拷贝操作
+* 类中没有移动操作
+* 类中没有用户定义的析构
 
+有时，类似的规则也会扩展至拷贝操作上面，C++11抛弃了已声明拷贝操作或析构函数的类的拷贝操作的自动生成。
+这意味着：**如果你的某个声明了`析构`或者`拷贝`的类依赖`自动生成的拷贝操作`，你应该考虑升级这些类，消除依赖**。
+假设编译器生成的函数行为是正确的（即逐成员拷贝类non-static数据是你期望的行为），你的工作很简单，C++11的`= default`就可以表达你想做的：
+```cpp
+class Widget {
+    public:
+    … 
+    ~Widget();                              //用户声明的析构函数
+    …                                       //默认拷贝构造函数的行为还可以
+    Widget(const Widget&) = default;
 
+    Widget&                                 //默认拷贝赋值运算符的行为还可以
+        operator=(const Widget&) = default;
+    … 
+};
+```
+这种方法通常在`多态基类`中很有用，即通过操作的是哪个派生类对象来定义接口。
+多态基类通常有一个`虚析构函数`，因为如果它们非虚，一些操作（比如通过一个基类指针或者引用对派生类对象使用delete或者typeid）会产生未定义或错误结果。
+除非类继承了一个已经是`virtual`的`析构函数`，否则要想析构函数为虚函数的唯一方法就是加上virtual关键字。
+通常，默认实现是对的，`= default`是一个不错的方式表达默认实现。
+然而`用户声明的析构函数`会`抑制 编译器生成 移动操作`，所以如果该类需要具有移动性，就为移动操作加上`= default`。
+声明移动会抑制拷贝生成，所以如果拷贝性也需要支持，再为拷贝操作加上`= default`：
+```cpp
+class Base {
+public:
+    virtual ~Base() = default;              //使析构函数virtual
+    
+    Base(Base&&) = default;                 //支持移动
+    Base& operator=(Base&&) = default;
+    
+    Base(const Base&) = default;            //支持拷贝
+    Base& operator=(const Base&) = default;
+    … 
+};
+```
 
+实际上，就算编译器乐于为你的类生成拷贝和移动操作，生成的函数也如你所愿，你也应该手动声明它们然后加上`= default`。
+这看起来比较多余，但是它让你的意图更明确，也能帮助你避免一些微妙的bug。
+比如，你有一个类来表示字符串表，即一种支持使用整数ID快速查找字符串值的数据结构：
+```cpp
+class StringTable {
+public:
+    StringTable() {}
+    …                   //插入、删除、查找等函数，但是没有拷贝/移动/析构功能
+private:
+    std::map<int, std::string> values;
+};
+```
+假设这个类没有声明拷贝操作，没有移动操作，也没有析构，如果它们被用到编译器会自动生成。
+没错，很方便。
+后来需要在对象构造和析构中打日志，增加这种功能很简单：
+```cpp
+class StringTable {
+public:
+    StringTable()
+    { makeLogEntry("Creating StringTable object"); }    //增加的
 
+    ~StringTable()                                      //也是增加的
+    { makeLogEntry("Destroying StringTable object"); }
+    …                                               //其他函数同之前一样
+private:
+    std::map<int, std::string> values;              //同之前一样
+};
+```
+看起来合情合理，但是`声明析构`有潜在的副作用：它`阻止了 移动操作的生成`。
+然而，拷贝操作的生成是不受影响的。因此代码能通过编译，运行，也能通过功能（译注：即打日志的功能）测试。
+功能测试也包括移动功能，因为**即使该类`不支持移动操作`，对该类的移动请求也能通过编译和运行（`调用拷贝`，只要不`delete`移动操作的话）**。
+这个请求正如之前提到的，会转而由拷贝操作完成。它意味着对StringTable对象的移动实际上是对对象的拷贝，即拷贝里面的`std::map<int, std::string>`对象。
+拷贝`std::map<int, std::string>`对象很可能比移动慢几个数量级。简单的加个析构就引入了极大的性能问题！对拷贝和移动操作显式加个`= default`，问题将不再出现。
+受够了我喋喋不休的讲述C++11拷贝移动规则了吧，你可能想知道什么时候我才会把注意力转入到剩下两个特殊成员函数，默认构造函数和析构函数。
+现在就是时候了，但是只有一句话，因为它们几乎没有改变：它们在C++98中是什么样，在C++11中就是什么样。
 
+`C++11`对于`特殊成员函数`处理的规则如下：
+**默认构造函数**：
+    和C++98规则相同。仅当类不存在用户声明的构造函数时才自动生成。
+**析构函数**：
+    基本上和C++98相同；稍微不同的是现在`析构`默认`noexcept`（参见Item14）。
+    和C++98一样，仅当基类析构为虚函数时该类析构才为虚函数（也就是说，当基类析构不为virtual时，该类的析构就不是virtual的，没有virtual行为）。
+**拷贝构造函数**：
+    和C++98运行时行为一样：逐成员拷贝non-static数据。
+    仅当类没有`用户定义的拷贝构造`时才生成。
+    如果类声明了`移动操作`它就是`delete`的。
+    当用户声明了拷贝赋值或者析构，该函数自动生成已被废弃。
+**拷贝赋值运算符**：
+    和C++98运行时行为一样：逐成员拷贝赋值non-static数据。
+    仅当类没有用户定义的拷贝赋值时才生成。
+    如果类声明了移动操作它就是delete的。
+    当用户声明了拷贝构造或者析构，该函数自动生成已被废弃。
+**移动构造函数和移动赋值运算符**：
+    都对非static数据执行逐成员移动。
+    仅当类没有用户定义的拷贝操作，移动操作或析构时才自动生成。
+注意没有“成员函数模版 阻止 编译器生成特殊成员函数”的规则。
+这意味着如果Widget是这样：
+```cpp
+class Widget {
+    …
+    template<typename T>                //从任何东西构造Widget
+    Widget(const T& rhs);
 
+    template<typename T>                //从任何东西赋值给Widget
+    Widget& operator=(const T& rhs);
+    …
+};
+```
+编译器仍会生成移动和拷贝操作（假设正常生成它们的条件满足），即使可以模板实例化产出拷贝构造和拷贝赋值运算符的函数签名。
+（当T为Widget时。）很可能你会觉得这是一个不值得承认的边缘情况，但是我提到它是有道理的，Item26将会详细讨论它可能带来的后果。
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+请记住：
+* 特殊成员函数是编译器可能自动生成的函数：默认构造函数，析构函数，拷贝操作，移动操作。
+* 移动操作仅当类没有显式声明移动操作，拷贝操作，析构函数时才自动生成。
+* 拷贝构造函数仅当类没有显式声明拷贝构造函数时才自动生成，并且如果用户声明了移动操作，拷贝构造就是delete。
+* 拷贝赋值运算符仅当类没有显式声明拷贝赋值运算符时才自动生成，并且如果用户声明了移动操作，拷贝赋值运算符就是delete。当用户声明了析构函数，拷贝操作的自动生成已被废弃。
+* 成员函数模板不抑制特殊成员函数的生成。
 
 
 
@@ -2111,7 +2661,8 @@ void Widget::process()
 }
 ```
 注释已经说了这是错的——或者至少大部分是错的。
-（错误的部分是传递this，而不是使用了emplace_back。如果你不熟悉emplace_back，参见Item42）。上面的代码可以通过编译，但是向std::shared_ptr的容器传递一个`原始指针（this）`，std::shared_ptr会由此为指向的Widget（*this）创建一个控制块。那看起来没什么问题，直到你意识到如果成员函数外面早已存在指向那个Widget对象的指针，它是未定义行为的Game, Set, and Match（译注：一部关于网球的电影，但是译者没看过。句子本意“压倒性胜利；比赛结束”）。
+（错误的部分是`传递this`，而不是使用了emplace_back。如果你不熟悉emplace_back，参见Item42）。上面的代码可以通过编译，但是向std::shared_ptr的容器传递一个`原始指针（this）`，std::shared_ptr会由此为指向的Widget（*this）创建一个`控制块`。
+！！！那看起来没什么问题，直到你意识到如果成员函数外面早已存在指向那个Widget对象的指针，它是未定义行为的Game, Set, and Match（译注：一部关于网球的电影，但是译者没看过。句子本意“压倒性胜利；比赛结束”）。
 
 `std::shared_ptr` API已有处理这种情况的设施。
 它的名字可能是C++标准库中最奇怪的一个：`std::enable_shared_from_this`，是一个模板类。
@@ -2185,26 +2736,361 @@ private:
 
 
 
+# 条款20：当std::shared_ptr可能悬空时使用std::weak_ptr
+自相矛盾的是，如果有一个像`std::shared_ptr`（见Item19）的、但是不参与`资源所有权共享的`指针是很方便的。
+换句话说，是一个类似`std::shared_ptr`但`不影响对象引用计数的`指针。
+这种类型的智能指针必须要解决一个std::s`hared_ptr不存在的问题：可能指向已经销毁的对象。
+**一个真正的智能指针应该跟踪所指对象，`在悬空时知晓`，悬空（dangle）就是指针指向的对象不再存在**。这就是对`std::weak_ptr`最精确的描述。
+你可能想知道什么时候该用`std::weak_ptr`。
+你可能想知道关于std::weak_ptr API的更多。它什么都好除了不太智能：std::weak_ptr不能解引用，也不能测试是否为空值。因为std::weak_ptr不是一个独立的智能指针。它是`std::shared_ptr的增强`。
+这种关系在它创建之时就建立了：std::weak_ptr通常从std::shared_ptr上创建。
+当从std::shared_ptr上创建std::weak_ptr时两者指向相同的对象，但是std::weak_ptr不会影响所指对象的引用计数：
+```cpp
+auto spw =                      //spw创建之后，指向的Widget的引用计数（ref count，RC）为1。
+    std::make_shared<Widget>();
+                                //std::make_shared的信息参见条款21
+// …
+std::weak_ptr<Widget> wpw(spw); //wpw指向与spw所指相同的Widget。RC仍为1
+// …
+spw = nullptr;                  //RC变为0，Widget被销毁。   ！！！触发了引用计数-1的操作
+                                //wpw现在悬空
+```
+`悬空的std::weak_ptr`被称作已经`expired（过期）`。你可以用它直接做测试：
+```cpp
+if (wpw.expired()) …            //如果wpw没有指向对象…
+```
+但是通常你期望的是：检查`std::weak_ptr`是否已经过期，如果没有过期，则`访问其指向的对象`。
+这做起来可不是想着那么简单。因为缺少解引用操作，没有办法写这样的代码。即使有，将`检查`和`解引用`分开会引入`竞态条件`：
+    **在调用`expired`和`解引用`操作之间，另一个线程可能对指向这对象的`std::shared_ptr`重新赋值或者析构，并由此造成对象已析构。这种情况下，你的解引用将会产生未定义行为**。
+你需要的是一个`原子操作`检查`std::weak_ptr`是否已经过期，如果没有过期就访问所指对象。
+这可以通过**从`std::weak_ptr`创建`std::shared_ptr`来实现**，具体有两种形式可以从`std::weak_ptr上`创建`std::shared_ptr`，具体用哪种取决于std::weak_ptr过期时你希望std::shared_ptr表现出什么行为。
+* 一种形式是`std::weak_ptr::lock`，它返回一个`std::shared_ptr`
+    如果std::weak_ptr过期，这个std::shared_ptr为空：
+```cpp
+std::shared_ptr<Widget> spw1 = wpw.lock();  //如果wpw过期，spw1就为空
+ 											
+auto spw2 = wpw.lock();                     //同上，但是使用auto
+```
+
+* 另一种形式是以`std::weak_ptr`为`实参`构造`std::shared_ptr`。这种情况中，如果std::weak_ptr过期，会抛出一个异常：
+```cpp
+std::shared_ptr<Widget> spw3(wpw);          //如果wpw过期，抛出std::bad_weak_ptr异常
+```
+但是你可能还想知道为什么`std::weak_ptr`就有用了。
+考虑一个`工厂函数`：它基于一个`唯一ID` 从 只读对象上 产出智能指针。
+根据Item18的描述，工厂函数会返回一个该对象类型的`std::unique_ptr`：
+```cpp
+std::unique_ptr<const Widget> loadWidget(WidgetID id);
+```
+如果调用`loadWidget`是一个昂贵的操作（比如它`操作文件`或者`数据库I/O`）并且重复使用ID很常见，一个合理的优化是：
+    再写一个函数    `除了完成loadWidget做的事情之外 再缓存它的结果`。
+    当每个请求获取的Widget阻塞了缓存也会导致本身性能问题，所以另一个合理的优化可以是    当Widget不再使用的时候销毁它的缓存。
+
+对于`可缓存的工厂函数`（！！！是一种经典设计），返回`std::unique_ptr`不是好的选择。
+调用者应该接收缓存对象的智能指针，调用者也应该确定这些对象的生命周期，但是缓存本身也需要一个指针指向它所缓存的对象。
+缓存对象的指针`需要知道它是否已经悬空`，因为当工厂客户端使用完工厂产生的对象后，对象将被销毁，关联的缓存条目会悬空。
+所以缓存应该使用`std::weak_ptr`，这可以知道是否已经悬空。
+这意味着工厂函数返回值类型应该是`std::shared_ptr`，因为只有当对象的生命周期由`std::shared_ptr`管理时，std::weak_ptr才能检测到悬空。
+下面是一个临时凑合的loadWidget的缓存版本的实现：
+```cpp
+std::shared_ptr<const Widget> fastLoadWidget(WidgetID id)
+{
+    static std::unordered_map<WidgetID, std::weak_ptr<const Widget>> cache;
+                                        //  译者注：这里std::weak_ptr<const Widget>是高亮
+    auto objPtr = cache[id].lock();     //  objPtr是去缓存对象的std::shared_ptr（或当对象不在缓存中时为null）
+
+    if (!objPtr) {                      //如果不在缓存中    加载它  缓存它
+        objPtr = loadWidget(id);
+        cache[id] = objPtr;
+    }
+    return objPtr;
+}
+```
+这个实现使用了C++11的hash表容器`std::unordered_map`，但是需要的 WidgetID 哈希 和 相等性比较函数 在这里没有展示（PS: 因为 std::unordered_map 需要这些函数来对键进行哈希和比较操作，以便正确地管理缓存中的对象）。
+`fastLoadWidget`的实现忽略了以下事实：**缓存可能会累积`过期的std::weak_ptr`，这些指针对应了不再使用的Widget（也已经被销毁了）**。
+其实可以改进实现方式，但是花时间在这个问题上不会让我们对std::weak_ptr有更深入的理解，
+
+让我们考虑第二个用例：`观察者设计模式（Observer design pattern）`。
+    此模式的主要组件是`subjects（状态可能会更改的对象）`和`observers（状态发生更改时要通知的对象）`。
+    在大多数实现中，每个`subject`都包含一个数据成员，该成员持有`指向其observers的 指针`。
+    这使subjects很容易发布状态更改通知。
+    `subjects`对控制`observers`的生命周期（即它们什么时候被销毁）没有兴趣，但是subjects对确保另一件事具有极大的兴趣，那事就是：一个observer被销毁时，不再尝试访问它。
+    **一个合理的设计是：每个`subject`持有一个`std::weak_ptrs容器`指向`observers`，因此可以在`使用前检查 是否已经悬空`。**
+
+作为最后一个使用`std::weak_ptr`的例子，考虑一个持有三个对象A、B、C的数据结构，A和C共享B的所有权，因此持有`std::shared_ptr`：
+
+有三种选择：
+* `原始指针`。
+    使用这种方法，如果A被销毁，但是C继续指向B，B就会有一个指向A的悬空指针。
+    而且B不知道指针已经悬空，所以B可能会继续访问，就会导致未定义行为。
+
+* `std::shared_ptr`。
+    这种设计，A和B都互相持有对方的std::shared_ptr，导致的std::shared_ptr`环状结构`（A指向B，B指向A）阻止A和B的销毁。
+    甚至A和B无法从其他数据结构访问了（比如，C不再指向B），每个的引用计数都还是1。
+    如果发生了这种情况，A和B都被泄漏：程序无法访问它们，但是资源并没有被回收。
+
+* `std::weak_ptr`。
+这避免了上述两个问题。如果A被销毁，B指向它的指针悬空，但是B可以检测到这件事。
+尤其是，尽管A和B互相指向对方，B的指针不会影响A的引用计数，因此在没有std::shared_ptr指向A时不会导致A无法被销毁。
+使用`std::weak_ptr`显然是这些选择中最好的。
+但是，需要注意使用std::weak_ptr打破std::shared_ptr循环并不常见。在`严格分层的`数据结构比如树中，子节点只被父节点持有。
+    当父节点被销毁时，子节点就被销毁。从父到子的链接关系可以使用`std::unique_ptr`很好的表征。从子到父的反向连接可以使用`原始指针安全实现`，因为子节点的生命周期肯定短于父节点。
+    因此没有子节点解引用一个悬垂的父节点指针这样的风险。
+
+当然，不是所有的使用指针的数据结构都是严格分层的，所以当发生这种情况时，比如上面所述`缓存`和`观察者列表`的实现之类的，知道std::weak_ptr随时待命也是不错的。
+从效率角度来看，std::weak_ptr与std::shared_ptr基本相同。
+两者的大小是相同的，使用`相同的控制块`（参见Item19），`构造、析构、赋值操作涉及引用计数的原子操作`。
+这可能让你感到惊讶，因为本条款开篇就提到std::weak_ptr不影响引用计数。
+我写的是std::weak_ptr不参与对象的共享所有权，因此不影响指向对象的引用计数。实际上在控制块中还是有第二个引用计数，std::weak_ptr操作的是`第二个引用计数`。想了解细节的话，继续看Item21吧。
+
+请记住：
+* 用std::weak_ptr替代可能会悬空的std::shared_ptr。
+* std::weak_ptr的潜在使用场景包括：缓存、观察者列表、打破std::shared_ptr环状结构。
 
 
 
+# 条款21：优先考虑使用`std::make_unique`和`std::make_shared`，而非`直接使用new`
+让我们先对std::make_unique和std::make_shared做个铺垫。
+std::make_shared是C++11标准的一部分，但很可惜的是，`std::make_unique`不是。它从`C++14`开始加入标准库。
+如果你在使用C++11，不用担心，一个基础版本的std::make_unique是很容易自己写出的，如下：
+```cpp
+template<typename T, typename... Ts>
+std::unique_ptr<T> make_unique(Ts&&... params)
+{
+    return std::unique_ptr<T>(new T(std::forward<Ts>(params)...));
+}
+```
+正如你看到的，make_unique只是将它的参数`完美转发`到所要创建的对象的`构造函数`，从new产生的`原始指针`里面构造出`std::unique_ptr`，并返回这个std::unique_ptr
+。这种形式的函数`不支持数组和自定义析构`（见Item18），但它给出了一个示范：只需一点努力就能写出你想要的make_unique函数。
+    （要想实现一个特性完备的make_unique，就去找提供这个的标准化文件吧，然后拷贝那个实现。你想要的这个文件是N3656，是Stephan T. Lavavej写于2013-04-18的文档。）
+    需要记住的是，不要把它放到std命名空间中，因为你可能并不希望看到升级C++14标准库的时候你放进std命名空间的内容和编译器供应商提供的std命名空间的内容发生冲突。
 
+`std::make_unique`和`std::make_shared`是三个`make函数`中的两个：**接收`任意的多参数集合`，完美转发到构造函数去动态分配一个对象，然后返回这个指向这个对象的指针**。
+第三个make函数是`std::allocate_shared`。它行为和std::make_shared一样，只不过第一个参数是用来`动态分配内存的allocator对象`。
 
+即使通过用和不用make函数来创建智能指针的一个小小比较，也揭示了为何使用make函数更好的第一个原因。例如：
+```cpp
+auto upw1(std::make_unique<Widget>());      //使用make函数
+std::unique_ptr<Widget> upw2(new Widget);   //不使用make函数
+auto spw1(std::make_shared<Widget>());      //使用make函数
+std::shared_ptr<Widget> spw2(new Widget);   //不使用make函数
+```
+我高亮了关键区别：使用new的版本重复了类型，但是make函数的版本没有。
+（译者注：这里高亮的是Widget，用new的声明语句需要`写2遍Widget`，make函数只需要写一次。）重复写类型和软件工程里面一个关键原则相冲突：`应该避免重复代码`。
+源代码中的重复增加了编译的时间，会导致`目标代码冗余`（很现实），并且通常会让代码库使用更加困难。
+它经常演变成不一致的代码，而代码库中的不一致常常导致bug。
+此外，打两次字比一次更费力，而且没人不喜欢少打字吧？
 
+第二个使用make函数的原因和`异常安全`有关。
+假设我们有个函数按照某种优先级处理Widget：
+```cpp
+void processWidget(std::shared_ptr<Widget> spw, int priority);
+```
+值传递`std::shared_ptr`可能看起来很可疑，但是Item41解释了，如果`processWidget`总是复制`std::shared_ptr`（例如，通过将其存储在`已处理的Widget的一个数据结构中`），那么这可能是一个合理的设计选择。
 
+现在假设我们有一个函数来计算相关的优先级，
+```cpp
+int computePriority();
+```
+并且我们在调用`processWidget`时使用了`new`而不是`std::make_shared`：
+```cpp
+processWidget(std::shared_ptr<Widget>(new Widget),  //潜在的资源泄漏！
+              computePriority());
+```
+如注释所说，这段代码可能在`new`一个`Widget`时发生泄漏。
+    为何？调用的代码和被调用的函数都用std::shared_ptrs，且std::shared_ptrs就是设计出来防止泄漏的。
+    它们会在最后一个`std::shared_ptr`销毁时自动释放所指向的内存。如果每个人在每个地方都用std::shared_ptrs，这段代码怎么会泄漏呢？
 
+答案和`编译器将源码转换为目标代码`有关（！！！可能因为编译优化而打乱了顺序）。**在`运行时`，一个函数的`实参`必须先被`计算`，这个函数再被调用**，所以在调用processWidget之前，必须执行以下操作，processWidget才开始执行：
+表达式“`new Widget`”必须计算，例如，一个Widget对象必须在`堆`上被创建
+负责管理new出来指针的`std::shared_ptr<Widget>`构造函数必须被执行
+`computePriority`必须运行
+**`编译器`不需要按照`执行顺序`生成代码。**
+“new Widget”必须在`std::shared_ptr的构造函数`被调用前执行，因为`new`出来的结果作为构造函数的实参，但`computePriority`可能在这之前，之后，或者之间执行。
+也就是说，编译器可能按照这个执行顺序生成代码：
+* 1. 执行“`new Widget`”
+* 2. 执行`computePriority`
+* 3. 运行`std::shared_ptr构造函数`
+如果按照这样生成代码，并且在运行时`computePriority`产生了`异常`，那么第一步动态分配的Widget就会泄漏。
+因为它永远都不会被第三步的`std::shared_ptr`所管理了。
+使用`std::make_shared`可以防止这种问题。
+调用代码看起来像是这样：
+```cpp
+processWidget(std::make_shared<Widget>(),   //没有潜在的资源泄漏
+              computePriority());
+```
+在运行时，`std::make_shared`和`computePriority`其中一个会先被调用。
+如果是`std::make_shared`先被调用，在`computePriority`调用前，动态分配Widget的`原始指针`会安全的保存在作为返回值的`std::shared_ptr`中。
+如果`computePriority`产生一个异常，那么`std::shared_ptr``析构函数`将确保管理的Widget被销毁。
+（
+PS: 控制权从一处转移到另处，这有两个重要的含义:
+* 沿着调用链的函数可能会提早退出。
+* 一旦程序开始执行异常处理代码，则`沿着调用链创建的对象`将被销。
+    因为跟在throw后面的语句将不再被执行，所以throw语句的用法有点类似于return语句：它通常作为条件语句的一部分或者作为某个函数的最后(或者唯一)一条语句。
+）
 
+如果首先调用`computePriority`并产生一个异常，那么`std::make_shared`将不会被调用，因此也就不需要担心动态分配`Widget`（会泄漏）。
+如果我们将std::shared_ptr，std::make_shared替换成`std::unique_ptr`，std::make_unique，同样的道理也适用。
+因此，在编写异常安全代码时，使用std::make_unique而不是new与使用std::make_shared（而不是new）同样重要。
+`std::make_shared`的一个特性（与直接使用new相比）是效率提升。
+使用std::make_shared允许编译器生成更小，更快的代码，并使用更简洁的数据结构。
+考虑以下对new的直接使用：
+```cpp
+std::shared_ptr<Widget> spw(new Widget);
+```
+显然，这段代码需要进行内存分配，但它实际上执行了两次。
+Item19解释了每个std::shared_ptr指向一个`控制块`，其中包含被指向对象的引用计数，还有其他东西。
+这个控制块的内存在std::shared_ptr构造函数中分配。因此，直接使用new需要为`Widget`进行一次内存分配，为`控制块`再进行一次内存分配。
+如果使用`std::make_shared`代替：
+```cpp
+auto spw = std::make_shared<Widget>();
+```
+一次分配足矣。
+这是因为`std::make_shared`分配一块内存，同时容纳了`Widget对象`和`控制块`。
+这种优化减少了程序的静态大小，因为代码只包含一个内存分配调用，并且它提高了可执行代码的速度，因为`内存只分配一次`（因为放在一个函数体内了，可以实现：一次性地申请所需的内存）。
+此外，使用`std::make_shared`避免了对控制块中的某些簿记信息的需要，潜在地减少了程序的总内存占用。
+对于`std::make_shared`的效率分析同样适用于`std::allocate_shared`，因此std::make_shared的性能优势也扩展到了该函数。
+更倾向于使用make函数而不是直接使用new的争论非常激烈。
+尽管它们在软件工程、异常安全和效率方面具有优势，但本条款的建议是，更倾向于使用make函数，而不是完全依赖于它们。这是因为有些情况下它们不能或不应该被使用。
 
+例如，**`make`函数都不允许指定`自定义删除器`**（见Item18和19），但是`std::unique_ptr`和`std::shared_ptr`的构造函数可以接收一个删除器参数。有个Widget的自定义删除器：
+```cpp
+auto widgetDeleter = [](Widget* pw) { … };
+```
+创建一个使用它的智能指针只能直接使用`new`：
+```cpp
+std::unique_ptr<Widget, decltype(widgetDeleter)>
+    upw(new Widget, widgetDeleter);
 
+std::shared_ptr<Widget> spw(new Widget, widgetDeleter);
+```
+对于make函数，没有办法做同样的事情。
 
+`make`函数第二个限制来自于其实现中的语法细节。
+Item7解释了，当构造函数重载，有使用`std::initializer_list`作为参数的重载形式和不用其作为参数的的重载形式，
+用`花括号创建`的对象 更倾向于使用`std::initializer_list`作为形参的重载形式，而用`小括号`创建对象将调用不用`std::initializer_list`作为参数的的重载形式。
+`make`函数会将它们的参数`完美转发`给对象构造函数，但是它们是使用小括号还是花括号？
+对某些类型，问题的答案会很不相同。
+例如，在这些调用中，
+```cpp
+auto upv = std::make_unique<std::vector<int>>(10, 20);
+auto spv = std::make_shared<std::vector<int>>(10, 20);
+```
+生成的智能指针指向带有10个元素的std::vector，每个元素值为20，还是指向带有两个元素的std::vector，其中一个元素值10，另一个为20？或者结果是不确定的？
+好消息是这并非不确定：两种调用都创建了10个元素，每个值为20的std::vector。
+这意味着在`make`函数中，`完美转发`使用`小括号`，而不是花括号。
+坏消息是**如果你想用`花括号初始化`指向的对象，你必须直接使用`new`**。
+使用`make`函数会需要能够完美转发花括号初始化的能力，但是，正如`Item30`所说，花括号初始化无法完美转发。
+但是，Item30介绍了一个变通的方法：使用`auto类型推导`从`花括号初始化`创建`std::initializer_list`对象（见Item2），然后将auto创建的对象传递给make函数。
+```cpp
+//创建std::initializer_list
+auto initList = { 10, 20 };
+//使用std::initializer_list为形参的构造函数创建std::vector
+auto spv = std::make_shared<std::vector<int>>(initList);
+```
+对于`std::unique_ptr`，只有这两种情景（自定义删除器和花括号初始化）使用make函数有点问题。
 
+对于`std::shared_ptr`和它的`make`函数，还有2个问题。都属于边缘情况，但是一些开发者常碰到，你也可能是其中之一。
+`一些类`重载了`operator new`和`operator delete`。
+这些函数的存在意味着`对这些类型的对象的 全局内存分配和释放 是 不合常规的`。
+设计这种`定制操作`往往只会精确的分配、释放对象大小的内存。
+例如，Widget类的`operator new`和`operator delete`只会处理`sizeof(Widget)`大小的内存块的分配和释放。
+这种系列行为不太适用于`std::shared_ptr`对自定义分配（通过std::allocate_shared）和释放（通过自定义删除器）的支持，因为`std::allocate_shared`需要的内存总大小不等于动态分配的对象大小，还需要再加上`控制块大小`（`std::allocate_shared`的实际实现往往不会调用特定的`operator new`）。
+因此，使用`make`函数去创建重载了`operator new`和`operator delete`类的对象是个典型的糟糕想法。
+与直接使用`new`相比，`std::make_shared`在`大小`和`速度`上的优势源于`std::shared_ptr`的控制块与指向的对象放在同一块内存中（通过组合出新的一个对象来实现）。
+当对象的引用计数降为0，对象被销毁（即析构函数被调用）。
+但是，因为控制块和对象被放在同一块分配的内存块中，直到`控制块的内存`也被销毁，对象占用的内存才被释放。
+正如我说，`控制块`除了`引用计数`，还包含`簿记信息`。
+`引用计数`追踪有多少`std::shared_ptrs`指向控制块，但控制块还有`第二个计数`，记录多少个`std::weak_ptrs`指向`控制块`。
+第二个引用计数就是`weak count`。
+（实际上，`weak count`的值不总是等于`指向控制块的 std::weak_ptr的 数目`，因为库的实现者找到一些方法在weak count中添加附加信息，促进更好的代码产生。为了本条款的目的，我们会忽略这一点，假定weak count的值等于指向控制块的std::weak_ptr的数目。）
+当一个`std::weak_ptr`检测它是否过期时（见Item19），它会检测`指向的控制块中的 引用计数`（而不是weak count）。
+如果引用计数是0（即对象没有std::shared_ptr再指向它，已经被销毁了），std::weak_ptr就已经过期。
+否则就没过期。
+只要`std::weak_ptrs`引用一个控制块（即`weak count`大于零），该控制块必须继续存在（要不然`std::weak_ptr`就无从访问了）。
+只要`控制块`存在，包含它的`内存`就必须保持分配。
+通过`std::shared_ptr`的`make`函数分配的内存，直到最后一个`std::shared_ptr`和最后一个指向它的`std::weak_ptr`已被销毁，才会释放。
+如果对象类型非常大，而且`销毁最后一个std::shared_ptr`和`销毁最后一个std::weak_ptr`之间的时间很长，那么在`销毁对象`和`释放它所占用的内存`之间可能会出现延迟。
+（是`std::make_shared`特有的情况！！！而`std::shared_ptr`中，控制块内存和对象内存是分开的）
+```cpp
+class ReallyBigType { … };
 
+auto pBigObj =                          //通过std::make_shared  创建一个大对象
+    std::make_shared<ReallyBigType>();
 
+…           //创建std::shared_ptrs和std::weak_ptrs指向这个对象，使用它们
 
+…           //最后一个std::shared_ptr在这销毁，但std::weak_ptrs还在
 
+…           //在这个阶段，原来分配给大对象的内存还分配着
 
+…           //最后一个std::weak_ptr在这里销毁；控制块和对象的内存被释放
+```
+直接只用new，一旦最后一个`std::shared_ptr`被销毁，ReallyBigType对象的内存就会被释放：
+```cpp
+class ReallyBigType { … };              //和之前一样
 
+std::shared_ptr<ReallyBigType> pBigObj(new ReallyBigType);  //通过new创建大对象
 
+…           //像之前一样，创建std::shared_ptrs和std::weak_ptrs指向这个对象，使用它们
+            
+…           //最后一个std::shared_ptr在这销毁,但std::weak_ptrs还在；对象的内存被释放
+
+…           //在这阶段，只有控制块的内存仍然保持分配
+
+…           //最后一个std::weak_ptr在这里销毁；
+            //控制块内存被释放
+```
+如果你发现自己处于不可能或不合适使用`std::make_shared`的情况下，你将想要保证自己不受我们之前看到的异常安全问题的影响。
+最好的方法是**确保在直接使用`new`时，在一个不做其他事情的语句中，立即将`结果`传递到`智能指针构造函数`**。
+这可以`防止 编译器生成的代码 在使用new和调用管理new出来对象的智能指针的构造函数之间 发生异常`。
+例如，考虑我们前面讨论过的processWidget函数，对其非异常安全调用的一个小修改。
+这一次，我们将指定一个自定义删除器:
+```cpp
+void processWidget(std::shared_ptr<Widget> spw,     //和之前一样
+                   int priority);
+void cusDel(Widget *ptr);                           //自定义删除器
+
+// 这是非异常安全调用:
+processWidget( 									    //和之前一样，
+                std::shared_ptr<Widget>(new Widget, cusDel),    //潜在的内存泄漏！
+                computePriority() );
+```
+回想一下：
+如果`computePriority`在“`new Widget`”之后，而在`std::shared_ptr`构造函数之前调用，并且如果`computePriority`产生一个异常，那么动态分配的Widget将会泄漏（因为析构行为和shared_ptr的生命周期绑定了）。
+这里使用`自定义删除`排除了对`std::make_shared`的使用，因此避免出现问题的方法是**将`Widget的分配`和`std::shared_ptr的构造`放入它们自己的语句中，然后使用得到的`std::shared_ptr`调用processWidget**。
+这是该技术的本质，不过，正如我们稍后将看到的，我们可以对其进行调整以提高其性能：
+```cpp
+std::shared_ptr<Widget> spw(new Widget, cusDel);    // 确保实际对象和shared_ptr的构造都完成了
+processWidget(spw, computePriority());  // 正确，但是没优化，见下
+```
+这是可行的，因为`std::shared_ptr`获取了传递给它的构造函数的原始指针的所有权，即使构造函数产生了一个异常。
+此例中，如果spw的构造函数抛出异常（比如无法为控制块动态分配内存），仍然能够保证`cusDel`会在`“new Widget”`产生的指针上调用。
+
+一个小小的性能问题是，在非异常安全调用中，我们将一个`右值`传递给`processWidget`：
+```cpp
+processWidget(
+    std::shared_ptr<Widget>(new Widget, cusDel),    //实参是一个右值
+    computePriority()
+);
+```
+但是在异常安全调用中，我们传递了`左值`：
+```cpp
+processWidget(spw, computePriority());              //实参是左值
+```
+因为`processWidget`的`std::shared_ptr`形参是`传值`，从`右值`构造只需要移动，而`传递左值`构造需要拷贝。
+对`std::shared_ptr`而言，这种区别是有意义的，**因为`拷贝`std::shared_ptr需要对引用计数`原子递增`，`移动`则不需要对引用计数有操作**。
+为了使异常安全代码达到非异常安全代码的性能水平，我们需要用`std::move`将`spw`转换为`右值`（见Item23）：
+```cpp
+processWidget(std::move(spw), computePriority());   //高效且异常安全
+```
+这很有趣，也值得了解，但通常是无关紧要的，因为您很少有理由不使用make函数。除非你有令人信服的理由这样做，否则你应该使用make函数。
+
+请记住：
+* 和直接使用new相比，make函数消除了代码重复，提高了异常安全性。
+    对于`std::make_shared`和`std::allocate_shared`，生成的代码更小更快。
+* 不适合使用make函数的情况包括需要指定自定义删除器和希望用花括号初始化。
+* 对于std::shared_ptrs，其他**不建议使用`make`函数的情况**包括：(1)有自定义内存管理的类；(2)特别关注内存的系统，非常大的对象，以及std::weak_ptrs比对应的std::shared_ptrs活得更久。
 
 
 
@@ -2868,22 +3754,243 @@ args是0个或者多个通用引用（即它是个通用引用parameter pack）�
 
 
 
+# 条款30：熟悉完美转发失败的情况
+C++11最显眼的功能之一就是`完美转发功能`。
+完美转发，太完美了！哎，开始使用，你就发现“完美”，理想与现实还是有差距。
+C++11的完美转发是非常好用，但是只有当你愿意忽略一些误差情况（译者注：就是完美转发失败的情况），这个条款就是使你熟悉这些情形。
+在我们开始误差探索之前，有必要回顾一下“完美转发”的含义。
+**“转发”**仅表示**将一个函数的形参传递——就是转发——给另一个函数**。
+对于第二个函数（被传递的那个）目标是收到与第一个函数（执行传递的那个）完全相同的对象。
+这规则`排除了按值传递的形参`，因为它们是原始调用者传入内容的`拷贝`。
+我们希望被转发的函数能够使用最开始传进来的那些对象。
+指针形参也被排除在外，因为我们不想强迫调用者传入指针。关于通常目的的转发，我们将处理`引用形参`。
+`完美转发（perfect forwarding）`意味着我们不仅转发对象，我们还转发显著的特征：它们的类型，是`左值`还是`右值`，是`const`还是`volatile`。
+结合到我们会处理`引用形参`，这意味着我们将使用`通用引用`（参见Item24），因为通用引用形参被传入实参时才确定---==是左值还是右值。
+假定我们有一些函数f，然后想编写一个转发给它的函数（事实上是一个函数模板）。
+我们需要的核心看起来像是这样：
+```cpp
+template<typename T>
+void fwd(T&& param)             //接受任何实参
+{
+    f(std::forward<T>(param));  //转发给f
+}
+```
+从本质上说，`转发函数`是`通用的`。
+例如`fwd`模板，接受任何类型的实参，并转发得到的任何东西。
+这种通用性的逻辑扩展是，转发函数不仅是模板，而且是可变模板，因此可以接受任何数量的实参。
+`fwd`的可变形式如下：
+```cpp
+template<typename... Ts>
+void fwd(Ts&&... params)            //接受任何实参
+{
+    f(std::forward<Ts>(params)...); //转发给f
+}
+```
+这种形式你会在标准化容器置入函数（`emplace` functions）中（参见Item42）和智能指针的工厂函数`std::make_unique`和`std::make_shared`中（参见Item21）看到，当然还有其他一些地方。
+给定我们的`目标函数f`和`转发函数fwd`，**如果f使用某特定实参会执行某个操作，但是fwd使用相同的实参会执行不同的操作，完美转发就会失败**
+```cpp
+f( expression );        //调用f执行某个操作
+fwd( expression );		//但调用fwd执行另一个操作，则fwd不能完美转发expression给f
+```
+导致这种失败的实参种类有很多。
+知道它们是什么以及如何解决它们很重要，因此让我们来看看无法做到完美转发的实参类型。
 
+## 花括号初始化器
+假定f这样声明：
+```cpp
+void f(const std::vector<int>& v);
+```
+在这个例子中，用花括号初始化调用f通过编译，
+```cpp
+f({ 1, 2, 3 });         //可以，“{1, 2, 3}”隐式转换为std::vector<int>
+```
+但是传递相同的列表初始化给fwd不能编译
+```cpp
+fwd({ 1, 2, 3 });       //错误！不能编译
+```
+这是因为这是完美转发失效的一种情况。
+所有这种错误有相同的原因。
+在对f的直接调用（例如`f({ 1, 2, 3 })`），编译器看看调用地传入的实参，看看f声明的形参类型。
+它们把调用地的实参和声明的实参进行比较，看看是否匹配，并且必要时执行`隐式转换操作`使得调用成功。
+在上面的例子中，从`{ 1, 2, 3 }`生成了临时`std::vector<int>`对象，因此f的形参v会绑定到`std::vector<int>`对象上。
+当通过调用`函数模板``fwd`间接调用f时，编译器不再把调用地传入给fwd的`实参`和f的声明中`形参`类型进行比较。
+（因为函数模板在实例化代码时，有推导行为，而非模板函数是明确的，只是进行重载决议，在必要时进行隐式转换）
+而是`推导`传入给fwd的实参类型，然后比较`推导后的实参类型`和`f的形参声明类型`。
 
+当下面情况任何一个发生时，完美转发就会失败：
+* 编译器不能推导出fwd的一个或者多个形参类型。
+    这种情况下代码无法编译。
+* 编译器推导“错”了fwd的一个或者多个形参类型。 
+    在这里，“错误”可能意味着fwd的实例将无法使用推导出的类型进行编译，但是也可能意味着使用fwd的推导类型调用f，与用传给fwd的实参直接调用f表现出不一致的行为。
 
+这种不同行为的原因可能是因为f是个重载函数的名字，并且由于是“不正确的”类型推导，在fwd内部调用的f重载和直接调用的f重载不一样。
+在上面的`fwd({ 1, 2, 3 })`例子中，问题在于，将`花括号初始化`传递给未声明为`std::initializer_list`的函数模板形参，被判定为————就像标准说的————“非推导上下文”。
+简单来讲，这意味着编译器不准在对fwd的调用中推导表达式`{ 1, 2, 3 }`的类型，因为fwd的形参没有声明为`std::initializer_list`。
+对于fwd形参的推导类型被阻止，编译器只能拒绝该调用（对于函数模板的类型推导，编译器就是不支持传代表了`std::initialization_list`的花括号表达式，而`auto`直接假定花括号表示std::initialization_list）。
+有趣的是，Item2说明了使用花括号初始化的auto的变量的类型推导是成功的。
+这种变量被视为`std::initializer_list`对象，在转发函数应推导出类型为`std::initializer_list`的情况，这提供了一种简单的解决方法————使用auto声明一个局部变量，然后将局部变量传进转发函数：
+```cpp
+auto il = { 1, 2, 3 };  //il的类型被推导为std::initializer_list<int>
+fwd(il);                //可以，完美转发il给f   类型明确是std::initializer_list了，而不是花括号这种还需要推导的表达式
+```
 
+## 0或者NULL作为空指针
+Item8说明当你试图传递`0`或者`NULL`作为`空指针`给模板时，类型推导会出错，会把传来的实参推导为一个`整型类型（典型情况为int）`而不是`指针类型`。
+结果就是不管是0还是NULL都不能作为空指针被完美转发。
+解决方法非常简单，传一个`nullptr`而不是0或者NULL。具体的细节，参考Item8。
 
+## 仅有声明的整型`static const`数据成员
+通常，无需在类中定义整型static const数据成员；声明就可以了。
+这是因为编译器会对此类成员实行`常量传播（const propagation）！！！`，因此`消除了保留内存的需要`。
+比如，考虑下面的代码：
+```cpp
+class Widget {
+public:
+    static const std::size_t MinVals = 28;  //MinVal的声明
+    …
+};
+…                                           //没有MinVals定义
 
+std::vector<int> widgetData;
+widgetData.reserve(Widget::MinVals);        //使用MinVals
+```
+这里，我们使用`Widget::MinVals（或者简单点MinVals）`来确定widgetData的初始容量，即使MinVals缺少定义。
+编译器通过将值28放入所有提到MinVals的位置来补充缺少的定义（就像它们被要求的那样）。
+没有为MinVals的值留存储空间是没有问题的。
+如果要使用MinVals的地址（例如，有人创建了指向MinVals的指针），则MinVals需要存储（这样指针才有可指向的东西），尽管上面的代码仍然可以编译，但是链接时就会报错，直到为MinVals提供定义。
+按照这个思路，想象下f（fwd要转发实参给它的那个函数）这样声明：
+```cpp
+void f(std::size_t val);
+```
+使用`MinVals`调用f是可以的，因为编译器直接将值28代替MinVals：
+```cpp
+f(Widget::MinVals);         //可以，视为“f(28)”
+```
+不过如果我们尝试通过fwd调用f，事情不会进展那么顺利：
+```cpp
+fwd(Widget::MinVals);       //错误！不应该链接
+```
+代码可以编译，但是不应该链接。
+如果这让你想到使用MinVals地址会发生的事，确实，底层的问题是一样的。
+尽管代码中没有使用MinVals的地址，但是fwd的形参是`通用引用`，而引用，在编译器生成的代码中，通常被视作`指针`。
+**在程序的二进制底层代码中（以及硬件中）`指针`和`引用`是`一样的`。**
+在这个水平上，引用只是可以自动解引用的指针。
+在这种情况下，通过引用传递MinVals实际上与通过指针传递MinVals是一样的，因此，**必须有`内存`使得指针可以指向（光靠编译器生成代码时，简单地替换一些常量是不够的）**。
+**通过引用传递的整型`static const`数据成员，通常需要`定义它们`**，这个要求可能会造成在不使用完美转发的代码成功的地方，使用等效的完美转发失败。（译者注：这里意思应该是没有定义，完美转发就会失败）
+可能你也注意到了在上述讨论中我使用了一些模棱两可的词：
+代码“不应该”链接。引用“通常”被看做指针。传递整型static const数据成员“通常”要求定义。看起来就像有些事情我没有告诉你......
+确实，根据标准，通过引用传递MinVals要求有定义。
+**但不是所有的实现都强制要求这一点。所以，取决于你的编译器和链接器，你可能发现你可以在未定义的情况使用完美转发，恭喜你，但是这不是那样做的理由**。
+为了具有可移植性，只要给整型`static const`提供一个定义，比如这样：
+```cpp
+const std::size_t Widget::MinVals;  //在Widget的.cpp文件
+```
+注意**`定义中不要重复初始化`（这个例子中就是赋值28）。**
+但是不要忽略这个细节。如果你忘了，并且在两个地方都提供了初始化，编译器就会报错，提醒你只能初始化一次。
 
+## 重载函数的名称和模板名称
+假定我们的函数f（我们想通过fwd完美转发实参给的那个函数）可以通过向其传递执行某些功能的函数来自定义其行为。
+假设这个函数接受和返回值都是int，f声明就像这样：
+```cpp
+void f(int (*pf)(int));             //pf = “process function”
+```
+值得注意的是，也可以使用更简单的`非指针语法声明`。
+这种声明就像这样，含义与上面是一样的：
+```cpp
+void f(int pf(int));                //与上面定义相同的f
+```
+无论哪种写法都可，现在假设我们有了一个重载函数，processVal：
+```cpp
+int processVal(int value);
+int processVal(int value, int priority);
+```
+我们可以传递processVal给f，
+```cpp
+f(processVal);                      //可以
+```
+但是我们会发现一些吃惊的事情。
+f要求一个函数指针作为实参，但是processVal不是一个函数指针或者一个函数，它是同名的两个不同函数。
+但是，**编译器可以知道它需要哪个：匹配上f的形参类型的那个**。因此选择了仅带有一个int的processVal地址传递给f。
+**工作的基本机制是`f的声明`让编译器识别出哪个是需要的processVal（f本身明确地带声明了，和传进来的函数一匹配就知道该重载哪个了！）**。
+但是，`fwd`是一个`函数模板`，没有它可接受的类型的信息，使得编译器不可能决定出哪个函数应被传递：
+```cpp
+fwd(processVal);                    //错误！那个processVal？
+```
+单用`processVal`是没有类型信息的，所以就`不能类型推导`，完美转发失败。
+如果我们试图使用`函数模板`而不是（或者也加上）`重载函数`的名字，同样的问题也会发生。
+**一个`函数模板`不代表单独一个函数，它表示一个`函数族`**：
+```cpp
+template<typename T>
+T workOnVal(T param)                //处理值的模板
+{ … }
 
+fwd(workOnVal);                     //错误！哪个workOnVal实例？根本不明确
+```
+**要让像`fwd的完美转发函数`接受一个`重载函数名`或者`模板名`，方法是`指定 要转发的那个重载 或者 实例`**。
+比如，你可以创造与f相同形参类型的`函数指针`，通过processVal或者workOnVal实例化这个函数指针（这可以引导选择正确版本的processVal或者产生正确的workOnVal实例），然后传递指针给fwd：
+```cpp
+using ProcessFuncType =                         //写个类型定义；见条款9
+    int (*)(int);
 
+ProcessFuncType processValPtr = processVal;     //指定所需的processVal签名
 
+fwd(processValPtr);                             //可以
+fwd(static_cast<ProcessFuncType>(workOnVal));   //也可以
+```
+当然，这要求你知道fwd转发的函数指针的类型。
+没有理由去假定完美转发函数会记录着这些东西。
+毕竟，完美转发被设计为接受任何内容，所以如果没有文档告诉你要传递什么，你又从何而知这些东西呢？
 
+## 位域
+完美转发最后一种失败的情况是函数实参使用`位域`这种类型。
+为了更直观的解释，IPv4的头部有如下模型：（这假定的是位域是按从最低有效位（least significant bit，lsb）到最高有效位（most significant bit，msb）布局的。
+C++不保证这一点，但是编译器经常提供一种机制，允许程序员控制位域布局。）
+```cpp
+struct IPv4Header {
+    std::uint32_t version:4,
+                  IHL:4,
+                  DSCP:6,
+                  ECN:2,
+                  totalLength:16;
+    // …
+};
+```
+如果声明我们的函数f（转发函数fwd的目标）为接收一个`std::size_t`的形参，则使用IPv4Header对象的totalLength字段进行调用没有问题：
+```cpp
+void f(std::size_t sz);         //要调用的函数
 
+IPv4Header h;
+…
+f(h.totalLength);               //可以
+```
+如果通过fwd转发h.totalLength给f呢，那就是一个不同的情况了：
+```cpp
+fwd(h.totalLength);             //错误！
+```
+问题在于`fwd`的形参是引用，而`h.totalLength`是non-const位域。
+听起来并不是那么糟糕，但是C++标准非常清楚地谴责了这种组合：**`non-const引用`不应该绑定到`位域`**。
+禁止的理由很充分。**位域可能包含了机器字的任意部分（比如32位int的3-5位），但是这些东西无法直接寻址**。
+我之前提到了在硬件层面引用和指针是一样的，所以没有办法创建一个指向任意bit的指针（C++规定你可以指向的最小单位是char），同样没有办法绑定引用到任意bit上。
+**一旦意识到接收位域实参的函数都将接收位域的`副本`，就可以轻松解决位域不能完美转发的问题**。
+毕竟，没有函数可以绑定引用到位域，也没有函数可以接受指向位域的指针，因为不存在这种指针。
+位域可以传给的形参种类只有按值传递的形参，有趣的是，还有reference-to-const。
+在传值形参的情况中，被调用的函数接受了一个位域的副本；
+在传`reference-to-const`形参的情况中，标准要求这个引用实际上绑定到存放位域值的副本对象，这个对象是某种整型（比如int）。
+`reference-to-const`不直接绑定到位域，而是绑定位域值拷贝到的一个普通对象。
+传递位域给完美转发的关键就是利用传给的函数接受的是一个副本的事实。
+你可以自己创建副本然后利用副本调用完美转发。在IPv4Header的例子中，可以如下写法：
+//拷贝位域值；参看条款6了解关于初始化形式的信息
+```cpp
+auto length = static_cast<std::uint16_t>(h.totalLength);    // 必须拷贝一把，变成别的类型，而不是位域类型，因为位域类型不允许被引用绑定
+fwd(length);                    //转发这个副本
+```
+总结
+在大多数情况下，完美转发工作的很好。你基本不用考虑其他问题。
+但是当其不工作时——当看起来合理的代码无法编译，或者更糟的是，虽能编译但无法按照预期运行时————了解完美转发的缺陷就很重要了。同样重要的是如何解决它们。在大多数情况下，都很简单。
 
-
-
-
+请记住：
+* 当模板类型推导失败或者推导出错误类型，完美转发会失败。
+* 导致完美转发失败的实参种类有花括号初始化，作为空指针的0或者NULL，仅有声明的整型static const数据成员，模板和重载函数的名字，位域。
 
 
 
@@ -3753,6 +4860,24 @@ void detect()                           //现在针对多个反映线程
 * 基于`flag`的设计避免的上一条的问题，但是是基于`轮询`，而不是阻塞。
 * `条件变量`和`flag`可以组合使用，但是产生的通信机制很不自然。
 * 使用std::promise和future的方案避开了这些问题，但是这个方法使用了堆内存存储共享状态，同时有只能使用一次通信的限制。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

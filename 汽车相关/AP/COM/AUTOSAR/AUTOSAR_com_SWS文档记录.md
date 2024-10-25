@@ -15,14 +15,6 @@ Therefore it is recommended to read the ARAComAPI explanatory document first to 
 
 
 
-
-
-
-
-
-
-
-
 # 7 Functional specification
 ## 7.1 General description
 The AUTOSAR Adaptive architecture organizes the software of the AUTOSAR Adaptive foundation as functional clusters.

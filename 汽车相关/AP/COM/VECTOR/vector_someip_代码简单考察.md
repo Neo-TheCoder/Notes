@@ -1287,7 +1287,7 @@ void Runtime::InitializeInternal() noexcept {
 InitializeBindings();
 ```
 
-调用到someip_binding的初始化
+调用到`someip_binding`的初始化
 PS: src-gen
 ```cpp
 // VECTOR NC AutosarC++17_10-A15.4.2: MD_SOCAL_AutosarC++17_10-A15.4.2_A15.5.1_A15.5.2_A15.5.3_BAUHAUS-15508
@@ -1538,7 +1538,7 @@ class InstanceSpecifierLookupTable {
 
 `InstanceSpecifier`
 `startapplication_cm_server1/RootSwComponentPrototype/PPort_StartApplicationCmService1_ServiceInterface`
-（如何拼接：
+（！！！如何拼接：
   `EXECUTABLE`的name + `EXECUTABLE`的`ROOT-SW-COMPONENT-PROTOTYPE`的name + `ADAPTIVE-APPLICATION-SW-COMPONENT-TYPE`的`P-PORT-PROTOTYPE`的name）
 
 `InstanceIdentifier`：
@@ -5007,7 +5007,7 @@ PS: `DeserializeSample`
 
 ## 发送method类型的数据
 是在自己创建的`Periodic线程中`，
-通过`StartApplicationCmService1_ServiceInterfaceProxy`类型指针（代表该service，且是proxy端）得到`PrxoyMethod`类型的`StartApplicationMethod1`对象，重载了`operator()(ArgsT... args)`，传入参数`method1_value_`，最终返回`ara::core::Future<Output`对象，
+通过`StartApplicationCmService1_ServiceInterfaceProxy`类型指针（代表该service，且是proxy端）得到`PrxoyMethod`类型的`StartApplicationMethod1`对象，重载了`operator()(ArgsT... args)`，传入参数`method1_value_`，最终返回`ara::core::Future<Output>`对象，
 （PS：当前示例中，该Method的入参、出参都是`uint8_t`）
 ```cpp
     /*!
@@ -5263,7 +5263,7 @@ PS：该操作是原子的
 注意：该函数的入参其实就是`session_id_`，如果`session_id`重复，
 如果已经存在具有相同键的元素，则可以通过`if (pending_request_stored.second)`判断得出，那么就会返回空的`optional_future`
 ！！！即便是相同类型的request，也是不同的`session_id`
-（`session_id`何时会重复？--> 多线程发起request时，session_id会重复？现在的处理逻辑是：会丢弃数据）
+（`session_id`何时会重复？--> 多线程发起request时，session_id会重复？现在的处理逻辑是：因为map不允许重复元素，如果当前刚好出现重复元素，那么就无法插入，不过通过`has_value`判断可以得知出现了重复元素，于是照样可以返回future）
 
 如果发送失败，则调用`OnTxError`：
 ```cpp
@@ -5324,7 +5324,7 @@ PS：其中`request.first`是`ara::core::Promise<Output>`类型
 
 
 ### 解析response包
-！！！在`vComResp0-0`线程中：
+！！！在`vComResp0-0`线程(skeleton端，处理method请求所专用的线程)中：
 `PositiveResponseTask`重载了`operator()()`，作为任务被分配给线程池的线程执行
 ```cpp
     void operator()() override {

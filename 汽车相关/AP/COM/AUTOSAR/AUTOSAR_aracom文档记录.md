@@ -155,6 +155,23 @@ This explicitly allows, to start the same executable N times, each time with a d
   ]
 ```
 
+PS: `instance_specifier`等价于`p-port`
+```json
+      "provided_service_instances" : [
+        {
+          "instance_id" : 2093,
+          "instance_specifier" : [
+            "someip_to_dds/RootSwComponentPrototype/openspace_trajectory_service_provided_port",
+            "someip_to_dds/RootSwComponentPrototype/openspace_trajectory_service_test_provided_port"
+          ],
+          "domain" : 5,
+          "port" : 56093,
+          "ttl" : 3,
+          "expected_client_integrity_level" : "QM"
+        }
+      ]
+```
+
 `InstanceSpecifier` -> `InstanceIdentifier`
 ```cpp
 namespace ara {
@@ -166,7 +183,7 @@ namespace runtime {
 }
 ```
 
-为什么这个 API 会返回一个 `InstanceIdentifierContainer`（它代表了ara::com::InstanceIdentifierContainer 的集合）？
+为什么这个 API 会返回一个 `InstanceIdentifierContainer`（它代表了`ara::com::InstanceIdentifierContainer` 的集合）？
 这需要解释一下：
 AUTOSAR 支持集成商在软件组件开发人员可见的`一个抽象标识符`后面配置`多个技术绑定`。
 此功能称为`多重绑定`，在本文档的不同部分均有提及（更详细的解释请参见第 9.3 节）。
@@ -220,7 +237,8 @@ void SomeipBindingInitializer::RegisterServiceInstances() noexcept {
 
 这确实有点尴尬，因为我们已经提到过，`对于 软件开发人员 来说，实现 自适应 AUTOSAR SWC 的 “典型”方法 是 使用 软件组件模型 中的抽象 “instnace speciifers”。`
 在接下来详细介绍代理和骨架侧 API 的章节中，您将看到 ara::com 提供了典型的函数重载，这些函数要么使用 ara::com::InstanceIdentifier，要么使用 ara::core::InstanceSpecifier，从而在最常见的使用案例中解放了开发人员，开发人员只需使用 ara::core::InstanceSpecifier 即可，无需明确调用 ResolveInstanceIDs()。
-这就意味着，直接使用 ara::com::InstanceIdentifier 和手动解析 ara::core::InstanceSpecifier 更多是针对那些使用案例比较特殊的高级用户。在讨论代理/骨架侧相应的 ara::com API 重载的章节中将给出一些示例。
+这就意味着，直接使用 `ara::com::InstanceIdentifier` 和手动解析 `ara::core::InstanceSpecifier` 更多是针对那些使用案例比较特殊的高级用户。
+在讨论代理/骨架侧相应的 ara::com API 重载的章节中将给出一些示例。
 
 这两种变体之间的根本区别就在于此： `ara::com::InstanceIdentifier` 可以更方便地在自适应应用程序/进程之间交换！
 因为它们`已经完全包含了所有特定技术信息`，不需要通过服务实例清单的内容进行任何进一步的解析，这样一个序列化的 ara::com::InstanceIdentifier 可以在不同的进程中重新构建，只要他的进程可以访问与 ara::com::InstanceIdentifier 基于相同的绑定技术，就可以使用。
@@ -1829,8 +1847,6 @@ AP中的`可部署软件单元`被称为`自适应应用程序`（相应的元�
 ara::core::StringView const kInstanceSpecifierService{
     "data_collector/RootSwComponentPrototype/someip_recorder_service_required_port"};
 ```
-
-
 
 
 

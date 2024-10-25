@@ -1202,9 +1202,10 @@ int main() {
 
 
 
-# CRTP(Curiously Recurring Template Pattern)
+# `CRTP`(Curiously Recurring Template Pattern)
 在C++中，派生类可以继承基类的模板，其中模板参数是派生类本身(奇异递归模板模式)
-1. 静态多态性：通过CRTP，可以在编译时实现静态多态性。派生类可以通过继承基类模板来获得基类的行为，并在编译时进行类型检查。
+1. 静态多态性：通过CRTP，可以在编译时实现静态多态性。
+  派生类可以通过继承基类模板来获得基类的行为，并在编译时进行类型检查。
 2. 提供编译时代码生成：通过CRTP，可以在派生类中生成特定于派生类的代码。基类模板可以使用派生类的类型信息来生成特定的代码，从而提高代码的效率和灵活性。
 3. 实现静态接口：通过CRTP，可以在派生类中实现静态接口。基类模板可以定义一组接口函数，并在派生类中实现这些函数。这样可以在编译时进行接口检查，确保派生类正确地实现了基类的接口。
 
@@ -1549,17 +1550,17 @@ int main()
 ```
 
 # 派生类继承基类构造函数
-派生类中可以通过`using`引入基类的构造函数，可以直接把派生类的默认构造函数`delete`
+派生类中可以通过`using`引入基类的构造函数
 ```cpp
 #include<iostream>
-class Base{
+class Base {
 public:
     Base(int x){}
 };
 
-class Derived: public Base{
-    using Base::Base;
-    Derived() = delete;
+class Derived: public Base {
+    using Base::Base;   // 普通的函数也可以继承，这里继承了构造函数，如果Base有多个构造函数，那么此处就一并继承了
+    Derived() = delete; // 默认构造函数就不需要了
     // ...
 };
 
@@ -1567,6 +1568,8 @@ int main(){
     Derived d(10);
 }
 ```
+
+
 
 # `std::unique_ptr`
 `std::unique_ptr`的`release`和`reset`函数都是用于管理指针所有权的方法
@@ -1576,6 +1579,7 @@ int main(){
 - `reset`: `reset`函数用于重置`std::unique_ptr`，可以将其指向新的对象或者置空。
 如果`std::unique_ptr`不再需要管理当前指针，可以使用`reset`将其置空（调用析构），从而释放当前对象并避免内存泄漏。
 如果需要`std::unique_ptr`管理新的对象，也可以使用`reset`来实现。
+
 
 
 # 判断一个类是否定义了某个成员函数
@@ -2501,6 +2505,225 @@ int main() {
     return 0;
 }
 ```
+
+
+
+# `PendingRequestMap`
+为什么要继承`enable_shared_from_this`？
+  因为需要把this指针传递出去，如果传递裸的this指针，会导致`引用计数块的重复创建`
+
+为什么这里在`Store`、构造lambda时，也要使用`基类指针`：`std::weak_ptr<PendingRequestMapInterface<Output>>`？
+  可能为了不影响所指向对象的生命周期？？？
+  该lambda是为了应对`请求取消`的情况 --> 看起来是一种保险，判断对象是否存在，如果仍然存在就`MoveOutRequest`
+
+```cpp
+template <typename Output>
+// VCA_SPC_15_SOMEIPBINDING_STL_TYPE_DESTRUCTOR
+class PendingRequestMap final : public PendingRequestMapInterface<Output>,
+                                public std::enable_shared_from_this<PendingRequestMap<Output>> {
+ public:
+  /*!
+   * \brief RequestKey type.
+   */
+  using RequestKey = ::amsr::someip_protocol::internal::SessionId;
+  /*!
+   * \brief Value of the map. Objects of this type are stored for each method request in the map.
+   */
+  using ResponseValuePromise = ::ara::core::Promise<Output>;
+
+  /*!
+   * \brief Optional of the response promise type.
+   */
+  using ResponsePromiseOptional = ::ara::core::Optional<ResponseValuePromise>;
+
+  /*!
+   * \brief Map containing the method request entries.
+   */
+  using MapType = std::map<RequestKey, ResponseValuePromise>;
+
+  /*!
+   * \brief Future of the response value type.
+   */
+  using ResponseValueFuture = ::ara::core::Future<Output>;
+
+  /*!
+   * Optional of the future type.
+   */
+  using FutureOptional = ::ara::core::Optional<ResponseValueFuture>;
+
+  /*!
+   * \brief Store a request for the asynchronous response into the map.
+   * \details Possible reasons for a failing emplacement:
+   * 1) The request entry is not stored in the map, if there is already a request entry with the identical key existing.
+   * 2) Memory allocation fails
+   *
+   * \param[in] request_key The request will be stored under this key.
+   * \return An optional future. (future has value if the request is stored in the map, in case request is not emplaced
+   * in map future will not be valid)
+   *
+   * \pre              -
+   * \context          App
+   * \threadsafe       TRUE
+   * \reentrant        FALSE
+   * \synchronous      TRUE
+   * \exceptionsafety  STRONG No undefined behavior or side effects.
+   *
+   * \internal
+   * - Create a promise of the templated datatype
+   * - Emplace the promise with the given key into the map of pending requests
+   * - If the promise was inserted successfully into the map:
+   *   - Create a callable to be executed on future destruction.
+   *   - Get a future from the promise using the created callable.
+   *   - Return the future.
+   * \endinternal
+   */
+  FutureOptional StoreRequestInMap(RequestKey const& request_key) noexcept {
+    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+    std::lock_guard<std::mutex> const protect_access{map_access_protection_};
+
+    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+    ResponseValuePromise promise{};
+    FutureOptional optional_future{};
+    std::pair<typename MapType::iterator, bool> const pending_request_stored{
+        // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+        pending_requests_.emplace(request_key, std::move(promise))};
+
+    if (pending_request_stored.second) {
+      typename MapType::iterator const iterator{pending_request_stored.first};
+      ResponseValuePromise& moved_promise{iterator->second};
+
+      std::weak_ptr<PendingRequestMapInterface<Output>> const pending_request_map_interface{this->shared_from_this()};
+      // VCA_SPC_15_SOMEIPBINDING_STL_TYPE_FUNCTION
+      ::vac::language::UniqueFunction<void()> destruction_callable{[request_key, pending_request_map_interface]() {
+        // MethodCancellationTask template specialization
+        using MethodCancellationTaskType = MethodCancellationTask<Output>;
+
+        // VCA_SPC_15_SOMEIPBINDING_STL_TYPE_FUNCTION
+        (MethodCancellationTaskType{request_key, pending_request_map_interface})();
+      }};
+
+      // VCA_SOMEIPBINDING_TRIVIAL_VALID_REFERENCE
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      optional_future.emplace(moved_promise.get_future(std::move(destruction_callable)));
+    }  // VCA_SPC_15_SOMEIPBINDING_STL_TYPE_FUNCTION
+
+    return optional_future;
+  }  // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+
+  /*!
+   * \copydoc amsr::someip_binding_xf::internal::methods::PendingRequestMapInterface::MoveOutRequest
+   *
+   * \internal
+   * - Search for the request with specific key in the pending requests.
+   * - If request is found, move out the request from pending requests (also erase it from the map).
+   * - Return an optional of moved out request.
+   * \endinternal
+   */
+  // VECTOR NC AutosarC++17_10-A10.3.3: MD_SOMEIPBINDING_AutosarC++17_10-A10.3.3_no_virtual_functions_in_final_class
+  ResponsePromiseOptional MoveOutRequest(RequestKey const request_key) noexcept override {
+    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+    std::lock_guard<std::mutex> const protect_access{map_access_protection_};
+
+    typename MapType::iterator const request_entry{SearchRequest(request_key)};
+
+    ResponsePromiseOptional optional_promise{};
+
+    // Access the request only, if there is an entry available
+    if (request_entry != pending_requests_.end()) {
+      // VCA_SOMEIPBINDING_TRIVIAL_VALID_REFERENCE
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      optional_promise = std::move(request_entry->second);
+
+      // Promise moved out of the map before. Value in the map for this key is invalid after moving out and thus the map
+      // entry needs to be removed completely.
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      static_cast<void>(pending_requests_.erase(request_entry));
+    }
+
+    return optional_promise;
+  }  // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+
+  /*!
+   * \brief Reject all pending requests
+   *
+   * \context          Reactor
+   * \threadsafe       TRUE
+   * \reentrant        FALSE
+   * \synchronous      TRUE
+   * \exceptionsafety  STRONG No undefined behavior or side effects
+   *
+   * \internal
+   * - Erase all pending request in the pending requests map
+   * \endinternal
+   */
+  void RejectAll() noexcept {
+    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+    std::lock_guard<std::mutex> const protect_access{map_access_protection_};
+
+    typename MapType::iterator request_it{pending_requests_.begin()};
+
+    while (request_it != pending_requests_.end()) {
+      // VCA_SOMEIPBINDING_TRIVIAL_VALID_REFERENCE
+      // VECTOR NC AutosarC++17_10-A7.1.1: MD_SOMEIPBINDING_AutosarC++17_10-A7.1.1_Immutable_shall_be_qualified_const
+      // VECTOR NC AutosarC++17_10-A12.8.3: MD_SOMEIPBINDING_AutosarC++17_10-A12.8.3_ReadAccess_after_move
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      ResponseValuePromise promise{std::move(request_it->second)};
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      promise.SetError({ara::com::ComErrc::kServiceNotAvailable, "Service is down."});
+      // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+      request_it = pending_requests_.erase(request_it);
+    }  // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+  }    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+
+  /*!
+   * \brief Get the current count of pending requests from the request map.
+   * \details this is only used for testing
+   * \return pending request count.
+   * \context     Testing
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   * \exceptionsafety  STRONG No undefined behavior or side effects.
+   */
+  std::size_t GetPendingRequestCount() const noexcept { return pending_requests_.size(); }
+
+ private:
+  /*!
+   * \brief Search for a request entry based on the request key given.
+   * \param[in] request_key request key to search for
+   * \return An iterator pointing either to a valid request entry (key-value-pair) from the map, if there is a request
+   * available or an iterator pointing to the end of the map, to signalize, that there is no request entry found.
+   *
+   * \pre              A request is already moved to the map
+   * \context          App
+   * \threadsafe       TRUE
+   * \reentrant        FALSE
+   * \synchronous      TRUE
+   * \exceptionsafety  STRONG No undefined behavior or side effects
+   */
+  typename MapType::iterator SearchRequest(RequestKey const& request_key) noexcept {
+    return pending_requests_.find(request_key);
+  }
+
+  /*!
+   * \brief Holds all the pending requests.
+   */
+  MapType pending_requests_;
+
+  /*!
+   * \brief Used to protect from concurrent access to the map:
+   * - if requests and responses are handled at the same time.
+   * - if multiple requests are triggered in parallel
+   */
+  std::mutex map_access_protection_;
+};
+```
+
+
+
+
+
+
 
 
 
