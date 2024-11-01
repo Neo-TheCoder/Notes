@@ -20,13 +20,8 @@ Default value for not configured scheduling settings are `the inherited policy, 
 The Vector Adaptive Thread Library implements different policies to retrieve and parse a given configuration: they are described in 5-1. In order to select one of the described policy the environment variable `AMSR_THREAD_CONFIGURABLE_SETTINGS` has to be set in the corresponding STARTUP-CONFIG (refer to Executable Configuration section of Execution Management Technical Reference for detailed configuration description.)
 PS: 
 ```sh
-export AMSR_THREAD_CONFIGURABLE_SETTINGS=ON
+export AMSR_THREAD_CONFIGURABLE_SETTINGS=ON # 注意！！！不要设置成全局的
 ```
-
-
-
-
-
 
 
 
@@ -41,11 +36,8 @@ ParseThreadConfiguration();
 
 2. 运行时 环境变量
 `AMSR_THREAD_CONFIGURABLE_SETTINGS`
-```cpp
 
-
-```
-
+3. 根据配置，创建线程
 
 
 

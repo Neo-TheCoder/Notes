@@ -274,8 +274,204 @@ int main() {
 
 
 # 关于调度和优先级
-`RR`和`FIFO`都只用于实时任务。
+## 概览
+> 从**用户空间**来看，进程优先级就是`nice value`和`scheduling priority`；
+对应到**内核**，有`静态优先级`、`realtime优先级`、`归一化优先级`和`动态优先级`等概念
+### 用户空间的视角
+在用户空间，进程优先级有两种含义：`nice value`和`scheduling priority`。
+对于`普通进程`而言，进程优先级就是`nice value`，从`-20`（优先级最高）～`19`（优先级最低），通过修改`nice value`可以改变普通进程获取`cpu资源`的比例。
+随着实时需求的提出，进程又被赋予了另外一种属性`scheduling priority`，而这些进程被称为`实时进程`。
+实时进程的优先级的范围可以通过`sched_get_priority_min`和`sched_get_priority_max`，对于linux而言，实时进程的`scheduling priority`的范围是`1`（优先级最低）～`99`（优先级最高）。
+当然，普通进程也有`scheduling priority`，被设定为`0`。
 
+### 内核中的实现
+内核中，task struct中有若干和进程优先级有关的成员，如下：
+```c
+struct task_struct {
+// ......
+    int prio, static_prio, normal_prio;
+    unsigned int rt_priority;
+// ......
+    unsigned int policy;
+// ......
+};
+```
+#### 静态优先级
+`task_struct`中的`static_prio`成员。
+我们称之静态优先级，其特点如下：
+1. 值越小，进程优先级越高
+2. `0 – 99`用于`实时进程`，`100 – 139`用于`普通进程`
+3. 缺省值是 120
+4. `用户空间`可以通过`nice()`或者`setpriority`对该值进行修改。通过`getpriority`可以获取该值。
+5. 新创建的进程会`继承父进程`的`static priority`。
+`静态优先级`是所有相关优先级的计算的起点，要么继承自父进程，要么用户空间自行设定。
+一旦修改了静态优先级，那么`normal priority`和`动态优先级`都需要重新计算。
+
+#### 实时优先级
+task struct中的`rt_priority`成员表示该线程的`实时优先级`，也就是从用户空间的视角来看的`scheduling priority`。
+`0`是`普通进程`，`1～99`是`实时进程`，99的优先级最高。
+
+#### 归一化优先级
+`task struct`中的`normal_prio`成员。
+我们称之归一化优先级（normalized priority），它是根据`静态优先级、scheduling priority和调度策略`来计算得到，代码如下：
+```cpp
+static inline int normal_prio(struct task_struct *p)
+{
+    int prio;
+
+    if (task_has_dl_policy(p))
+        prio = MAX_DL_PRIO - 1;
+    else if (task_has_rt_policy(p))
+        prio = MAX_RT_PRIO -1 - p->rt_priority;
+    else
+        prio = __normal_prio(p);
+    return prio;
+}
+```
+对于这里的优先级，调度器需要综合考虑各种因素，例如`调度策略，nice value、scheduling priority`等，把这些factor全部考虑进来，归一化成一个数轴上的number，以此来表示其优先级，这就是normalized priority。
+对于一个线程，其`normalized priority`的number`越小`，其`优先级越大`。
+调度策略是`deadline`的进程比`RT进程`和`normal进程`的优先级还要高，因此它的归一化优先级是负数：`-1`。
+如果采用`实时调度策略`，那么该线程的`normalized priority`和`rt_priority`相关。
+task struct中的`rt_priority`成员是`用户空间视角的``实时优先级（scheduling priority）`，`MAX_RT_PRIO-1`是`99`，`MAX_RT_PRIO-1 - p->rt_priority`则翻转了实时进程的`scheduling priority`，最高优先级是0，最低是98。顺便说一句，normalized priority是99的情况是没有意义的。
+**对于`普通进程`，`normalized priority`就是其静态优先级。**
+
+#### 动态优先级
+`task struct`中的`prio`成员表示了该线程的`动态优先级`，也就是`调度器在进行调度时候使用的那个优先级`。
+动态优先级在运行时可以被修改，例如在处理`优先级翻转问题`的时候，系统可能会临时调升一个普通进程的优先级。
+一般设定动态优先级的代码是这样的：`p->prio = effective_prio(p)`，具体计算动态优先级的代码如下：
+```c
+static int effective_prio(struct task_struct *p)
+{
+    p->normal_prio = normal_prio(p);
+    if (!rt_prio(p->prio))
+        return p->normal_prio;
+    return p->prio;
+}
+```
+`rt_prio`是一个根据`当前优先级`来确定是否是`实时进程`的函数，包括两种情况：
+* 一种情况是该进程是`实时进程`，
+* 调度策略是`SCHED_FIFO`或者`SCHED_RR`。
+另外一种情况是人为的将该进程提升到`RT priority的区域`（例如在使用优先级继承的方法解决系统中优先级翻转问题的时候）。
+在这两种情况下，我们都不改变其动态优先级，即`effective_prio`返回当前动态优先级`p->prio`。
+其他情况，进程的`动态优先级`跟随`归一化的优先级`。
+
+
+#### 典型数据流程分析
+##### 用户空间设定`nice value`
+用户空间设定nice value的操作，在内核中主要是`set_user_nice`函数实现的，无论是`sys_nice`或者`sys_setpriority`，在参数检查和权限检查之后都会调用`set_user_nice`函数，完成具体的设定。
+代码如下：
+```cpp
+void set_user_nice(struct task_struct *p, long nice)
+{
+    int old_prio, delta, queued;
+    unsigned long flags;
+    struct rq *rq; 
+    rq = task_rq_lock(p, &flags);
+    if (task_has_dl_policy(p) || task_has_rt_policy(p)) { // －－－－－－－－－－－（1）
+        p->static_prio = NICE_TO_PRIO(nice);
+        goto out_unlock;
+    }
+    queued = task_on_rq_queued(p); // －－－－－－－－－－－－－－－－－－－（2）
+    if (queued)
+        dequeue_task(rq, p, DEQUEUE_SAVE);
+
+    p->static_prio = NICE_TO_PRIO(nice); // －－－－－－－－－－－－－－－－（3）
+    set_load_weight(p);
+    old_prio = p->prio;
+    p->prio = effective_prio(p);
+    delta = p->prio - old_prio;
+
+    if (queued) {
+        enqueue_task(rq, p, ENQUEUE_RESTORE); // －－－－－－－－－－－－（2）
+        if (delta < 0 || (delta > 0 && task_running(rq, p))) // －－－－－－－－－－－－（4）
+            resched_curr(rq);
+    }
+out_unlock:
+    task_rq_unlock(rq, p, &flags);
+}
+```
+1. 如果是`实时进程或者deadline类型的进程`，那么`nice value`其实是没有什么实际意义的，不过我们还是设定其静态优先级，当然，这样的设定其实不会起到什么作用的，也不会实际改变调度器行为，因此直接返回，没有dequeue和enqueue的动作。
+2. 在1中已经处理了调度策略是RT类和DEADLINE类的进程，因此，执行到这里，只可能是普通进程了，使用CFS算法。
+  如果该task在run queue上（queued等于true），那么由于我们修改了nice value，调度器需要重新审视当前runqueue中的task。
+  因此，我们需要将该task从rq中摘下，在重新计算优先级之后，再次插入该runqueue对应的runable task的红黑树中。
+3. 最核心的代码就是`p->static_prio = NICE_TO_PRIO(nice);`这一句了，其他的都是side effect。
+  比如说`load weight`。当cpu一刻不停的运算的时候，其load是100％，没有机会调度到`idle进程`休息一下。
+  当系统中没有实时进程或者deadline进程的时候，所有的runnable的进程一起来瓜分cpu资源，以此不同的进程分享一个`特定比例的 cpu资源`，我们称之load weight。
+  **`不同的nice value`对应`不同的cpu load weight`**，因此，当更改nice value的时候，也必须通过`set_load_weight`来更新该进程的cpu load weight。
+  除了load weight，该线程的`动态优先级`也需要更新，这是通过`p->prio = effective_prio(p);`来完成的。
+4. delta 记录了`新旧线程的动态优先级的差值`，当调试了该线程的优先级（delta < 0），那么有可能产生一个`调度点`（可能会引起`线程切换`），因此，调用resched_curr，给当前正在运行的task做一个标记，以便在返回用户空间的时候进行调度。此外，如果修改当前running状态的task的动态优先级，那么调降（delta > 0）意味着该进程有可能需要让出cpu，因此也需要`resched_curr`标记当前running状态的task需要reschedule。
+
+##### 进程`缺省的`调度策略和调度参数
+我们先思考这样的一个问题：在用户空间设定调度策略和调度参数之前，一个线程的`default scheduling policy`是什么呢？
+这需要追溯到`fork`的时候（具体代码在`sched_fork`函数中），这个和task struct中`sched_reset_on_fork`设定相关。
+如果没有设定这个flag，那么说明在fork的时候，子进程跟随父进程的调度策略，
+如果设定了这个flag，则说明子进程的调度策略和调度参数不能继承自父进程，而是需要设定为`default`。
+代码片段如下：
+```c
+int sched_fork(unsigned long clone_flags, struct task_struct *p)
+{
+// ……
+    p->prio = current->normal_prio; //－－－－－－－－－－－－－－－－－－－（1）
+    if (unlikely(p->sched_reset_on_fork)) {
+        if (task_has_dl_policy(p) || task_has_rt_policy(p)) {//－－－－－－－－－－（2）
+            p->policy = SCHED_NORMAL;
+            p->static_prio = NICE_TO_PRIO(0);
+            p->rt_priority = 0;
+        } else if (PRIO_TO_NICE(p->static_prio) < 0)
+            p->static_prio = NICE_TO_PRIO(0);
+
+        p->prio = p->normal_prio = __normal_prio(p); //－－－－－－－－－－－－（3）
+        set_load_weight(p); 
+        p->sched_reset_on_fork = 0;
+    }
+// ……
+}
+```
+1. `sched_fork`只是fork过程中的一个片段，在fork一开始，`dup_task_struct`已经复制了一个和父进程完全一个的`进程描述符（task struct）`，因此，如果没有步骤2中的重置，那么子进程是跟随父进程的调度策略和调度参数（各种优先级），当然，有时候为了解决PI问题而临时调升父进程的动态优先级，在fork的时候不宜传递到子进程中，因此这里重置了动态优先级。
+2. 缺省的调度策略是`SCHED_NORMAL`，`静态优先级`等于`120（也就是说nice value等于0）`，`rt priority`等于`0（普通进程）`。
+不管父进程如何，即便是deadline的进程，其fork的子进程也需要恢复到缺省参数。
+3. **既然调度策略和静态优先级已经修改了，那么也需要更新`动态优先级`和`归一化优先级`**。
+  此外，`load weight`也需要更新。
+  一旦子进程中恢复到了缺省的调度策略和优先级，那么`sched_reset_on_fork`这个flag已经完成了历史使命，可以clear掉了。
+OK，至此，我们了解了在fork过程中对调度策略和调度参数的处理，这里还是要追加一个问题：为何不一切继承父进程的调度策略和参数呢？为何要在fork的时候reset to default呢？
+  **在linux中，对于每一个进程，我们都会进行`资源限制`**。
+  例如对于那些`实时进程`，如果它持续消耗cpu资源而没有发起一次可以引起阻塞的系统调用，那么我们猜测这个realtime进程跑飞了，从而锁住了系统。
+  对于这种情况，我们要进行干预，因此引入了`RLIMIT_RTTIME`这个per-process的资源限制项。
+  但是，如果用户空间的`realtime进程`通过fork其实也可以绕开`RLIMIT_RTTIME`这个限制，从而肆意的攫取cpu资源。
+  然而，机智的内核开发人员早已经看穿了这一切，为了防止实时进程“泄露”到其子进程中，`sched_reset_on_fork`这个flag被提出来。
+
+##### 用户空间`设定`调度策略和调度参数
+通过`sched_setparam`接口函数可以修改`rt priority`的调度参数，而通过`sched_setscheduler`功能会更强一些，不但可以设定`rt priority`，还可以设定`调度策略`。
+而`sched_setattr`是一个集大成之接口，可以设定一个线程的调度策略以及该调度策略下的调度参数。
+当然，对于内核，这些接口都通过`__sched_setscheduler`这个内核函数来完成对指定线程调度策略和调度参数的修改。
+`__sched_setscheduler`分成两个部分：
+* 首先进行安全性检查和参数检查，
+* 其次进行具体的设定。
+我们先看看安全性检查。
+如果用户空间可以自由的修改调度策略和调度优先级，那么世界就乱套了，每个进程可能都想把自己的调度策略和优先级提升上去，从而获取足够的CPU 资源。
+因此用户空间设定调度策略和调度参数要遵守一定的规则：如果没有CAP_SYS_NICE的能力，那么基本上该线程能被允许的操作只是降级而已。
+例如从`SCHED_FIFO`修改成`SCHED_NORMAL`，或不修改`scheduling policy`，而是降低`静态优先级（nice value）`或者`实时优先级（scheduling priority）`。
+这里例外的是SCHED_DEADLINE的设定，按理说如果进程本身的调度策略就是SCHED_DEADLINE，那么应该允许“优先级”降低的操作（这里用优先级不是那么合适，其实就是减小run time，或者加大period，这样可以放松对cpu资源的获取），但是目前的4.4.6内核不允许（也许以后版本的内核会允许）。
+此外，如果没有`CAP_SYS_NICE`的能力，那么设定调度策略和调度参数的操作只能是限于属于同一个登录用户的线程。
+如果拥有`CAP_SYS_NICE`的能力，那么就没有那么多限制了，可以从普通进程提升成实时进程（修改policy），也可以提升静态优先级或者实时优先级。
+具体的修改比较简单，是通过`__setscheduler_params`函数完成，其实也就是是根据sched_attr中的参数设定到task struct相关成员中，大家可以自行阅读代码进行理解。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+`RR`和`FIFO`都只用于实时任务。
 ## `RR（Round Robin）`调度算法：
 RR调度算法是一种循环调度算法。
 任务按照到达的顺序依次执行，（在`相同的进程优先级`的情况下，如果优先级高的话可以抢占）每个任务执行一个时间片后，会被放到`就绪队列的末尾`等待下一次调度（放在队尾体现了公平）。
@@ -289,7 +485,7 @@ RR调度算法适用于需要`公平分配CPU时间`的实时任务，但可能�
 由于FIFO调度算法是`非抢占式`的，因此如果某个任务长时间运行或者阻塞，可能会导致其他任务无法及时执行，影响系统的实时性能。
 
 ## `SCHED_OTHER`调度算法：
-`SCHED_OTHER`是Linux系统中的一种默认的普通进程调度策略，也称为`CFS（Completely Fair Scheduler，完全公平调度器）`，是一种分时调度策略。
+`SCHED_OTHER`是Linux系统中的一种`默认的`普通进程调度策略，也称为`CFS（Completely Fair Scheduler，完全公平调度器）`，是一种分时调度策略。
 在`SCHED_OTHER`调度策略下，系统会根据`进程的优先级（nice值，范围是：-20~19）`和其他因素动态地调整进程的执行顺序，以实现对CPU资源的公平分配。
 具体来说，SCHED_OTHER调度策略采用了`时间片轮转`的方式，每个进程都会被分配一个时间片，当`时间片用完`或者`进程主动让出CPU`时，调度器会选择下一个就绪队列中的进程来执行。
 `优先级较高`的进程会获得更多的CPU时间，但并不会完全抢占CPU资源，而是通过`动态调整时间片长度`来实现公平调度。
@@ -306,7 +502,7 @@ RR调度算法适用于需要`公平分配CPU时间`的实时任务，但可能�
 nice 值从 -20(优先级最高) ~ 19（优先级最低） ，nice值是越小优先级越高，默认为0
 
 #### 内核空间中
-（会对normal和rt线程优先级nice值做**归一化**，**对内核来讲都是一个个的task_struct**，归一化有利于后面调度策略的计算和选择）
+（会对normal和rt线程优先级nice值做**归一化**，对内核来讲都是一个个的`task_struct`，`归一化`有利于后面调度策略的计算和选择）
 从用户空间的rt优先级值和normal线程的nice值看到，它们的定义似乎是相反的，一个越大代表优先级越高，一个越小优先级越高，怎么归一化呢，实际上内核中是用99 - rt 值进行了反转
 
 normal_priority RT线程优先级：0~99 （注意这里的0~99 和用户空间真实设定的值是相反的关系，用户空间设置rt优先级99，这里就是0）

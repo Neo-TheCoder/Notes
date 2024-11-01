@@ -3568,7 +3568,10 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 ## Method
 当Proxy端发起method request时，
 触发一系列回调：
-`OnReceiveCompletion()`、`ProcessReceivedMessage()`
+someip_daemon_client `Start()`同步调用
+`StartReceiving`设置两个回调  `available_callback`, `completion_callback`
+
+ -> `OnReceiveCompletion()`、`ProcessReceivedMessage()`
 
 往线程池增加`AsyncRequest`类型的任务：
 即`SkeletonStartApplicationMethod1AsyncRequest`类型
@@ -3616,7 +3619,7 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 
 
 # Proxy端接收数据
-通过`Unix Domain Socket`和Someipd通信，接收来自skeleton的消息
+通过`Unix Domain Socket`和`Someipd`通信，接收来自skeleton的消息
 
 **调用顺序：**
 任务类`*EventNotificationTask`（嵌套于class`ProxyEventBase`中）
@@ -5466,11 +5469,11 @@ Result<UnblockReason> Reactor1::HandleEvents(std::chrono::milliseconds timeout) 
 }
 ```
 
-（PS：调试someipd而不启动别的app的话，会发现最后会阻塞于此处：  **epoll_wait()**
+（PS：调试someipd而不启动别的app的话，会发现最后会阻塞于此处：  **`epoll_wait()`**
 
-此处  **HandleEvents()**  函数传入的是std::max()（如果未配置的话）
+此处  **`HandleEvents()`**  函数传入的是std::max()（如果未配置的话）
 
-**此处使用了系统调用：epoll_wait(epoll_fd, epoll_events.data(), events_num, time)**
+**此处使用了系统调用：`epoll_wait(epoll_fd, epoll_events.data(), events_num, time)`**
 
 参数说明：
 -   `epfd`  ：epoll实例的文件描述符，通过  **epoll_create**  函数创建。
@@ -5653,14 +5656,6 @@ ara::core::Span<osabstraction::io::MutableIOBuffer> ApplicationConnection::OnMes
 （PS：  **MutableIOBufferContainer**  是std::  **array**  <osabstraction::io::  **MutableIOBuffer**  , 1U>的别名）
 
 然后把  **receive_specific_header_**  信息导入  **receive_iovec_container_**
-
-
-
-
-
-
-
-
 
 
 
