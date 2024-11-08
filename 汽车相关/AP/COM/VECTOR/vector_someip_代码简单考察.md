@@ -3567,12 +3567,13 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
 
 ## Method
 当Proxy端发起method request时，
-触发一系列回调：
+skeleton端，从reactor线程开始，触发一系列的`回调`：
 someip_daemon_client `Start()`同步调用
 `StartReceiving`设置两个回调  `available_callback`, `completion_callback`
 
  -> `OnReceiveCompletion()`、`ProcessReceivedMessage()`
 
+根据instance_id，查询skeleton map，触发相应的任务塞入线程池的任务队列
 往线程池增加`AsyncRequest`类型的任务：
 即`SkeletonStartApplicationMethod1AsyncRequest`类型
 
