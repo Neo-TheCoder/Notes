@@ -2721,17 +2721,110 @@ class PendingRequestMap final : public PendingRequestMapInterface<Output>,
 
 
 
+# 关于是否触发移动构造？
+```cpp
+#include<queue>
+#include<memory>
+#include<iostream>
+
+class Base {
+public:
+    Base() = default;
+    ~Base() = default;
+    Base(Base&& obj) {
+        std::cout << "移动构造！" << std::endl;
+    }
+    Base& operator=(Base&& obj) = default;
+    Base(const Base&) {
+        std::cout << "拷贝构造！" << std::endl;
+    }
+    Base& operator=(const Base&) = delete;
+};
+
+int main() {
+    std::shared_ptr<Base> ptr = std::make_shared<Base>();
+    const std::shared_ptr<Base>& r = ptr;
+
+    std::queue<std::shared_ptr<Base>> q_;
+    q_.push(std::move(r));
+
+    return 0;
+}
+```
+`push`的函数实现为：
+```cpp
+      void
+      push(const value_type& __x)
+      { c.push_back(__x); }
+
+#if __cplusplus >= 201103L
+      void
+      push(value_type&& __x)
+      { c.push_back(std::move(__x)); }
+```
+更深层调用：
+```cpp
+      void
+      push_back(const value_type& __x)
+      {
+	if (this->_M_impl._M_finish._M_cur
+	    != this->_M_impl._M_finish._M_last - 1)
+	  {
+	    this->_M_impl.construct(this->_M_impl._M_finish._M_cur, __x);
+	    ++this->_M_impl._M_finish._M_cur;
+	  }
+	else
+	  _M_push_back_aux(__x);
+      }
+
+#if __cplusplus >= 201103L
+      void
+      push_back(value_type&& __x)
+      { emplace_back(std::move(__x)); }
 
 
+  template<typename _Tp, typename _Alloc>
+    template<typename... _Args>
+      void
+      deque<_Tp, _Alloc>::
+      emplace_back(_Args&&... __args)
+      {
+	if (this->_M_impl._M_finish._M_cur
+	    != this->_M_impl._M_finish._M_last - 1)
+	  {
+	    this->_M_impl.construct(this->_M_impl._M_finish._M_cur,
+				    std::forward<_Args>(__args)...);
+	    ++this->_M_impl._M_finish._M_cur;
+	  }
+	else
+	  _M_push_back_aux(std::forward<_Args>(__args)...);
+      }
+```
 
-
-
-
-
-
-
-
-
+## 如何进行重载决议？
+```cpp
+  template<typename _Tp>
+    inline typename std::remove_reference<_Tp>::type&&
+    move(_Tp&& __t)
+    { 
+        return static_cast<typenamestd::remove_reference<_Tp>::type&&>(__t); 
+    }
+```
+`Effective Modern C++`中：
+  `std::move`使用`类型擦除确保了&&被正确的应用到了一个不是引用的类型上。
+  这保证了`std::move`返回的真的是右值引用，这很重要，**因为函数返回的`右值引用`是`右值`**！！！。
+那么`std::move`的具体转换结果为：
+std::move(r) 的结果是一个 `const Base&&`。
+而`移动构造函数 Base(Base&&)`不接受常量右值引用，因此只能选择拷贝构造函数
+所以先是选择了以下重载：
+```cpp
+      push(value_type&& __x)
+```
+在构造函数重载时，选择了`拷贝构造函数`
+```cpp
+	    this->_M_impl.construct(this->_M_impl._M_finish._M_cur,
+				    std::forward<_Args>(__args)...);
+```
 
 
 

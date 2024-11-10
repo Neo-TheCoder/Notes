@@ -7004,6 +7004,553 @@ PS: `std::next`函数用于`返回一个 指向当前迭代器位置之后 第n�
 
 
 
+# VECTOR R20-11 关于someipd的fatal: 
+```log
+UnRegisterEventSubscriptionStateObserver:100: Trying to unregister a non registered event subscription state observer for Event ID AF2D. Abort
+```
+
+## 可能的调用栈
+```cpp
+UnRegisterEventSubscriptionStateObserver;
+UnsubscribeEvent;
+UnsubscribeSomeIpEvent;
+~LocalClient();
+```
+
+## 调用栈分析
+## proxy端
+```cpp
+      service_proxy_->DataCollectModeTopic.Unsubscribe();
+
+    Base::UnsubscribeInternal();
+
+  void UnsubscribeInternal() noexcept {
+    if (is_subscribed_) {
+      is_subscribed_ = false;  // First reset the state before informing bindings.
+
+      // Clean the cache before unsubscribing to save memory, to make sure that cache size is correct by next
+      // subscription and to make sure that acquired memory is returned.
+      visible_sample_cache_.clear();  // VCA_SOCAL_CALLING_STL_APIS
+
+      // VCA_SOCAL_FUNCTION_CALL_ON_VALID_OBJECTS_ADHERING_TO_FUNCTION_CONTRACT
+      proxy_event_backend_.Unsubscribe(this);
+    }
+  }
+
+  void Unsubscribe(EventSubscriberInterface* event) noexcept override {
+    // PTP-B-SomeIpbinding-ProxyEventXF_Unsubscribe
+    logger_.LogVerbose(static_cast<char const*>(__func__), __LINE__);
+    if (subscribed_proxy_event_xf_.has_value()) {
+      // After this line, it is not allowed to receive any new events.
+      // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+      subscribed_proxy_event_xf_.value().client_subscriber->Unsubscribe(event);
+
+      subscribed_proxy_event_xf_.reset();
+      // PTP-E-SomeIpbinding-ProxyEventXF_Unsubscribe
+    }
+  }
+
+// client_subscriber对象的类型：
+template <typename SampleType>
+class SomeIpEventHandler final
+    : public ::amsr::someip_binding_xf::internal::events::ClientSubscriberInterface<SampleType>,
+      public ::amsr::someip_binding_core::internal::SomeipBindingEventHandlerInterface {
+// ...
+};
+
+// SomeIpEventHandler:
+  void Unsubscribe(EventSubscriberInterface* event) noexcept override {
+    if (IsSubscribed()) {
+      // After this line, it is not allowed to receive any new events.
+      client_.UnsubscribeEvent(someip_event_identity_.GetEventId());
+      subscriber_ = nullptr;
+      // Notify the related event subscriber about subscription state update.
+      // VCA_SOMEIPBINDING_POSSIBLY_CALLING_NULLPTR_METHOD_CALL_ON_REF
+      event->HandleEventSubscriptionStateUpdate(::ara::com::SubscriptionState::kNotSubscribed);
+    }
+  }
+
+// ProxySomeIpDaemonClientWrapper:
+  ara::core::Result<void> UnsubscribeEvent(
+      ::amsr::someip_daemon_client::internal::RequiredEventType const required_event) noexcept override {
+    // VCA_SOMEIPBINDING_PROXY_SOMEIPDAEMONCLIENT_LIFECYCLE
+    // VCA_SOMEIPBINDING_TRIVIAL_FUNCTION_CONTRACT
+    return (*proxy_someipdaemon_client_.UnsubscribeEvent)(required_event);
+  }
+
+// ProxySomeIpDaemonClient
+  UnsubscribeEventController* const UnsubscribeEvent{&unsubscribe_event_controller_};
+
+// UnsubscribeEventController类型：（仿函数）
+template <typename SomeIpDaemonClientSelected>
+class UnsubscribeEventController final {
+  auto operator()(RequiredEventType const& required_event) noexcept -> ara::core::Result<void> {
+    // PTP-B-SomeipDaemonClient-UnsubscribeEventController_UnsubscribeEvent
+    // Serialize request packet
+    MemoryBufferPtr request_packet{amsr::someipd_app_protocol::internal::SerializeEventRequestPacket(required_event)};
+
+    // VCA_SDCL_DESTRUCTOR_NO_PRECONDITION
+    ipc_packet_serializer_.Serialize(std::move(request_packet));
+
+    logger_.LogDebug([](ara::log::LogStream& s) { s << "Sending Unsubscribe Event control command: "; }, {__func__},
+                     {__LINE__});
+
+    // Asynchronous command request to SOME/IP daemon
+    // VECTOR NC AutosarC++17_10-A5.0.1, VectorC++-V5.0.1: MD_SOMEIPDAEMONCLIENT_AutosarC++17_10-A5.0.1_V5.0.1_unseq_mv
+    // clang-format off
+    // VCA_SDCL_SEND_CONTROL_COMMAND, VCA_SDCL_DESTRUCTOR_NO_PRECONDITION
+    ara::core::Result<void> const result{message_sender_.SendMessage(
+    std::move(ipc_packet_serializer_.GetMemoryBuffer()), std::move(ipc_packet_serializer_.GetIOVectorContainer()))};
+    // clang-format on
+    // PTP-E-SomeipDaemonClient-UnsubscribeEventController_UnsubscribeEvent
+    return result;
+  }  // VCA_SDCL_DESTRUCTOR_NO_PRECONDITION
+};
+```
+用户层调用`Unsubscribe` -> 使用unix domain socket将 `控制消息` 发送给`someipd`
+
+## someipd端
+```cpp
+// class SomeIpd
+  void Initialize() noexcept {
+    init::ClientInitializer::InitializeRequiredServices(
+        config_, remote_server_manager_, required_service_instance_manager_, remote_server_factory_, service_discovery_,
+        sd_client_factory_, timer_manager_, statistics_handler_, connection_manager_, packet_router_);
+    init::ServerInitializer<SomeipdMember::ConnectionManagerType>::InitializeProvidedServices(
+        config_, service_discovery_, timer_manager_, connection_manager_, local_server_manager_, packet_router_);
+    service_discovery_.Initialize();
+    application_manager_.Listen(amsr::ipc::UnicastAddress{config_.GetSomeIpdIpcDomain(), config_.GetSomeIpdIpcPort()});
+  }
+
+// class ApplicationManager : public amsr::timer::Timer
+  void Listen(UnicastAddress const& address) noexcept {
+    logger_.LogVerbose(
+        [&address](ara::log::LogStream& s) noexcept {
+          amsr::ipc::Domain const domain{address.GetDomain()};
+          amsr::ipc::Port const port{address.GetPort()};
+          s << "Address (Domain: 0x" << ara::log::HexFormat(domain) << ", Port: 0x" << ara::log::HexFormat(port) << ")";
+        },
+        static_cast<char const*>(__func__), __LINE__);
+
+    if (state_ == AppManState::kStopped) {
+      connection_acceptor_.emplace(reactor_, address);
+      connection_acceptor_->Listen([this](std::unique_ptr<ApplicationConnection> application_connection) noexcept {
+        OnAccept(std::move(application_connection));
+      });
+
+      state_ = AppManState::kListening;
+
+      logger_.LogInfo(
+          [&address](ara::log::LogStream& s) noexcept {
+            amsr::ipc::Domain const domain{address.GetDomain()};
+            amsr::ipc::Port const port{address.GetPort()};
+            s << "Start accepting application connections from IPC Address (Domain: 0x" << ara::log::HexFormat(domain)
+              << ", Port: 0x" << ara::log::HexFormat(port) << ")";
+          },
+          static_cast<char const*>(__func__), __LINE__);
+    }
+  }
+
+// ApplicationAcceptor  ！！！此处的ListenAsync()负责注册函数：一个调用了OnAccept的函数（细节就不展示了）
+// 这里的AcceptAsync()最终是调用到libosabstraction-iinux层提供的接口：把回调传给给AcceptorImpl对象的成员变量：accept_completion_callback_
+void ApplicationAcceptor::Listen(AcceptanceFunction&& acceptance_function) noexcept {
+  acceptance_function_ = std::move(acceptance_function);
+  ListenAsync();
+}
+
+// class ApplicationManager : public amsr::timer::Timer
+  void OnAccept(std::unique_ptr<ApplicationConnection> handle) noexcept {
+    bool const success{CreateApplication(std::move(handle))};
+
+    if (!success) {
+      logger_.LogError([](ara::log::LogStream& s) noexcept { s << "New application connection rejected"; },
+                       static_cast<char const*>(__func__), __LINE__);
+    }
+  }
+
+// class ApplicationManager : public amsr::timer::Timer
+  bool CreateApplication(std::unique_ptr<ApplicationConnection> connection) noexcept {
+    bool result{false};
+    iam::protocol::ApplicationId application_identifier{};
+    bool const peer_identity_valid{connection->GetPeerIdentity().HasValue()};
+    if (peer_identity_valid) {
+      application_identifier = connection->GetPeerIdentity().Value();
+    }
+
+    // VECTOR NC AutosarC++17_10-M5.14.1: MD_SomeIpDaemon_AutosarC++17_10-M5.14.1_op_has_no_side_effect:
+    if ((peer_identity_valid) || (!identity_access_manager_.IsEnabled())) {
+      result = FindAndCreateNewApplication(std::move(connection), application_identifier);
+    } else {
+      logger_.LogError(
+          [&connection](ara::log::LogStream& s) noexcept {
+            ara::core::ErrorCode const error_code{connection->GetPeerIdentity().Error()};
+            ara::core::StringView const message{error_code.Message()};
+            s << "Error in identification of peer identity: " << message << ". Application can't be created.";
+          },
+          static_cast<char const*>(__func__), __LINE__);
+    }
+
+    return result;
+  }
+
+// class ApplicationManager : public amsr::timer::Timer
+  bool FindAndCreateNewApplication(std::unique_ptr<ApplicationConnection> connection,
+                                   iam::protocol::ApplicationId& app_identifier) noexcept {
+    bool result{false};
+
+    for (ApplicationPoolEntry& application_pool_entry : application_pool_default_) {
+      if (!application_pool_entry.has_value()) {
+        application_pool_entry.emplace(packet_validator_, std::move(connection), identity_access_manager_,
+                                       app_identifier, config_, required_service_instance_manager_,
+                                       local_server_manager_);
+        // VECTOR NC AutosarC++17_10-A5.0.1: MD_SomeIpDaemon_A5.0.1_lambda_parameter_false_positive
+        application_pool_entry->StartReceive(
+            [this](ApplicationType* application) noexcept { static_cast<void>(ReleaseApplication(application)); });
+
+        logger_.LogInfo(
+            [&application_pool_entry, &app_identifier](ara::log::LogStream& s) noexcept {
+              // VECTOR NC AutosarC++17_10-A5.2.4: MD_SomeIpDaemon_A5.2.4_reinterpret_cast_logging
+              // VECTOR NC AutosarC++17_10-M5.2.9: MD_SomeIpDaemon_M5.2.9_reinterpret_cast_logging
+              ara::log::LogHex64 const value_hex{
+                  ara::log::HexFormat(reinterpret_cast<std::uint64_t>(&application_pool_entry.value()))};
+              ara::log::LogHex64 const identifier_hex{ara::log::HexFormat(app_identifier)};
+              s << "Created new application with id 0x" << value_hex << " and user identifier 0x" << identifier_hex;
+            },
+            static_cast<char const*>(__func__), __LINE__);
+
+        result = true;
+        ++number_of_active_connections_default_;
+
+        break;
+      }
+    }
+
+    logger_.LogDebug(
+        [this](ara::log::LogStream& s) noexcept {
+          s << "Connections (active: ";
+          s << number_of_active_connections_default_;
+          s << ", max allowed: ";
+          s << kMaximumApplications;
+          s << ").";
+        },
+        static_cast<char const*>(__func__), __LINE__);
+
+    return result;
+  }
+
+// class Application: 
+  void StartReceive(DisconnectionFunction&& disconnection_function) {
+    disconnection_function_ = std::move(disconnection_function);
+    // VECTOR NC AutosarC++17_10-A5.0.1: MD_SomeIpDaemon_A5.0.1_lambda_parameter_false_positive
+    connection_->StartReceive([this]() { this->ReleaseApplication(); },
+                              [this](amsr::someipd_app_protocol::internal::MessageType const& message_type,
+                                     SpecificHeaderView& specific_header_view,
+                                     vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> memory_buffer) {
+                                this->OnMessage(message_type, specific_header_view, std::move(memory_buffer));
+                              });
+  }
+
+// ApplicationConnection:
+void ApplicationConnection::StartReceive(DisconnectionFunction&& disconnection_function,
+                                         ReceptionFunction&& reception_function) {
+  disconnection_function_ = std::move(disconnection_function);
+  reception_function_ = std::move(reception_function);
+  ReceiveAsync();
+}
+// 其中的ReceiveAsync()实现（ProcessReceivedMessage调用中调到了StartReceive时所注册的函数reception_function_）：
+void ApplicationConnection::ReceiveAsync() {
+  // PTP-B-SomeIpDaemon-ApplicationConnection_ReceiveAsync
+  // VECTOR NC AutosarC++17_10-A5.0.1: MD_SomeIpDaemon_A5.0.1_lambda_parameter_false_positive
+  ara::core::Result<void> const receive_result{connection_->ReceiveAsync(
+      [this](std::size_t const& size) { return OnMessageAvailable(size); },
+      [this](ara::core::Result<std::size_t>&& result) {
+        if (result.HasValue()) {
+          OnMessageReceived(result.Value());
+          // Trigger receive for the next incoming message on this connection.
+          ReceiveAsync();
+        } else if (result.Error() == osabstraction::OsabErrc::kDisconnected) {
+          Disconnect();
+        } else {
+          ara::core::StringView const error_msg{result.Error().Message()};
+          // VECTOR NC AutosarC++17_10-A5.1.8: MD_SomeIpDaemon_AutosarC++17_10-A5.1.8_nested_lambda
+          logger_.LogError([&error_msg](::ara::log::LogStream& s) { s << "Error: " << error_msg; },
+                           static_cast<char const*>(__func__), __LINE__);
+          Disconnect();
+        }
+      })};
+
+  if (!receive_result.HasValue()) {
+    ara::core::StringView const error_msg{receive_result.Error().Message()};
+    logger_.LogError([&error_msg](::ara::log::LogStream& s) { s << "Error: " << error_msg; },
+                     static_cast<char const*>(__func__), __LINE__);
+    Disconnect();
+  }
+  // PTP-E-SomeIpDaemon-ApplicationConnection_ReceiveAsync
+}
+
+// class Application: 
+  void OnMessage(amsr::someipd_app_protocol::internal::MessageType const& message_type,
+                 SpecificHeaderView& specific_header_view,
+                 vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> memory_buffer) {
+    logger_.LogVerbose(
+        [&message_type, &memory_buffer](ara::log::LogStream& s) {
+          vac::memory::MemoryBuffer<osabstraction::io::MutableIOBuffer>::size_type const size{memory_buffer->size()};
+          ara::log::LogHex32 const message_type_hex{
+              ara::log::HexFormat(static_cast<MessageTypeUnderlyingType>(message_type))};
+
+          s << "Received a new message of type 0x" << message_type_hex << " and of payload length " << size;
+        },
+        static_cast<char const*>(__func__), __LINE__);
+
+    if (amsr::someipd_app_protocol::internal::IsRoutingSomeIpMessage(message_type)) {
+      // PTP-B-SomeIpDaemon-Application_OnRoutingSomeIpMessage
+      receiving_routing_controller_.OnRoutingSomeIpMessage(specific_header_view, std::move(memory_buffer));
+      // PTP-E-SomeIpDaemon-Application_OnRoutingSomeIpMessage
+    } else if (amsr::someipd_app_protocol::internal::IsRoutingPduMessage(message_type)) {
+      // PTP-B-SomeIpDaemon-Application_OnRoutingPduMessage
+      receiving_routing_controller_.OnRoutingPduMessage(specific_header_view, std::move(memory_buffer));
+      // PTP-E-SomeIpDaemon-Application_OnRoutingPduMessage
+    } else {  // Control message
+      // PTP-B-SomeIpDaemon-Application_OnControlMessage
+      command_controller_.OnControlMessage(message_type, specific_header_view, std::move(memory_buffer));
+      // PTP-E-SomeIpDaemon-Application_OnControlMessage
+    }
+  }
+
+// class CommandController
+  void OnControlMessage(amsr::someipd_app_protocol::internal::MessageType const& message_type,
+                        ControlHeaderView& specific_header_view,
+                        vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> payload_buffer) {
+    // PTP-B-SomeIpDaemon-CommandController_OnControlMessage
+    ControlMessageReturnCode validate_control_header_return_code{ControlMessageReturnCode::kNotOk};
+    response_packet_.reset(nullptr);
+
+    // Deserialize request control header.
+    Reader reader{specific_header_view};
+    ara::core::Optional<amsr::someipd_app_protocol::internal::ControlMessageHeader> const control_header{
+        amsr::someipd_app_protocol::internal::DeserializeControlMessageHeader(reader)};
+
+    validate_control_header_return_code =
+        ValidateControlHeaderAndForwardToHandler(message_type, control_header, payload_buffer);
+
+    SendResponseToSomeIpDaemonClient(message_type, validate_control_header_return_code);
+    // PTP-E-SomeIpDaemon-CommandController_OnControlMessage
+  }
+
+// class CommandController:  
+auto ValidateControlHeaderAndForwardToHandler(
+      amsr::someipd_app_protocol::internal::MessageType const& message_type,
+      ara::core::Optional<amsr::someipd_app_protocol::internal::ControlMessageHeader> control_header,
+      vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer>& payload_buffer) -> ControlMessageReturnCode {
+    logger_.LogVerbose(static_cast<char const*>(__func__), __LINE__);
+    ControlMessageReturnCode return_code{ControlMessageReturnCode::kNotOk};
+
+    // Validate control header.
+    if (control_header.has_value() && (control_header->return_code_ == ControlMessageReturnCode::kOk)) {
+      // Forward the message to the corresponding handler.
+      // The handler will deserialize the payload, do the required logic, serialize the response payload and return the
+      // return code.
+      using amsr::someipd_app_protocol::internal::MessageType;
+      std::map<MessageType, std::function<void()>> function_map{
+          {MessageType::kReleaseService,
+           [this, &return_code, &payload_buffer] { return_code = ReleaseServiceHandler(std::move(payload_buffer)); }},
+          {MessageType::kOfferService,
+           [this, &return_code, &payload_buffer] { return_code = OfferServiceHandler(std::move(payload_buffer)); }},
+          {MessageType::kStopOfferService,
+           [this, &return_code, &payload_buffer] { return_code = StopOfferServiceHandler(std::move(payload_buffer)); }},
+          {MessageType::kFindService,
+           [this, &return_code, &payload_buffer] { return_code = FindServiceHandler(std::move(payload_buffer)); }},
+          {MessageType::kSubscribeEvent,
+           [this, &return_code, &payload_buffer] { return_code = SubscribeEventHandler(std::move(payload_buffer)); }},
+          {MessageType::kUnsubscribeEvent,
+           [this, &return_code, &payload_buffer] { return_code = UnsubscribeEventHandler(std::move(payload_buffer)); }},
+          {MessageType::kRequestService,
+           [this, &return_code, &payload_buffer] { return_code = RequestServiceHandler(std::move(payload_buffer)); }},
+          {MessageType::kStartServiceDiscovery,
+           [this, &return_code, &payload_buffer] {
+             return_code = StartServiceDiscoveryHandler(std::move(payload_buffer));
+           }},
+          {MessageType::kStopServiceDiscovery,
+           [this, &return_code, &payload_buffer] {
+             return_code = StopServiceDiscoveryHandler(std::move(payload_buffer));
+           }},
+      };
+
+      auto const iter = function_map.find(message_type);
+
+      if (iter != function_map.end()) {
+        iter->second();
+      } else {
+        logger_.LogError(
+            [&message_type](ara::log::LogStream& s) {
+              s << "Unknown control message type 0x"
+                << ara::log::HexFormat(static_cast<MessageTypeUnderlyingType>(message_type));
+            },
+            static_cast<char const*>(__func__), __LINE__);
+        return_code = ControlMessageReturnCode::kUnknownMessageType;
+      }
+    } else {
+      if (control_header.has_value()) {
+        logger_.LogError(
+            [unknown_ret_code = control_header.value().return_code_](ara::log::LogStream& s) {
+              s << "Unexpected return code for command request: 0x"
+                << ara::log::HexFormat(static_cast<ControlMessageReturnCodeUnderlyingType>(unknown_ret_code));
+            },
+            static_cast<char const*>(__func__), __LINE__);
+      } else {
+        logger_.LogError(
+            [](ara::log::LogStream& s) {
+              s << "Unexpected return code for command request: Header deserialization failed.";
+            },
+            static_cast<char const*>(__func__), __LINE__);
+      }
+      return_code = ControlMessageReturnCode::kMalformedMessage;
+    }
+    return return_code;
+  }
+
+// CommandController
+  ControlMessageReturnCode UnsubscribeEventHandler(
+      vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> payload_buffer) noexcept {
+    logger_.LogVerbose(static_cast<char const*>(__func__), __LINE__);
+
+    ControlMessageReturnCode result{ControlMessageReturnCode::kOk};
+
+    // Verify payload
+    if ((payload_buffer != nullptr) && (payload_buffer->size() > 0)) {
+      // Deserialize Payload
+      MemoryBufferView packet_view{payload_buffer->GetView(0U)};
+      // VECTOR NL AutosarC++17_10-M5.2.8: MD_SomeIpDaemon_AutosarC++17_10-M5.2.8_conversion_void_int_prt
+      Reader::BufferView const buffer_view{static_cast<Reader::BufferView::pointer>(packet_view[0U].base_pointer),
+                                           packet_view[0U].size};
+      Reader reader{buffer_view};
+
+      ara::core::Optional<amsr::someipd_app_protocol::internal::EventControlMessagePayload> request{
+          someipd_app_protocol::DeserializeServiceIdInstanceIdMajorVersionMinorVersionEventIdClientId(reader)};
+
+      // Verify deserialized payload
+      if (request.has_value()) {
+        result = application_commands_wrapper_.UnsubscribeEvent(request.value());
+      } else {
+        logger_.LogError(
+            [received_length = payload_buffer->size()](ara::log::LogStream& s) {
+              s << kErrorMsgRequestCommandUnexpectedPayloadLength << ". Expected length: "
+                << amsr::someipd_app_protocol::internal::kControlMessageUnsubscribeEventRequestPayloadLength
+                << ", received length: " << received_length;
+            },
+            static_cast<char const*>(__func__), __LINE__);
+        result = ControlMessageReturnCode::kMalformedMessage;
+      }
+    } else {
+      logger_.LogError([](ara::log::LogStream& s) { s << kErrorMsgRequestCommandNullPayload; },
+                       static_cast<char const*>(__func__), __LINE__);
+      result = ControlMessageReturnCode::kMalformedMessage;
+    }
+
+    return result;
+  }
+
+// ApplicationCommandsWrapper:
+  ControlMessageReturnCode UnsubscribeEvent(
+      amsr::someipd_app_protocol::internal::EventControlMessagePayload const& request) {
+    ControlMessageReturnCode result{ControlMessageReturnCode::kOk};
+
+    bool const success{application_client_handler_.UnsubscribeEvent(request.service_id_, request.instance_id_,
+                                                                    request.event_id_, request.client_id_)};
+    if (!success) {
+      result = ControlMessageReturnCode::kNotOk;
+    }
+
+    return result;
+  }
+
+// class ApplicationClientHandler:
+  bool UnsubscribeEvent(amsr::someip_protocol::internal::ServiceId const service_id,
+                        amsr::someip_protocol::internal::InstanceId const instance_id,
+                        amsr::someip_protocol::internal::EventId const event_id,
+                        amsr::someip_protocol::internal::ClientId const client_id) override {
+    logger_.LogDebug(
+        [&service_id, &instance_id, &event_id, &client_id](ara::log::LogStream& s) noexcept {
+          s << "Unsubscribing to event (ServiceId: 0x";
+          s << ara::log::HexFormat(service_id);
+          s << ", InstanceId: 0x";
+          s << ara::log::HexFormat(instance_id);
+          s << ", EventId: ";
+          s << logging::LoggingUtilities::EventIdToString(event_id);
+          s << ", ClientId: ";
+          s << ara::log::HexFormat(client_id);
+          s << ").";
+        },
+        static_cast<char const*>(__func__), __LINE__);
+
+    bool result{false};
+
+    configuration::types::LocalClientId const local_client_id{
+        configuration::types::SomeIpServiceInstanceId{
+            configuration::types::SomeIpServiceInterfaceDeploymentId{
+                service_id, configuration::types::SomeIpServiceVersion{0U, 0U}},
+            instance_id},
+        client_id};
+    LocalClientMap const& local_clients_const_ref{local_clients_};
+    typename LocalClientMap::const_iterator const local_client_it{local_clients_const_ref.find(local_client_id)};
+    if (local_client_it != local_clients_const_ref.cend()) {
+      local_client_it->second->UnsubscribeEvent(event_id, sending_routing_controller_);
+      result = true;
+    } else {
+      logger_.LogError(
+          [&service_id, &instance_id, &client_id, &event_id](ara::log::LogStream& s) noexcept {
+            s << "Can't unsubscribe event with (ServiceId: 0x";
+            s << ara::log::HexFormat(service_id);
+            s << ", InstanceId: 0x";
+            s << ara::log::HexFormat(instance_id);
+            s << ", EventId: ";
+            s << logging::LoggingUtilities::EventIdToString(event_id);
+            s << ", ClientId: 0x";
+            s << ara::log::HexFormat(client_id);
+            s << "). Local client not found.";
+          },
+          static_cast<char const*>(__func__), __LINE__);
+    }
+
+    return result;
+  }
+
+
+
+EventSubscriptionStateObserverHandler
+
+  void UnsubscribeEvent(someip_protocol::internal::EventId const event_id,
+                        EventObserverPtr const observer) noexcept override {
+    // Find corresponding eventgroup
+    typename EventgroupMap::iterator const eventgroup_it{FindEventgroup(event_id)};
+
+    if (eventgroup_it != eventgroup_map_.end()) {
+      // Unregister observer
+      UnRegisterEventSubscriptionStateObserver(event_id, observer);
+
+      eventgroup_it->second.Unsubscribe(event_id);
+      if (!communication_only_) {
+        someip_protocol::internal::EventgroupId const eventgroup_id{eventgroup_it->first};
+        eventgroup_manager_->OnUnsubscribe(eventgroup_id);
+
+        if (eventgroup_manager_->GetEventgroupSubscribersCount(eventgroup_id) == 0) {
+          // Cleanup corresponding field cache.
+          packet_router_.InvalidateFieldCacheTableEntriesGroup(service_deployment_.deployment_id, instance_id_,
+                                                               eventgroup_id);
+        }
+      }
+    } else {
+      logger_.LogError(
+          [event_id](ara::log::LogStream& s) {
+            s << "No eventgroup found for event id";
+            s << logging::LoggingUtilities::EventIdToString(event_id);
+          },
+          static_cast<char const*>(__func__), __LINE__);
+    }
+  }
+
+
+```
 
 
 

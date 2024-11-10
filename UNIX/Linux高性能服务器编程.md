@@ -1269,7 +1269,7 @@ int main(int argc, char*argv[])
 
 
 
-### 9.6 I/O复用的高级应用二：聊天室程序
+## 9.6 I/O复用的高级应用二：聊天室程序
 像ssh这样的登录服务通常要同时处理`网络连接`和`用户输入`，这也可以使用`I/O复用`来实现。
 本节我们以poll为例实现一个简单的聊天室程序，以阐述如何使用I/O复用技术来同时处理网络连接和用户输入。
 该聊天室程序能让所有用户同时在线群聊，它分为客户端和服务器两个部分。
@@ -1281,9 +1281,108 @@ int main(int argc, char*argv[])
 ### 9.6.1 客户端
 客户端程序使用poll同时监听用户输入和网络连接，并利用`splice`函数将用户输入内容直接定向到网络连接上以发送之，从而实现数据零拷贝，提高了程序执行效率。
 客户端程序如代码清单9-6所示。
-
 ```c
+// #define_GNU_SOURCE 1    // 诉编译器包含GNU特定的扩展功能和库
+#include<sys/types.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include<assert.h>
+#include<stdio.h>
+#include<unistd.h>
+#include<string.h>
+#include<stdlib.h>
+#include<poll.h>
+#include<fcntl.h>
 
+#define BUFFER_SIZE 64
+
+int main(int argc, char*argv[])
+{
+    if(argc <= 2)
+    {
+        printf("usage:%s ip_address port_number\n", basename(argv[0]));
+        return 1;
+    }
+
+    const char*ip = argv[1];
+    int port = atoi(argv[2]);
+    struct sockaddr_in server_address;
+    bzero(&server_address, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    inet_pton(AF_INET, ip, &server_address.sin_addr);
+    server_address.sin_port = htons(port);
+
+    int sockfd = socket(PF_INET, SOCK_STREAM, 0);
+    assert(sockfd >= 0);
+    if(connect(sockfd, (struct sockaddr*)&server_address, sizeof(server_address)) < 0)
+    {
+        printf("connection failed\n");
+        close(sockfd);
+        return 1;
+    }
+    pollfd fds[2];
+    /*  注册文件描述符0（标准输入）和文件描述符sockfd上的可读事件   */
+    fds[0].fd = 0;
+    fds[0].events = POLLIN;
+    fds[0].revents = 0;
+    fds[1].fd = sockfd;
+    fds[1].events = POLLIN | POLLRDHUP;
+    fds[1].revents = 0;
+    char read_buf[BUFFER_SIZE];
+    int pipefd[2];
+    int ret = pipe(pipefd); // 创建管道，传入数组，0是读端，1是写端（管道就是这么使用的）
+    assert(ret != -1);
+    while(1)
+    {
+        ret = poll(fds, 2, -1);     // ！！！
+        if(ret < 0)
+        {
+            printf("poll failure\n");
+            break;
+        }
+        if(fds[1].revents & POLLRDHUP)  // server连接关闭
+        {
+            printf("server close the connection\n");
+            break;
+        }
+        else if(fds[1].revents & POLLIN)    // 连接socket出现可读事件
+        {
+            memset(read_buf,'\0', BUFFER_SIZE);
+            recv(fds[1].fd,read_buf, BUFFER_SIZE - 1, 0);   // 其他的客户端发了消息，一律都能收到
+            printf("%s\n", read_buf);
+        }
+        if(fds[0].revents & POLLIN)     // 标注输入出现可读事件
+        {
+            //  splice：将数据从一个文件描述符直接传输到另一个文件描述符，而不需要经过用户空间的缓冲区
+            /*
+                splice 是一个系统调用，用于在两个文件描述符之间直接传输数据，而不需要经过用户空间。
+                参数解释：
+                    0：源文件描述符，这里是标准输入（通常是键盘输入）。
+                    NULL：源文件描述符的偏移量指针，NULL 表示由内核自动管理偏移量。
+                    pipefd[1]：目标文件描述符，这里是管道的写端。
+                    NULL：目标文件描述符的偏移量指针，NULL 表示由内核自动管理偏移量。
+                    32768：要传输的最大字节数。
+                    SPLICE_F_MORE：指示还有更多数据将被发送。       ？？？内核会优化缓冲区管理和数据传输过程，以提高性能
+                    SPLICE_F_MOVE：指示数据应尽可能地移动而不是复制。？？？内核具体是咋移动数据的？
+            */
+            ret = splice(0, NULL, pipefd[1], NULL, 32768, SPLICE_F_MORE | SPLICE_F_MOVE);   // 将标准输入的数据传输到管道
+            /*
+                参数解释：
+                    pipefd[0]：源文件描述符，这里是管道的读端。
+                    NULL：源文件描述符的偏移量指针，NULL 表示由内核自动管理偏移量。
+                    sockfd：目标文件描述符，这里是 socket。
+                    NULL：目标文件描述符的偏移量指针，NULL 表示由内核自动管理偏移量。
+                    32768：要传输的最大字节数。
+                    SPLICE_F_MORE：指示还有更多数据将被发送。
+                    SPLICE_F_MOVE：指示数据应尽可能地移动而不是复制。
+            */
+            ret = splice(pipefd[0], NULL, sockfd, NULL, 32768, SPLICE_F_MORE | SPLICE_F_MOVE);  // 把数据从管道传输到socket
+        }
+    }
+    close(sockfd);
+    return 0;
+}
 ```
 
 
@@ -1292,10 +1391,203 @@ int main(int argc, char*argv[])
 服务器程序使用poll同时管理监听socket和连接socket，并且使用牺牲空间换取时间的策略来提高服务器性能，如代码清单9-7所示。
 代码清单9-7　聊天室服务器程序
 ```c
+// #define_GNU_SOURCE 1
+#include<sys/types.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
 
+#include<assert.h>
+#include<stdio.h>
+#include<unistd.h>
+#include<errno.h>
+#include<string.h>
+#include<fcntl.h>
+#include<stdlib.h>
+#include<poll.h>
 
+#define USER_LIMIT 5    /*最大用户数量*/
+#define BUFFER_SIZE 64  /*读缓冲区的大小*/
 
+#define FD_LIMIT 65535  /*文件描述符数量限制*/
 
+/*  客户数据：客户端socket地址、待写到客户端的数据的位置、从客户端读入的数据    */
+struct client_data
+{
+    sockaddr_in address;
+    char* write_buf;
+    char buf[BUFFER_SIZE];
+};
+
+int setnonblocking(int fd)
+{
+    int old_option = fcntl(fd, F_GETFL);
+    int new_option = old_option | O_NONBLOCK;
+    fcntl(fd, F_SETFL, new_option);
+    return old_option;
+}
+
+int main(int argc, char*argv[])
+{
+    if(argc <= 2)
+    {
+        printf("usage:%s ip_address port_number\n", basename(argv[0]));
+        return 1;
+    }
+
+    const char*ip = argv[1];
+    int port = atoi(argv[2]);
+    int ret = 0;
+    struct sockaddr_in address;
+    bzero(&address, sizeof(address));
+    address.sin_family = AF_INET;
+    inet_pton(AF_INET, ip, &address.sin_addr);
+    address.sin_port = htons(port);
+
+    int listenfd = socket(PF_INET, SOCK_STREAM, 0);
+    assert(listenfd >= 0);
+
+    ret = bind(listenfd, (struct sockaddr*)&address, sizeof(address));
+    assert(ret != -1);
+    ret = listen(listenfd, 5);
+    assert(ret != -1);
+    /*
+        创建users数组，分配 FD_LIMIT 个client_data对象。可以预期：每个可能的socket连接都可以获得一个这样的对象，
+        并且socket的值可以直接用来索引（作为数组的下标）socket连接对应的client_data对象，
+        这是将socket和客户数据关联的简单而高效的方式
+    */
+    client_data* users = new client_data[FD_LIMIT];     // FD_LIMIT = 65535
+    /*尽管我们分配了足够多的client_data对象，但为了提高poll的性能，仍然有必要限制用户的数量*/
+    pollfd fds[USER_LIMIT + 1];
+    int user_counter = 0;
+    for(int i = 1; i <= USER_LIMIT; ++i)
+    {
+        fds[i].fd = -1;
+        fds[i].events = 0;
+    }
+    fds[0].fd = listenfd;
+    fds[0].events = POLLIN|POLLERR;
+    fds[0].revents = 0;
+    while(1)
+    {
+        ret = poll(fds, user_counter + 1, -1);  // pollfd类型，数组元素数量，超时时间
+        if(ret < 0)
+        {
+            printf("poll failure\n");
+            break;
+        }
+        for(int i = 0; i < user_counter + 1; ++i)
+        {
+            if( (fds[i].fd == listenfd) && (fds[i].revents & POLLIN) )  // 监听socket上，可读事件发生
+            {
+                struct sockaddr_in client_address;
+                socklen_t client_addrlength = sizeof(client_address);
+                int connfd = accept(listenfd, (struct sockaddr*)&client_address, &client_addrlength);
+                if(connfd < 0)
+                {
+                    printf("errno is:%d\n", errno);
+                    continue;
+                }
+                /*如果请求太多，则关闭新到的连接*/
+                if(user_counter >= USER_LIMIT)
+                {
+                    const char* info = "too many users\n";
+                    printf("%s", info);
+                    send(connfd, info, strlen(info), 0);
+                    close(connfd);
+                    continue;
+                }
+                /*
+                    对于新的连接，同时修改fds和users数组。
+                    前文已经提到，users[connfd]对应于新连接文件描述符connfd的客户数据
+                */
+                user_counter++;
+
+                users[connfd].address = client_address;
+                setnonblocking(connfd);     // 设置新的连接socket为非阻塞模式
+                fds[user_counter].fd = connfd;  // 因为传给poll的是数组指针，所以直接修改fds数组
+                fds[user_counter].events = POLLIN | POLLRDHUP | POLLERR;
+                fds[user_counter].revents = 0;
+                printf("comes a new user, now have%d users\n", user_counter);
+            }
+            else if(fds[i].revents & POLLERR)   // 监听到错误
+            {
+                printf("get an error from%d\n", fds[i].fd);
+                char errors[100];
+                memset(errors, '\0', 100);
+                socklen_t length = sizeof(errors);
+                if(getsockopt(fds[i].fd, SOL_SOCKET, SO_ERROR, &errors, &length) < 0)   // 得到错误状态
+                {
+                    printf("get socket option failed\n");
+                }
+                continue;
+            }
+            else if(fds[i].revents & POLLRDHUP) // 连接socket发生连接关闭
+            {
+                /*如果客户端关闭连接，则服务器也关闭对应的连接，并将用户总数减1*/
+                users[fds[i].fd] = users[fds[user_counter].fd];     // ？？？将最后的元素复制到当前这个关闭连接的元素的位置
+                close(fds[i].fd);
+                fds[i] = fds[user_counter];
+                i--;
+                user_counter--;
+                printf("a client left\n");
+            }
+            else if(fds[i].revents & POLLIN)    // 连接socket发生可读事件
+            {
+                int connfd = fds[i].fd;
+                memset(users[connfd].buf, '\0', BUFFER_SIZE);
+                ret = recv(connfd, users[connfd].buf, BUFFER_SIZE - 1, 0);
+                printf("get%d bytes of client data%s from%d\n", ret, users[connfd].buf, connfd);
+                if(ret < 0)
+                {
+                    /*如果读操作出错，则关闭连接*/
+                    if(errno != EAGAIN)
+                    {
+                        close(connfd);
+                        users[fds[i].fd] = users[fds[user_counter].fd];
+                        fds[i] = fds[user_counter];
+                        i--;
+                        user_counter--;
+                    }
+                }
+                else if(ret == 0)
+                {
+
+                }
+                else
+                {
+                    /*如果接收到客户数据，则通知其他socket连接准备写数据    ！！！因为需要实现客户端与客户端之间的通信*/
+                    for(int j = 1; j <= user_counter; ++j)  // 其他的客户端发了消息，一律都要发送
+                    {
+                        if(fds[j].fd == connfd)
+                        {
+                            continue;
+                        }
+                        fds[j].events |= ~POLLIN;
+                        fds[j].events |= POLLOUT;  // 告诉 poll() 函数在下一次调用时检查该文件描述符是否准备好写数据（当缓冲区有空间、连接已建立、非阻塞模式下就可以直接写了）
+                        users[fds[j].fd].write_buf = users[connfd].buf;     // 写数据缓冲
+                    }
+                }
+            }
+            else if(fds[i].revents & POLLOUT)   // 连接socket发生可写事件
+            {
+                int connfd = fds[i].fd;
+                if(!users[connfd].write_buf)
+                {
+                    continue;
+                }
+                ret = send(connfd,users[connfd].write_buf, strlen(users[connfd].write_buf), 0);
+                users[connfd].write_buf = NULL;
+                /*写完数据后需要重新注册fds[i]上的可读事件*/    // 因为写过一次了，等到下次读了数据再次监听可写事件
+                fds[i].events |= ~POLLOUT;
+                fds[i].events |= POLLIN;
+            }
+        }
+    }
+    delete[]users;
+    close(listenfd);
+    return 0;
+}
 ```
 
 
