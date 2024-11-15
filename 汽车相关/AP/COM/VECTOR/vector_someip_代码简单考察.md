@@ -2719,14 +2719,167 @@ void Runtime::InitializeThreadPools() noexcept {
 
 
 
-
-
-
-和skeleton相同，会调用到  **Runtime**  的  **StartBindings**  ()函数
+和skeleton相同，会调用到`Runtime`的`StartBindings()`函数
 ![image.png](https://atlas.pingcode.com/files/public/65363c49b3a56a8dd49b4455/origin-url)
 
-socal这层提供函数`StartFindService()`，用于接收函数对象
+### 理论上，在find service的过程中，包装的回调会被多次调用？？？  `findservice_observers_manager_`是干嘛的？（`处理find service job？`）
+PS: 难道是`ServiceInstanceUpdateTask`被触发？？？(` void HandleFindService(::amsr::someip_protocol::internal::ServiceInstance const& service_instance) override {...}`，该函数是`reactor线程`监听到someipd发来的控制消息而触发的
+`ScheduleInitialSnapshotTask`触发时，调用`findservice_observers_manager_.AddObserver()`！！！
+)
 
+socal这层提供函数`StartFindService()`，用于接收回调
+```cpp
+  /*!
+   * \brief Start an asynchronous FindService notification about service updates.
+   * \details The callback handler may be executed even before the return of this function call. Therefore calling
+   *          "StopFindService()" within the callback is then not allowed, because it requires the concrete
+   *          FindServiceHandle returned from this function.
+   * \param[in] handler Gets called upon detection of a matching service. Note that the handles received by this
+   *            callback shall be released before the Runtime is destroyed. I.e. they cannot be stored in variables with
+   *            longer life period than the application's main(). If not followed, it's not guaranteed that the
+   *            communication middleware is shut down properly and may lead to segmentation fault. This param
+   *            cannot be nullptr. Any exception thrown by the callback will lead to a termination through
+   * "std::terminate()". \param[in] instance InstanceIdentifier to be searched. \return FindServiceHandle which is
+   * needed to stop the service availability monitoring and related firing of the given handler.
+   *
+   * \pre SOME/IP daemon must be running (SOME/IP binding only).
+   * \pre The instance identifier ( \p instance ) must be configured in the ARXML model.
+   * \pre IAM access must be granted.
+   * \context App
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \vpublic
+   * \synchronous FALSE
+   * \trace SPEC-4980368
+   *
+   * \internal
+   * - Create an InstanceSpecifierLookupTableEntry from \p instance.
+   * - Call ScheduleInitialSnapshotTask() with \p handler and the InstanceSpecifierLookupTableEntry.
+   * - Return the FindServiceHandle that was returned by the call.
+   *
+   * Calls "ara::core::Abort()" if:
+   * - \p handler is "nullptr".
+   *
+   * \endinternal
+   */
+  static ara::com::FindServiceHandle StartFindService(ara::com::FindServiceHandler<HandleType> handler,
+                                                      ara::com::InstanceIdentifier instance) noexcept {
+    if (handler == nullptr) {
+      char const* error_msg{"StartFindService() called with handler=nullptr. Please use a valid handler function."};
+
+      amsr::socal::internal::logging::AraComLogger const logger{
+          amsr::socal::internal::logging::kAraComLoggerContextId,
+          amsr::socal::internal::logging::kAraComLoggerContextDescription, "Proxy"};
+      logger.LogFatal([&error_msg](ara::log::LogStream& s) { s << error_msg; }, __func__, __LINE__);
+
+      ara::core::Abort(error_msg);
+    }
+
+    InstanceSpecifierLookupTableEntry const service_instance{ResolveInstanceSpecifierMapping(instance)};
+    ara::com::FindServiceHandle const result{ScheduleInitialSnapshotTask(handler, {service_instance})};
+
+    return result;
+  }
+```
+`ScheduleInitialSnapshotTask`函数：
+```cpp
+    HandleAndHandler handle{findservice_observers_manager_.AddObserver(GetProxyIdStatic(), service_instances, handler)};
+```
+用于构造`FindServiceHandleAndHandler`对象，把`最外层的包装的回调`传进来了（作为`FindServiceHandleAndHandler`对象的`handler_`成员变量）
+
+
+把回调塞到`InitialSnapshotTask`，然后默认线程池去处理
+`ExecuteFindServiceAndHandler`：
+```cpp
+      handle_.ExecuteFindServiceAndHandler(
+          [](InstanceSpecifierLookupTableEntryContainer const& service_instances)
+              -> ara::com::ServiceHandleContainer<HandleType> { return FindService(service_instances); });
+
+  /*!
+   * \brief     Executes a FindService request and the associated handler (if it is active).
+   * \tparam F  Type of find_service_function lambda function.
+   * \param[in] find_service_function Lambda executing FindService.
+   * \pre -
+   * \context Callback
+   */
+  template <typename F>
+  void ExecuteFindServiceAndHandler(F&& find_service_function) const {
+    std::lock_guard<std::recursive_mutex> const guard(state_->lock_);
+    if (state_->active_) {
+      ara::com::ServiceHandleContainer<HandleType> const handles{find_service_function(handle_.GetServiceInstances())};
+      handler_(handles);
+    }
+  }
+```
+先调用一把`FindService`：底层实现是：
+  根据具体的`binding`调用`FindService()`:
+    查找`proxy_factories_`，如果已经找到(在`ara::core::Initialize()`时构造)，则转发`find service request`给`someipd`，拿到结果，返回给上层
+把`FindService`的结果，作为`最外层的包装的回调`的实参进行调用
+
+  ```cpp
+  /*!
+   * \brief Call binding-specific FindService operation and convert returned InstanceHandles back into HandleTypes.
+   * \param[in] service_instances Container of searched service instances (InstanceSpecifier lookup table entries).
+   * \return Found service instances.
+   * \pre The instance identifier must be valid and must not be malformed.
+   * \context App, Callback
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * Calls "ara::core::Abort()" if:
+   * - SOME/IP binding only:
+   *   If the SOME/IP binding specific instance identifier cannot not be parsed (called within the binding FindService).
+   *
+   * - IPC binding only:
+   *   If instance is not valid (called within the binding FindService).
+   *
+   * - ara::com::IamAccessDeniedException is caught:
+   *   SOME/IP binding only:
+   *   If "FindService()" request is denied by IAM.
+   *
+   * - An unknown exception is caught.
+   * \endinternal
+   */
+  static ara::com::ServiceHandleContainer<HandleType> FindService(
+      InstanceSpecifierLookupTableEntryContainer const& service_instances) noexcept {
+    ara::com::ServiceHandleContainer<HandleType> handles{};
+    try {
+      // Call FindService() of the related binding
+      for (InstanceSpecifierLookupTableEntry const& service_instance : service_instances) {
+        ara::com::ServiceHandleContainer<InstanceHandle> const instance_handles{
+            service_instance.GetBinding()->FindService(
+                kServiceIdentifier, service_instance.GetInstanceIdentifierString(), GetProxyIdStatic())};
+
+        // Convert the instance handles into HandleType objects
+        for (InstanceHandle const& instance_handle : instance_handles) {
+          handles.emplace_back(service_instance.GetInstanceIdentifier(), instance_handle.GetProxyFactory());
+        }
+      }
+    }  // VECTOR Next Line AutosarC++17_10-A15.3.4: MD_SOCAL_AutosarC++17_10-A15.3.4_Caught_exception_is_too_general
+    catch (std::exception const& e) {
+      ::ara::core::Abort(e.what());
+    }
+    // VECTOR NC AutosarC++17_10-A15.3.4: MD_SOCAL_AutosarC++17_10-A15.3.4_Using_catch_all
+    // VECTOR NC AutosarC++17_10-M0.3.1: MD_SOCAL_AutosarC++17_10-M0.3.1_Dead_exception_handler
+    catch (...) {
+      ::ara::core::Abort("Proxy::FindService: Unknown exception.");
+    }
+    return handles;
+  }
+```
+```cpp
+  ara::com::ServiceHandleContainer<::amsr::socal::internal::InstanceHandle> FindService(
+      ::amsr::socal::internal::ProxyId const proxy_id, SomeIpInstanceIdentifier const& instance) override {
+    // ...
+    }
+```
+
+
+
+
+`proxy.h`
 ```cpp
   // VECTOR NC VectorC++-V6.6.1: MD_SOCAL_VectorC++-V6-6-1_AbortWithSingleReturnStatement
   /*!
@@ -3312,12 +3465,13 @@ ara::core::Result<void> SensorDataService::StartClient() {
 
 
 # Proxy Subscribe
-```cpp
-// 用户层调用：ProxyEvent对象的Subscribe()方法
-service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePolicy::kLastN, 1);
-    kLastN: 是EventCacheUpdatePolicy，表示抛弃最近最少使用的，cache为1
+用户层调用：`ProxyEvent`对象的`Subscribe()`方法
+`service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePolicy::kLastN, 1);`
+* kLastN: 是EventCacheUpdatePolicy，表示抛弃最近最少使用的，
+* cache为1
 
-// 其中调用了SomeipProxyEventManager对象的Subscribe()方法
+其中调用了`SomeipProxyEventManager`对象的`Subscribe()`方法
+```cpp
   /*!
    * \brief Subscribe to the event.
    * \details Forward subscribe to EventBackend
@@ -3367,8 +3521,11 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
     return is_subscription_successful;
   }
 
-// 把订阅消息转发给event后端
-// 其操作的重点是创建了ReactorSyncTask任务，执行SubscribeSync()，
+```
+订阅操作的真正实现在`SomeipProxyEventBackend`
+其操作的重点是创建了`ReactorSyncTask`任务，执行`SubscribeSync()`，
+`class SomeipProxyEventBackend`
+```cpp
   /*!
    * \brief       Adds the provided event manager to the subscriber list and sends SubscribeEvent
    *              to the ClientManager if this is the first subscriber.
@@ -3413,15 +3570,21 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
       }
 
       ReactorSyncTask<bool> task{timer_manager_, [this, &subscriber] { return SubscribeSync(subscriber); }, false};
-      if (!task()) {    // ReactorSyncTask的operator()：执行传入的函数
+      if (!task()) {    // 执行用户注册的订阅状态改变回调
         someip_binding_client_manager_.SubscribeEvent(kServiceId, instance_id_, kEventId);
       }
     }
 
     return result;
   }
+```
 
-// operator中的逻辑：
+`ReactorSyncTask的operator()`的逻辑：
+如果runtime层设置为`轮询模式`
+  直接同步执行，执行完了，set promise
+如果不是：
+  启动Runtime创建的Timer的计时：`Start()`，等一段时间(10 s)，再取结果
+```cpp
   /*!
    * \brief       Trigger the task to be executed via the reactor thread and get back its result.
    * \details     The caller will be blocked until the task finishes.
@@ -3452,9 +3615,12 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
     }
     return result_;
   }
+```
 
-
-// ReactorSyncTask会执行以下函数，阻塞直到完成
+`ReactorSyncTask`会执行以下函数，同步完成
+负责
+`SomeipProxyEventBackend`
+```cpp
 /*!
    * \brief       Adds the given subscriber to the subscriber list and notify the updated subscription state if
    *              subscription is completed.
@@ -3496,9 +3662,118 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
   }
 ```
 
-然后调用SOME/IP binding类型的someip_binding_client_manager_的`SubscribeEvent(kServiceId, instance_id_, kEventId)`方法：
+`HandleEventSubscriptionStateUpdate`
+```cpp
+  void HandleEventSubscriptionStateUpdate(ara::com::SubscriptionState const state) override {
+    if (subscribed_) {
+      // If subscribed_, then service_event_ must have been set.
+      assert(service_event_ != nullptr);
 
-**重点是向SomeIP Daemon发送订阅请求**
+      // Notify the subscription handler.
+      service_event_->NotifySubscriptionStateUpdate(state);
+    }
+  }
+```
+-->
+`ProxyEventBase`
+```cpp
+  /*!
+   * \brief Set the new subscription state and schedule a task to notify subscription state update.
+   *        Invocations of the subscription state handler are serialized.
+   * \details Called from "reactor" thread.
+   * \param[in] state The current subscription state of this event.
+   * \pre Subscription state handler is set.
+   * \context Reactor
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous FALSE
+   * \trace SPEC-4980117, SPEC-4980378
+   *
+   * \internal
+   * - Set subscription state to \p state.
+   * - if the subscription state handler is set
+   *   - Get the runtime instance.
+   *   - Add a SubscriptionStateUpdateTask to the threadpool with a pointer to this object as key
+   *
+   * Calls "std::terminate()" if:
+   * - "std::bad_alloc" is caught due to "vac::language::make_unique".
+   * \endinternal
+   */
+  void NotifySubscriptionStateUpdate(ara::com::SubscriptionState const state) noexcept override {
+    // Update current subscription state
+    SetSubscriptionState(state);
+
+    /* Only schedule a subscription state update task, if a SubscriptionStateChangeHandler is set, indicated by
+     * subscription_state_handler_set_ equals true. This is done for performance reasons.*/
+    if (subscription_state_handler_set_.load()) {
+      // Notify the application about updated subscription state
+      ara::com::Runtime& runtime{ara::com::Runtime::getInstance()};
+      ThreadPool& pool{runtime.RequestThreadPoolAssignment()};
+      // VECTOR NC AutosarC++17_10-A0.1.2: MD_SOCAL_AutosarC++17_10-A0.1.2_NotifySubscriptionStateUpdate
+      // VECTOR NC AutosarC++17_10-M0.3.2: MD_SOCAL_AutosarC++17_10-M0.3.2_NotifySubscriptionStateUpdate
+      pool.AddTask(vac::language::make_unique<SubscriptionStateUpdateTask>(*this));
+    }
+  }
+```
+
+？？？理论上会使得someipd增加一个观察者，怎么交互的？
+--> 发控制信号给someipd，然后someipd来维护
+`SubscriptionStateUpdateTask`
+```cpp
+void operator()() override { event_.NotifySubscriptionStateUpdateSync(); }
+```
+
+`ProxyEventBase` : `NotifySubscriptionStateUpdateSync`
+```cpp
+  /*!
+   * \brief Called upon event subscription state update (internal use only)
+   * \details     Called from the the Default Thread Pool Worker Thread.
+   * \pre -
+   * \context     Callback
+   * \threadsafe  FALSE
+   * \reentrant   FALSE
+   * \synchronous TRUE
+   *
+   * \internal
+   * - Load subscription state.
+   * - If state differs from latest notified subscription state
+   *   - Set latest notified subscription state to be the subscription state.
+   *   - If new subscription state handler is changed
+   *     - Set the subscription state handler to the new subscription state handler.
+   *     - Set the change flag in new_subscription_state_handler_pair_ to false.
+   *   - If the subscription state handler is still registered
+   *     - Call subscription state handler with the subscription state.
+   * \endinternal
+   */
+  void NotifySubscriptionStateUpdateSync() {
+    ara::com::SubscriptionState const notified_state{subscription_state_.load()};
+
+    std::lock_guard<std::recursive_mutex> const guard{subscription_state_handler_lock_};
+
+    if (notified_state != latest_notified_subscription_state_) {
+      latest_notified_subscription_state_ = notified_state;
+
+      // For performance reason we copy handler only if it is changed since last call
+      if (new_subscription_state_handler_pair_.first) {
+        subscription_state_handler_ = new_subscription_state_handler_pair_.second;
+        new_subscription_state_handler_pair_.first = false;
+      }
+
+      // Notify application only if handler is still registered.
+      if (subscription_state_handler_ != nullptr) {
+        /* Do not use change handler after call to "OnChange()".
+           Due to recursive mutex, the handler could replace itself. */
+        subscription_state_handler_(notified_state);
+      }
+    }
+  }
+```
+
+
+
+然后调用`AraComSomeIpBindingClientManager`类型的`someip_binding_client_manager_`的`SubscribeEvent(kServiceId, instance_id_, kEventId)`：
+
+`重点是向SomeIP Daemon发送订阅请求`
 ```cpp
 /*!
    * \brief       Lets the SOME/IP binding know that a proxy wishes to receive an event of a service instance.
@@ -3523,7 +3798,7 @@ service1_proxy_->StartApplicationEvent1.Subscribe(ara::com::EventCacheUpdatePoli
                       ::amsr::someip_protocol::internal::InstanceId const instance_id,
                       ::amsr::someip_protocol::internal::EventId const event_id) override {
     ::amsr::someip_daemon_client::internal::ControlMessageReturnCode const return_code{
-        someip_posix_.SubscribeEvent(service_id, instance_id, event_id)};
+        someip_posix_.SubscribeEvent(service_id, instance_id, event_id)};   // 使用IPC给somiepd发消息
     switch (return_code) {
       case ::amsr::someip_daemon_client::internal::ControlMessageReturnCode::kOk: {
         // event subscription successful. No more actions necessary.
@@ -7517,8 +7792,7 @@ auto ValidateControlHeaderAndForwardToHandler(
 
 
 
-EventSubscriptionStateObserverHandler
-
+// class EventSubscriptionStateObserverHandler:
   void UnsubscribeEvent(someip_protocol::internal::EventId const event_id,
                         EventObserverPtr const observer) noexcept override {
     // Find corresponding eventgroup

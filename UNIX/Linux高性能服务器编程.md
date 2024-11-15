@@ -608,6 +608,28 @@ sendfile成功时返回传输的字节数，失败则返回-1并设置errno。
 
 
 
+# 第7章 Linux服务器程序规范
+除了网络通信外，服务器程序通常还必须考虑许多其他细节问题。
+这些细节问题涉及面广且零碎，而且基本上是模板式的，所以我们称之为`服务器程序规范`。比如：
+* Linux服务器程序一般以后台进程形式运行。
+    后台进程又称`守护进程（daemon）`。
+    它没有控制终端，因而也不会意外接收到用户输入。守护进程的父进程通常是`init进程（PID为1的进程）`。
+* Linux服务器程序通常有一套`日志系统`，它至少能输出日志到文件，有的高级服务器还能输出日志到`专门的UDP服务器`。
+    大部分后台进程都在`/var/log`目录下拥有自己的日志目录。
+* Linux服务器程序一般以某个`专门的 非root身份运行`。
+    比如`mysqld、httpd、syslogd`等后台进程，分别拥有自己的运行账户`mysql、apache和syslog`。
+* Linux服务器程序通常是`可配置的`。
+    服务器程序通常能处理很多`命令行选项`，如果一次运行的选项太多，则可以用配置文件来管理。
+    绝大多数服务器程序都有配置文件，并存放在/etc目录下。
+比如第4章讨论的squid服务器的配置文件是/`etc/squid3/squid.conf`。
+* Linux服务器进程通常会在启动的时候生成一个`PID文件`并存入`/var/run`目录中，以记录该后台进程的PID。
+    比如syslogd的PID文件是`/var/run/syslogd.pid`。
+* Linux服务器程序通常需要考虑系统资源和限制，以预测自身能承受多大负荷，比如`进程可用文件描述符总数 和 内存总量等`。
+在开始系统地学习网络编程之前，我们将用一章的篇幅来探讨服务器程序的一些主要的规范。
+
+
+
+
 
 
 
@@ -736,11 +758,11 @@ epoll对文件描述符的操作有两种模式：
 `LT模式`是`默认的工作模式`，这种模式下epoll相当于一个效率较高的`poll`。
 当往epoll内核事件表中注册一个文件描述符上的`EPOLLET`事件时，`epoll`将以`ET模式`来操作该文件描述符。`ET模式`是epoll的高效工作模式。
 > 对于采用`LT工作模式`的文件描述符，当epoll_wait检测到其上有事件发生并将此事件通知应用程序后，**应用程序可以不立即处理该事件**。
-    这样，当应用程序下一次调用epoll_wait时，epoll_wait还会再次向应用程序通告此事件，直到该事件被处理。
-> 而对于采用`ET工作模式`的文件描述符，当epoll_wait检测到其上有事件发生并将此事件通知应用程序后，**应用程序必须立即处理该事件**，因为后续的`epoll_wait`调用将不再向应用程序通知这一事件。
-    可见，ET模式在很大程度上降低了同一个epoll事件被重复触发的次数，因此效率要比LT模式高。代码清单9-3体现了LT和ET在工作方式上的差异。
+    这样，当应用程序下一次调用epoll_wait时，epoll_wait还会再次向应用程序通告此事件，直到该事件被处理。（内核如果发现文件描述符上有没有处理完的事件就会一直通知应用程序处理）
+> 而对于采用`ET工作模式`的文件描述符，当epoll_wait检测到其上有事件发生并将此事件通知应用程序后，**应用程序必须立即处理该事件**（不处理的话就忽略了），因为后续的`epoll_wait`调用将不再向应用程序通知这一事件。
+    可见，ET模式在很大程度上降低了同一个epoll事件被重复触发的次数，因此效率要比LT模式高。
 
-
+代码清单9-3体现了LT和ET在工作方式上的差异。
 ```c
 #include<sys/types.h>
 #include<sys/socket.h>
@@ -1584,7 +1606,7 @@ int main(int argc, char*argv[])
             }
         }
     }
-    delete[]users;
+    delete[] users;
     close(listenfd);
     return 0;
 }
@@ -1592,9 +1614,165 @@ int main(int argc, char*argv[])
 
 
 
+## 9.7 I/O复用的高级应用三：同时处理TCP和UDP服务
+至此，我们讨论过的服务器程序都只监听一个端口。
+在实际应用中，有不少服务器程序能`同时监听多个端口`，比如超级服务inetd和android的调试服务adbd。
+**从bind系统调用的参数来看，一个socket只能与一个socket地址绑定，即`一个socket`只能用来监听`一个端口`**。
+因此，服务器如果要同时监听多个端口，就必须创建多个socket，并将它们分别绑定到各个端口上。
+这样一来，服务器程序就需要同时管理多个监听socket，I/O复用技术就有了用武之地。
+另外，即使是同一个端口，如果服务器要同时处理该端口上的TCP和UDP请求，则也需要创建两个不同的socket：一个是`流socket`，另一个是`数据报socket`，并将它们都绑定到该端口上。
+比如代码清单9-8所示的回射服务器就能同时处理一个端口上的TCP和UDP请求。
 
+代码清单9-8　同时处理TCP请求和UDP请求的回射服务器
+```c
+#include<sys/types.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include<assert.h>
 
+#include<stdio.h>
+#include<unistd.h>
+#include<errno.h>
+#include<string.h>
+#include<fcntl.h>
+#include<stdlib.h>
+#include<sys/epoll.h>
+#include<pthread.h>
+#define MAX_EVENT_NUMBER 1024
+#define TCP_BUFFER_SIZE 512
+#define UDP_BUFFER_SIZE 1024
 
+int setnonblocking(int fd)
+{
+    int old_option = fcntl(fd, F_GETFL);
+    int new_option = old_option | O_NONBLOCK;
+    fcntl(fd, F_SETFL, new_option);
+    return old_option;
+}
+
+void addfd(int epollfd, int fd)
+{
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLET;   // 可读事件 / 边缘触发
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+    setnonblocking(fd);
+}
+
+int main(int argc, char*argv[])
+{
+    if(argc <= 2)
+    {
+        printf("usage:%s ip_address port_number\n", basename(argv[0]));
+        return 1;
+    }
+
+    const char*ip = argv[1];
+    int port = atoi(argv[2]);
+    int ret = 0;
+    struct sockaddr_in address;
+    bzero(&address, sizeof(address));
+    address.sin_family = AF_INET;
+    inet_pton(AF_INET, ip, &address.sin_addr);
+    address.sin_port = htons(port);
+    /*创建TCP socket，并将其绑定到端口port上*/
+
+    int listenfd = socket(PF_INET, SOCK_STREAM, 0);
+    assert(listenfd >= 0);
+
+    ret = bind(listenfd, (struct sockaddr*)&address, sizeof(address));
+    assert(ret != -1);
+
+    ret = listen(listenfd, 5);
+    assert(ret != -1);
+
+    /*创建UDP socket，并将其绑定到端口port上*/
+    bzero(&address, sizeof(address));
+    address.sin_family = AF_INET;
+    inet_pton(AF_INET, ip, &address.sin_addr);
+    address.sin_port = htons(port);
+
+    int udpfd = socket(PF_INET, SOCK_DGRAM, 0);
+    assert(udpfd >= 0);
+
+    ret = bind(udpfd, (struct sockaddr*)&address, sizeof(address));
+    assert(ret != -1);
+
+    epoll_event events[MAX_EVENT_NUMBER];
+    int epollfd = epoll_create(5);
+    assert(epollfd != -1);
+    /*注册TCP socket和UDP socket上的可读事件*/
+    addfd(epollfd, listenfd);
+    addfd(epollfd, udpfd);
+    while(1)
+    {
+        int number = epoll_wait(epollfd, events, MAX_EVENT_NUMBER, -1);
+        if(number < 0)
+        {
+            printf("epoll failure\n");
+            break;
+        }
+        for(int i = 0; i < number; i++)
+        {
+            int sockfd = events[i].data.fd;
+            if(sockfd == listenfd)
+            {
+                struct sockaddr_in client_address;
+                socklen_t client_addrlength = sizeof(client_address);
+                int connfd = accept(listenfd, (struct sockaddr*)&client_address, &client_addrlength);
+                addfd(epollfd, connfd);
+            }
+            else if(sockfd == udpfd)
+            {
+                char buf[UDP_BUFFER_SIZE];
+                memset(buf, '\0', UDP_BUFFER_SIZE);
+                struct sockaddr_in client_address;
+                socklen_t client_addrlength = sizeof(client_address);
+                ret = recvfrom(udpfd, buf, UDP_BUFFER_SIZE - 1, 0, (struct sockaddr*)&client_address, &client_addrlength);
+                printf("UDP:    %s", buf);
+                if(ret > 0)
+                {
+                    sendto(udpfd, buf, UDP_BUFFER_SIZE - 1, 0, (struct sockaddr*)&client_address, client_addrlength);
+                }
+            }
+            else if(events[i].events & EPOLLIN)
+            {
+                char buf[TCP_BUFFER_SIZE];
+                while(1)
+                {
+                    memset(buf, '\0', TCP_BUFFER_SIZE);
+                    ret = recv(sockfd, buf, TCP_BUFFER_SIZE - 1, 0);
+                    if(ret < 0)
+                    {
+                        if((errno == EAGAIN)||(errno == EWOULDBLOCK))
+                        {
+                            break;
+                        }
+                        close(sockfd);
+                        break;
+                    }
+                    else if(ret == 0)
+                    {
+                        close(sockfd);
+                    }
+                    else
+                    {
+                        printf("TCP:    %s", buf);
+                        send(sockfd, buf, ret, 0);
+                    }
+                }
+            }
+            else
+            {
+                printf("something else happened\n");
+            }
+        }
+    }
+    close(listenfd);
+    return 0;
+}
+```
 
 
 

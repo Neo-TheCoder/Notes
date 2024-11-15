@@ -2827,6 +2827,23 @@ std::move(r) 的结果是一个 `const Base&&`。
 ```
 
 
+# `std::add_pointer`
+std::add_pointer 是 C++ 标准库中的一个类型转换工具，它属于 `<type_traits>` 头文件的一部分。
+它的主要用途是**将任意类型转换为对应的指针类型**。
+这个工具通常用于元编程和模板编程中，帮助生成正确的指针类型。
+`std::add_pointer<T>::type`会生成一个指向 T 的指针类型。例如：
+`std::add_pointer<int>::type`会生成 int*。
+`std::add_pointer<void>::type`会生成 void*。
+`std::add_pointer<int&>::type`会生成 int*（注意，引用类型会被转换为指针类型）。
+`std::add_pointer<int[5]>::type`会生成 int (*)[5]（指向数组的指针）。
+
+
+
+
+
+
+
+
 
 
 

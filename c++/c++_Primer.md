@@ -3211,7 +3211,7 @@ int TextQuery::QueryResult::static_mem = 1024;  // 这样访问
 
 ### 嵌套类和外层类是相互独立的
 
-## 19.6 union
+## 19.6 `union`
 可以有多个数据成员，但是任意时刻只有一个数据成员可以有值
 当给其中某个成员赋值后，其他成员就变成未定义状态了
 可见，分配给一个union对象的空间至少要能容纳它的最大数据成员
@@ -3222,11 +3222,11 @@ union不能含有引用类型的成员
 
 #### 定义union
 ```cpp
-union Token{
+union Token {
     char cval;
     int ival;
     double dval;
-}
+};
 // Token可以保存以上类型中的一种 
 ```
 
@@ -3244,7 +3244,7 @@ union Token{
 #### 匿名union
 ```cpp
 // 一旦定义了一个匿名union，编译器就会自动为该union创建一个未命名的对象
-union{
+union {
     char cval;
     int ival;
     double dval;
@@ -3258,7 +3258,9 @@ ival = 42;
 
 #### 含有类类型成员的union
 对于自定义类型的成员，想要改变union保存的值比较复杂：
+TODO
 
+## 19.7 局部类
 
 
 
