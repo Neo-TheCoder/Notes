@@ -2723,11 +2723,20 @@ void Runtime::InitializeThreadPools() noexcept {
 ![image.png](https://atlas.pingcode.com/files/public/65363c49b3a56a8dd49b4455/origin-url)
 
 ### 理论上，在find service的过程中，包装的回调会被多次调用？？？  `findservice_observers_manager_`是干嘛的？（`处理find service job？`）
-PS: 难道是`ServiceInstanceUpdateTask`被触发？？？(` void HandleFindService(::amsr::someip_protocol::internal::ServiceInstance const& service_instance) override {...}`，该函数是`reactor线程`监听到someipd发来的控制消息而触发的
+PS: 难道是`ServiceInstanceUpdateTask`被触发？？？（find service先来一把异步的find service，然很再被动监听service的变化？）
+  (` void HandleFindService(::amsr::someip_protocol::internal::ServiceInstance const& service_instance) override {...}`，该函数是`reactor线程`监听到someipd发来的控制消息而触发的
 `ScheduleInitialSnapshotTask`触发时，调用`findservice_observers_manager_.AddObserver()`！！！
+如果service没有成功保活，proxy对象会析构吗？为什么？
+someip_daemon_client层的`ProcessNonSomeIpMessage`：用于处理非SOME/IP类型的消息，也就两种：`kServiceDiscoveryServiceInstanceUpdate`,`kServiceDiscoveryEventSubscriptionState`
 )
 
 socal这层提供函数`StartFindService()`，用于接收回调
+PS: `ara::com::FindServiceHandler<HandleType>`中的`Handler字样`表明是一个函数；
+    `ara::com::FindServiceHandle`是一个存储service信息，提供一些接口/指针的便利玩意儿
+    该函数的形参1的实际类型：`using FindServiceHandler = std::function<void(ServiceHandleContainer<T>)>;`，
+      T是继承自`::amsr::socal::internal::HandleType`的`StartApplicationCmService1_ServiceInterfaceHandleType`
+    查找`Runtime`所维护的`instance_specifier_table_`对象
+`StartFindService`
 ```cpp
   /*!
    * \brief Start an asynchronous FindService notification about service updates.
@@ -2783,18 +2792,56 @@ socal这层提供函数`StartFindService()`，用于接收回调
 ```
 `ScheduleInitialSnapshotTask`函数：
 ```cpp
+  /*!
+   * \brief Register a new observer and schedule execution of a new InitialSnapShot task.
+   * \details The InitialSnapShot will be executed via a dedicated ThreadPool thread.
+   * \param[in] handler The application callback handle to be notified by found service instances.
+   * \param[in] service_instances Container of searched service instances.
+   * \return A FindService handle for the StartFindService request.
+   * \pre -
+   * \context App
+   * \threadsafe FALSE
+   * \reentrant FALSE
+   * \synchronous FALSE
+   *
+   * \internal
+   * Calls "std::terminate()" if:
+   *  - "std::bad_alloc" is thrown from "vac::language::make_unique".
+   * \endinternal
+   */
+  static ara::com::FindServiceHandle ScheduleInitialSnapshotTask(
+      ara::com::FindServiceHandler<HandleType> const& handler,
+      InstanceSpecifierLookupTableEntryContainer const& service_instances) noexcept {
     HandleAndHandler handle{findservice_observers_manager_.AddObserver(GetProxyIdStatic(), service_instances, handler)};
+
+    RuntimeSelected& runtime{RuntimeSelected::getInstance()};
+    ThreadPool& pool = runtime.RequestThreadPoolAssignment();
+    // VECTOR NC AutosarC++17_10-A0.1.2: MD_SOCAL_AutosarC++17_10-A0.1.2_ScheduleInitialSnapshotTask
+    // VECTOR NC AutosarC++17_10-M0.3.2: MD_SOCAL_AutosarC++17_10-M0.3.2_ScheduleInitialSnapshotTask
+    pool.AddTask(vac::language::make_unique<InitialSnapshotTask>(handle));
+
+    return handle.GetHandle();
+  }
 ```
-用于构造`FindServiceHandleAndHandler`对象，把`最外层的包装的回调`传进来了（作为`FindServiceHandleAndHandler`对象的`handler_`成员变量）
+`ScheduleInitialSnapshotTask`返回的结果是`ara::com::FindServiceHandle`类型，一直传递到上层，可以作为实参各种用户层接口：如`StopFindService`
+  `AddObserver()`得到`FindServiceHandleAndHandler<StartApplicationCmService1_ServiceInterfaceHandleType>`对象
+（该对象，既包含service信息，又包含用户层传进来的回调），把`最外层的包装的回调`传进来了（作为`FindServiceHandleAndHandler`对象的`handler_`成员变量）
+把回调塞到`InitialSnapshotTask`，然后`默认线程池`去处理
 
-
-把回调塞到`InitialSnapshotTask`，然后默认线程池去处理
-`ExecuteFindServiceAndHandler`：
+`InitialSnapshotTask`：`void operator()()`
 ```cpp
+    void operator()() override {
+      findservice_observers_manager_.UpdateObservers();
+
       handle_.ExecuteFindServiceAndHandler(
           [](InstanceSpecifierLookupTableEntryContainer const& service_instances)
               -> ara::com::ServiceHandleContainer<HandleType> { return FindService(service_instances); });
+    }
+```
 
+`FindServiceHandleAndHandler<StartApplicationCmService1_ServiceInterfaceHandleType>`类的成员函数：`ExecuteFindServiceAndHandler`：
+    PS: 持有一个`handle_`变量，是`ara::com::FindServiceHandle`类型
+```cpp
   /*!
    * \brief     Executes a FindService request and the associated handler (if it is active).
    * \tparam F  Type of find_service_function lambda function.
@@ -2811,12 +2858,12 @@ socal这层提供函数`StartFindService()`，用于接收回调
     }
   }
 ```
-先调用一把`FindService`：底层实现是：
-  根据具体的`binding`调用`FindService()`:
+1. 先调用一把`find_service_function`（！！！注意，该回调包含`Proxy`类中的静态函数：`FindService`），其实就是`FindService`：底层实现是：
+  根据具体的`binding`调用`FindService()`:当前考虑`someip版本`的实现
     查找`proxy_factories_`，如果已经找到(在`ara::core::Initialize()`时构造)，则转发`find service request`给`someipd`，拿到结果，返回给上层
-把`FindService`的结果，作为`最外层的包装的回调`的实参进行调用
-
-  ```cpp
+2. 把`FindService`的结果，作为`最外层的包装的回调`的实参进行调用
+  通过以上实参（实际上是`InstanceHandle`类型，可提供对proxy factory的指针）可以得到`proxy factory`的指针，从而构造`proxy对象`
+```cpp
   /*!
    * \brief Call binding-specific FindService operation and convert returned InstanceHandles back into HandleTypes.
    * \param[in] service_instances Container of searched service instances (InstanceSpecifier lookup table entries).
@@ -2869,12 +2916,109 @@ socal这层提供函数`StartFindService()`，用于接收回调
     return handles;
   }
 ```
+
+具体binding到someip的`FindService`函数：入参是`proxy_id，instance`，拿着这两块来查找，很好理解
+返回值类型为`InstanceHandle`（！！！该类型只是这两个函数内部使用）
 ```cpp
+  /*!
+   * \brief           Execute a synchronous FindService call.
+   * \param[in]       proxy_id The amsr::socal::internal::ProxyId to search for
+   * \param[in]       instance The SOME/IP instance identifier for which to find a service
+   * \return          A container of found instance handles.
+   * \throws          ara::com::IamAccessDeniedException if FindService request was denied by IAM.
+   * \pre             -
+   * \context         App, Callback
+   * \threadsafe      FALSE
+   * \reentrant       FALSE
+   * \exceptionsafety No side effects.
+   * \vprivate
+   * \synchronous     TRUE
+   *
+   * \internal
+   * - Find its matching proxy factory
+   * - Forward the find service request to the SOME/IP Daemon
+   *   - If the daemon returns kOk
+   *     - Build handles for every found service instances
+   *   - If the daemon returns kFindServiceAccessDenied
+   *     - Throw ara::com::IamAccessDeniedException
+   *   - If the daemon returns kNotConnected
+   *     - Log error
+   *   - For other return values
+   *     - Log generic error
+   * \endinternal
+   */
   ara::com::ServiceHandleContainer<::amsr::socal::internal::InstanceHandle> FindService(
       ::amsr::socal::internal::ProxyId const proxy_id, SomeIpInstanceIdentifier const& instance) override {
-    // ...
+    logger_.LogDebug([](ara::log::LogStream const&) {}, __func__, __LINE__);
+    ara::com::ServiceHandleContainer<::amsr::socal::internal::InstanceHandle> handles{};
+
+    // Find its matching ServiceSomeIpProxyFactory to create the binding-related proxy-part, when the user
+    // creates one proxy instance.
+    ProxyFactoryContainer::iterator const it_begin{proxy_factories_.begin()};
+    ProxyFactoryContainer::iterator const it_end{proxy_factories_.end()};
+    ProxyFactoryContainer::iterator const it{
+        std::find_if(it_begin, it_end, [proxy_id](std::unique_ptr<AraComSomeIpProxyFactoryInterface> const& factory) {
+          return factory->GetProxyId() == proxy_id;
+        })};
+
+    if (it != it_end) {
+      ::amsr::someip_protocol::internal::ServiceId const someip_service_id{it->get()->GetSomeIpServiceId()};
+
+      // Forward the FindService request to the SOME/IP daemon and get currently known service instances.
+      ::amsr::someip_daemon_client::internal::FindServiceResult const find_service_result{
+          someip_posix_.FindService(someip_service_id, instance.GetInstanceId())};
+      ::amsr::someip_daemon_client::internal::ControlMessageReturnCode const return_code{
+          find_service_result.return_code};
+      if (return_code == ::amsr::someip_daemon_client::internal::ControlMessageReturnCode::kOk) {
+        // Build handles for every found service instances
+        for (::amsr::someip_protocol::internal::ServiceInstance const& service_instance :
+             find_service_result.service_instances) {
+          // Create a new InstaceHandle containing
+          // - A string representation of the found service. String representation because the InstanceHandle is an
+          // binding independent object.
+          // - A pointer to a proxy factory used during Proxy construction to create the binding specific 'backend'
+          // object for the service instance.
+          handles.emplace_back(std::to_string(static_cast<std::uint32_t>(service_instance.instance_id_)), (*it).get());
+        }
+      } else if (return_code ==
+                 ::amsr::someip_daemon_client::internal::ControlMessageReturnCode::kFindServiceAccessDenied) {
+        logger_.LogError(
+            [&someip_service_id, &instance](ara::log::LogStream& s) {
+              ::amsr::someip_protocol::internal::InstanceId const instance_id{instance.GetInstanceId()};
+              s << "FindService request (0x" << ara::log::HexFormat(someip_service_id) << ", 0x"
+                << ara::log::HexFormat(instance_id) << ") denied by identity and access management.";
+            },
+            __func__, __LINE__);
+        throw ara::com::IamAccessDeniedException("FindService");
+      } else if (return_code == ::amsr::someip_daemon_client::internal::ControlMessageReturnCode::kNotConnected) {
+        logger_.LogError(
+            [](ara::log::LogStream& s) {
+              s << "Failed to look up service because a connection to the SOME/IP daemon has not been established. "
+                   "Returning an empty container.";
+            },
+            __func__, __LINE__);
+      } else {
+        logger_.LogError(
+            [&return_code](ara::log::LogStream& s) {
+              s << "FindService request failed with return code 0x"
+                << ara::log::HexFormat(
+                       static_cast<std::underlying_type<
+                           ::amsr::someip_daemon_client::internal::ControlMessageReturnCode>::type>(return_code))
+                << ". Returning an empty list of offered service instances.";
+            },
+            __func__, __LINE__);
+      }
     }
+    return handles;
+  }
 ```
+
+
+
+
+
+
+
 
 
 
