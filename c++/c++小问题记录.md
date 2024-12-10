@@ -2839,6 +2839,35 @@ std::add_pointer 是 C++ 标准库中的一个类型转换工具，它属于 `<t
 
 
 
+# `std::dynamic_pointer_cast`
+只适用于`std::shared_ptr`
+将指向`Derived`对象的`std::shared_ptr<Base>`转为指向`std::shared_ptr<Derived>`
+
+
+
+# `std::localtime`
+```c
+#include <ctime>
+
+std::tm* localtime(const std::time_t* time);    // 返回一个指向static变量的指针
+
+struct tm* localtime_r(const time_t* timer, struct tm* buf);  // 使用用户提供的buf存储结果
+
+struct tm* localtime_s(const time_t* restrict timer, struct tm* restrict buf);  // 使用用户提供的buf存储结果，并且提供错误检查
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

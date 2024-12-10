@@ -446,26 +446,27 @@ the same AP infrastructure)
 ### 6.2.2 Finding Services
 代理类提供类（静态）方法来查找与代理类兼容的服务实例。
 由于服务实例有生命周期，其可用性本质上是动态的，因此 ara::com 提供了两种不同的 “FindService ”方法，以方便用户：
-- `StartFindService`是一个类方法，它会`在后台启动一个持续的 “FindService”活动，在服务实例的可用性 发生变化时 通过 给定的回调通知调用者`。
+- `StartFindService`是一个类方法，它会`在后台启动一个持续的 “FindService”活动，在 “服务实例的可用性” 发生变化时 通过 给定的回调通知调用者`。
 - `FindService`是一次性调用，它会返回调用时间点的可用实例。
 
 根据所采用的`instance identifier`方法（参见第 6.1 节），这两种方法有三种不同的重载：
 - 一个使用 `ara::com::InstanceIdentifier`
 - 一个使用 `ara::core::InstanceSpecifier`
-- 一种不使用参数。
+- 一种`不使用参数`。
 
 无参数变量的语义很简单： 查找给定类型的`所有服务`，无论其`绑定方式`和`绑定的具体实例标识符`如何。
 请注意，只有技术绑定才会被用于查找/搜索，这些技术绑定是以 ServiceInterfaceDeployment 的形式在服务实例清单中为相应服务接口配置的。
 请注意，只有技术绑定才能用于查找/搜索，这些技术绑定是以服务接口部署的形式在服务实例清单中为相应服务接口配置的。
 同步一次性变体 FindService 会返回匹配服务实例的句柄容器（见第 6.2.1 小节），如果当前没有匹配的服务实例，则句柄容器也可能为空。
 
-与此相反，`StartFindService`会返回一个`FindServiceHandle`，可以通过调用`StopFindService`来停止正在进行的监控服务实例可用性的后台活动（？？？`StartFindService`到底做什么？）。
-StartFindService 的第一个参数（也是该变体的特定参数）是用户提供的处理函数，其签名如下：
+与此相反，`StartFindService`会返回一个`FindServiceHandle`，可以通过调用`StopFindService`来停止正在进行的监控服务实例可用性的后台活动。
+`StartFindService` 的第一个参数（也是该变体的特定参数）是用户提供的处理函数，其签名如下：
 ```cpp
 using FindServiceHandler = std::function<void(ServiceHandleContainer<T>, FindServiceHandle)>;
 ```
-一旦绑定检测到与调用 StartFindService 时给定的实例条件相匹配的服务实例的可用性发生了变化，它就会调用用户提供的处理程序，并提供最新的可用服务实例句柄列表。
-调用 StartFindService 后，StartFindService 的行为与 FindService 类似，它将使用当前可用的服务实例（也可能是空句柄列表）触发用户提供的处理函数。初始回调触发后，如果初始服务可用性发生变化，它将再次调用提供的处理函数。
+一旦 `绑定`检测到与调用 `StartFindService` 时给定的实例条件相匹配的服务实例的`可用性`（？？？）发生了变化，它就会调用用户提供的处理程序，并提供最新的可用服务实例句柄列表。
+调用 `StartFindService` 后，`StartFindService` 的行为与 `FindService` 类似，它将使用`当前可用的服务实例`（也可能是空句柄列表）触发用户提供的处理函数。
+  初始回调触发后，如果初始服务可用性发生变化，它将再次调用提供的处理函数。
 请注意，ara::com 用户/开发者在用户提供的处理程序中调用 StopFindService 是明确允许的。
 为此，处理程序会明确获取 FindServiceHandle 参数。处理程序不需要重入。
 这意味着绑定实现者必须注意对用户提供的处理程序函数的调用进行按顺序排列。
@@ -475,8 +476,9 @@ using FindServiceHandler = std::function<void(ServiceHandleContainer<T>, FindSer
 
 
 ### 6.2.2.1 Auto Update Proxy instance
-无论使用一次性 FindService 还是 StartFindService变体，在这两种情况下，你都能`获得 一个标识服务实例（可能是远程服务实例）的句柄`，然后再从中`创建代理实例`。
-但是，如果服务实例宕机了，但后来又恢复了，例如，由于生命周期状态发生了变化，会发生什么情况呢？当服务实例再次可用时，服务消费方现有的代理实例还能重新使用吗？
+无论使用一次性 `FindService` 还是 `StartFindService`变体，在这两种情况下，你都能`获得 一个标识服务实例（可能是远程服务实例）的句柄`，然后再从中`创建代理实例`。
+但是，如果服务实例宕机了，但后来又恢复了，例如，由于生命周期状态发生了变化，会发生什么情况呢？
+当服务实例再次可用时，服务消费方现有的代理实例还能重新使用吗？
 好消息是 ara::com 设计团队决定从绑定实现中要求这种重用可能性，因为它能减轻实现服务消费者的典型任务。
 `在基于服务的通信领域，预计在整个系统（如车辆）的生命周期内，服务提供者和消费者实例会由于其自身的生命周期概念而频繁地启动和关闭。`
 `服务提供商和消费者的生命周期在服务提供和服务（再）订阅方面受到监控。`
@@ -488,17 +490,30 @@ Explanation of figure 6.1:
 * T1: The service instance goes down, correctly `notified via service discovery`.
 * T2: A call of a service method on that proxy will lead to a checked exception
 (ara::com::ServiceNotAvailableException), since the targeted service instance of the call does not exist anymore. Correspondingly `GetSubscriptionState()` on any subscribed event will return `kSubscriptionPending` (see also 6.2.3.2) at this point even if the event has been successfully subscribed (kSubscribed) before.
-* T3: The service instance comes up again, `notified via service discovery infrastructure.` The Communication Management at the proxy side will be notified and will `silently update the proxy object instance with a possibly changed transport layer addressing information.`(**比如说，port number发生变化**) This is illustrated in the figure with transport layer part of the proxy, which changed the color from blue to rose. The Binding implementer hint part below discusses this topic more detailed.
+* T3: The service instance comes up again, `notified via service discovery infrastructure.` The Communication Management at the proxy side will be notified and will `silently update the proxy object instance with a possibly changed transport layer addressing information.`(**比如说，`port number`发生变化**) This is illustrated in the figure with transport layer part of the proxy, which changed the color from blue to rose. The Binding implementer hint part below discusses this topic more detailed.
 * T4: Consequently service method calls on that proxy instance will succeed again and GetSubscriptionState() on events which the service consumer had subscribed before, will return kSubscribed again.
+
+图6.1描述了一个服务消费者与服务实例交互的时间线，展示了从正常通信到服务实例中断再到恢复的整个过程。以下是各个时间点的具体解释：
+`T0`: 在这个初始阶段，服务消费者可以成功调用代理上的服务方法，并且如果订阅了事件，调用`GetSubscriptionState()`方法将返回`kSubscribed状态`，表明事件已经成功订阅。
+`T1`: 服务实例在这个时间点宕机，但是通过服务发现机制正确地通知了服务消费者。
+  这意味着系统能够感知到服务实例的不可用，并向相关组件发送通知。
+`T2`: 当尝试调用宕机服务实例的代理上的服务方法时，会抛出一个检查异常`ara::com::ServiceNotAvailable` Exception，因为目标服务实例已不存在。
+  同时，任何之前已成功订阅的事件，在调用`GetSubscriptionState()`时将返回`kSubscriptionPending`状态，这表明订阅处于等待状态，直到服务恢复可用性。
+`T3`: 服务实例重新上线，并通过服务发现基础设施通知所有相关方。
+  此时，代理端的通信管理器会被通知，并自动更新代理对象实例中可能改变的传输层地址信息（例如`端口号`）。
+  这一变化在图中通过代理传输层部分的颜色从蓝色变为粉红色来表示。
+`T4`: 随着服务实例的恢复，对代理实例的服务方法调用将再次成功，对于之前已订阅的事件，调用`GetSubscriptionState()`方法将重新返回`kSubscribed`状态，表示这些事件的订阅状态已恢复正常。
+
+
 
 代理实例的这种便利行为（因为有相应的服务发现机制对service的状态进行通知）使服务消费者的实现者不必：
 - 通过`GetSubscriptionState()`对事件进行轮询，这表明服务实例宕机
-- 重新触发一次性 FindService 以获取新句柄：
+- 重新触发一次性 `FindService()` 以获取新句柄：
 或者是：
-- 注册一个 FindServiceHandler，在服务实例宕机或有新句柄时调用它。
+- 注册一个 `FindServiceHandler`，在服务实例宕机或有新句柄时调用它。
 然后从新句柄重新创建代理实例（并重新执行所需的事件订阅调用）。
 
-此外，如果您已注册了`FindServiceHandler`，那么 绑定实现 必须确保在调用已注册的 FindServiceHandler 之前对现有代理实例进行 `“自动更新”`（使之可用）！
+此外，如果您已注册了`FindServiceHandler`，那么 绑定实现 必须确保在调用已注册的 `FindServiceHandler` 之前对现有代理实例进行 `“自动更新”`（使之可用）！
 这样做的原因是：在调用中给出代理实例的句柄时，应用程序开发人员就可以在 FindServiceHandler 中与现有的代理实例成功交互，从而表明服务实例已重新启动。
 ```cpp
 /**
@@ -506,27 +521,25 @@ Explanation of figure 6.1:
 * initialized during startup
 */
 RadarServiceProxy *myRadarProxy;
-void radarServiceAvailabilityHandler(ServiceHandleContainer<
-  RadarServiceProxy::HandleType> curHandles, FindServiceHandle handle) {
+void radarServiceAvailabilityHandler(ServiceHandleContainer<RadarServiceProxy::HandleType> curHandles, FindServiceHandle handle) {
   for (RadarServiceProxy::HandleType handle : curHandles) {
-      if (handle.GetInstanceId() == myRadarProxy->GetHandle().
-        GetInstanceId()) {
-  /**
-  * This call on the proxy instance shall NOT lead to an exception,
-  * regarding service instance not reachable, since proxy instance
-  * should be already auto updated at this point in time.
-  */
+      if (handle.GetInstanceId() == myRadarProxy->GetHandle().GetInstanceId()) {
+        /**
+        * This call on the proxy instance shall NOT lead to an exception,
+        * regarding service instance not reachable, since proxy instance
+        * should be already auto updated at this point in time.
+        */
         ara::core::Future<Calibrate::Output> out = myRadarProxy->Calibrate("test");
-  // ... do something with out.
+        // ... do something with out.
     }
   }
 }
 ```
 
 AUTOSAR 绑定实现者提示
-对于绑定实现者来说，重要的是要明白，当服务实例的底层传输层寻址发生变化时，现有代理实例的这种 “自动更新 ”也会起作用！
+对于绑定实现者来说，重要的是要明白，当服务实例的底层传输层寻址发生变化时，现有代理实例的这种 `“自动更新 ”`也会起作用！
 这种情况是否会发生，完全取决于传输层绑定的实现！
-例如，如果我们在 代理实例 和 服务实例实施 之间建立了 SOME/IP 网络绑定，那么在服务实例重启后，`服务实例的端口号`可能确实发生了变化。
+例如，如果我们在 `代理实例 和 服务实例实施` 之间建立了 SOME/IP 网络绑定，那么在服务实例重启后，`服务实例的端口号`可能确实发生了变化。
 尽管如此，代理实例的“自动更新”仍将无缝运行！
 如果您还记得前面的讨论（见表 6.2.1 和第 9.3 节），我们在其中给出了一些提示，说明绑定实现者可以/可以在代理句柄实例中嵌入哪些内容，那么您可能会提出这样的问题：它是如何干扰 “自动更新 ”的？
 在`binding/discovery`生成句柄时，服务实例的`初始传输层寻址信息`很可能会被编码到句柄中，以便由此创建的`proxy instance`能够与`service instance`取得联系。

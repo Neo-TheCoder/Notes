@@ -2723,7 +2723,9 @@ void Runtime::InitializeThreadPools() noexcept {
 ![image.png](https://atlas.pingcode.com/files/public/65363c49b3a56a8dd49b4455/origin-url)
 
 ### 理论上，在find service的过程中，包装的回调会被多次调用？？？  `findservice_observers_manager_`是干嘛的？（`处理find service job？`）
-PS: 难道是`ServiceInstanceUpdateTask`被触发？？？（find service先来一把异步的find service，然很再被动监听service的变化？）
+PS: 难道是`ServiceInstanceUpdateTask`被触发？？？
+(`OnServiceInstanceUpdate()` -> `ServiceInstanceUpdateTask::operator()`)
+（find service先来一把异步的find service，然很再被动监听service的变化？）
   (` void HandleFindService(::amsr::someip_protocol::internal::ServiceInstance const& service_instance) override {...}`，该函数是`reactor线程`监听到someipd发来的控制消息而触发的
 `ScheduleInitialSnapshotTask`触发时，调用`findservice_observers_manager_.AddObserver()`！！！
 如果service没有成功保活，proxy对象会析构吗？为什么？
@@ -2736,7 +2738,11 @@ PS: `ara::com::FindServiceHandler<HandleType>`中的`Handler字样`表明是一�
     该函数的形参1的实际类型：`using FindServiceHandler = std::function<void(ServiceHandleContainer<T>)>;`，
       T是继承自`::amsr::socal::internal::HandleType`的`StartApplicationCmService1_ServiceInterfaceHandleType`
     查找`Runtime`所维护的`instance_specifier_table_`对象
-`StartFindService`
+`Proxy`::`StartFindService` 注意，其中有个`查表`操作：根据`InstanceIdentifier`拿到了`InstanceSpecifierLookupTableEntry`
+PS: 这里的`InstanceSpecifierLookupTableEntry`是怎么拿到自己的`BindingInterface* binding_;`的呢？
+  --> 是在`SomeipBindingInitializer`::`RegisterServiceInstances`一路传递过来的
+
+`Proxy`::`StartFindService`
 ```cpp
   /*!
    * \brief Start an asynchronous FindService notification about service updates.
@@ -2824,7 +2830,7 @@ PS: `ara::com::FindServiceHandler<HandleType>`中的`Handler字样`表明是一�
   }
 ```
 `ScheduleInitialSnapshotTask`返回的结果是`ara::com::FindServiceHandle`类型，一直传递到上层，可以作为实参各种用户层接口：如`StopFindService`
-  `AddObserver()`得到`FindServiceHandleAndHandler<StartApplicationCmService1_ServiceInterfaceHandleType>`对象
+  `AddObserver()`得到`FindServiceHandleAndHandler<StartApplicationCmService1_ServiceInterfaceHandleType>`对象，
 （该对象，既包含service信息，又包含用户层传进来的回调），把`最外层的包装的回调`传进来了（作为`FindServiceHandleAndHandler`对象的`handler_`成员变量）
 把回调塞到`InitialSnapshotTask`，然后`默认线程池`去处理
 
@@ -2840,7 +2846,7 @@ PS: `ara::com::FindServiceHandler<HandleType>`中的`Handler字样`表明是一�
 ```
 
 `FindServiceHandleAndHandler<StartApplicationCmService1_ServiceInterfaceHandleType>`类的成员函数：`ExecuteFindServiceAndHandler`：
-    PS: 持有一个`handle_`变量，是`ara::com::FindServiceHandle`类型
+    ！！！PS: `FindServiceHandleAndHandler`对象 持有一个`handle_`变量，是`ara::com::FindServiceHandle`类型
 ```cpp
   /*!
    * \brief     Executes a FindService request and the associated handler (if it is active).
@@ -2859,10 +2865,12 @@ PS: `ara::com::FindServiceHandler<HandleType>`中的`Handler字样`表明是一�
   }
 ```
 1. 先调用一把`find_service_function`（！！！注意，该回调包含`Proxy`类中的静态函数：`FindService`），其实就是`FindService`：底层实现是：
-  根据具体的`binding`调用`FindService()`:当前考虑`someip版本`的实现
+  根据具体的`binding`调用`FindService()`：当前考虑`someip版本`的实现
     查找`proxy_factories_`，如果已经找到(在`ara::core::Initialize()`时构造)，则转发`find service request`给`someipd`，拿到结果，返回给上层
 2. 把`FindService`的结果，作为`最外层的包装的回调`的实参进行调用
   通过以上实参（实际上是`InstanceHandle`类型，可提供对proxy factory的指针）可以得到`proxy factory`的指针，从而构造`proxy对象`
+
+`Proxy`::`FindService`
 ```cpp
   /*!
    * \brief Call binding-specific FindService operation and convert returned InstanceHandles back into HandleTypes.
@@ -2919,6 +2927,7 @@ PS: `ara::com::FindServiceHandler<HandleType>`中的`Handler字样`表明是一�
 
 具体binding到someip的`FindService`函数：入参是`proxy_id，instance`，拿着这两块来查找，很好理解
 返回值类型为`InstanceHandle`（！！！该类型只是这两个函数内部使用）
+`class AraComSomeIpBindingClientManager::FindService`
 ```cpp
   /*!
    * \brief           Execute a synchronous FindService call.
@@ -5460,7 +5469,74 @@ PS: `DeserializeSample`
           std::make_shared<service1::proxy::StartApplicationCmService1_ServiceInterfaceProxy>(service1_handles[0]);
 ```
 
-`StartApplicationCmService1_ServiceInterfaceProxy`的构造
+`StartApplicationCmService1_ServiceInterfaceProxy`的构造：
+？？？咋构造的？派生类工厂的指针是怎么被传到handle的？？？ ---> `AraComSomeIpBindingClientManager`对象在`FindService`时，内部维护`std::vector<std::unique_ptr<AraComSomeIpProxyFactoryInterface>>;`可以塞进去（这块链路比较复杂）
+
+注意：
+在进行基类部分的构造时，`Base{ConstructInterface(handle)}`中，通过`handle`拿到factory_interface指针，于是利用`派生类proxy工厂`的`多态性`，创建`派生类Proxy对象`
+（PS：这里看起来类型都是`ProxyImplInterface`，但其实是起别名了，它就是派生类`StartApplicationCmService1_ServiceInterfaceProxyImplInterface`）
+使用``std::dynamic_pointer_cast`将指针升了一个辈分
+
+`StartApplicationCmService1_ServiceInterfaceProxy`使用`ConstructInterface(HandleType)`来构造基类`Proxy`部分
+```cpp
+  static std::shared_ptr<ProxyImplInterface> ConstructInterface(HandleType const& handle) noexcept {
+    // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOCAL_AutosarC++17_10-A18.5.8_FalsePositive
+    std::shared_ptr<ProxyImplInterface> concrete;
+    try {
+      amsr::socal::internal::logging::AraComLogger const logger{
+          amsr::socal::internal::logging::kAraComLoggerContextId,
+          amsr::socal::internal::logging::kAraComLoggerContextDescription, "Proxy"};
+      logger.LogVerbose([](ara::log::LogStream const&) {}, __func__, __LINE__);
+
+      amsr::socal::internal::ServiceProxyFactoryInterface const* const factory_interface{handle.GetInterface()};
+
+      // Resolve the InstanceIdentifier of the provided handle
+      ara::com::InstanceIdentifier const instance_id{handle.GetInstanceId()};
+
+      ara::core::Result<amsr::socal::internal::InstanceSpecifierLookupTableEntry> const resolve_result{
+          ara::com::Runtime::getInstance().GetInstanceSpecifierLookupTable().Resolve(instance_id,
+                                                                                     kServiceShortNamePath)};
+
+      if (!resolve_result.HasValue()) {
+        std::string log_message{"The instance identifier '"};
+        log_message.append(instance_id.ToString().ToString());
+        log_message.append("' is not known from the model.");
+
+        logger.LogFatal([&log_message](ara::log::LogStream& s) { s << log_message; }, __func__, __LINE__);
+
+        ara::core::Abort(log_message.c_str());
+      }
+
+      // VECTOR NL AutosarC++17_10-A18.5.8: MD_SOCAL_AutosarC++17_10-A18.5.8_FalsePositive
+      std::shared_ptr<amsr::socal::internal::ProxyImplInterface> const proxy_interface{
+          factory_interface->Create(resolve_result.Value().GetInstanceIdentifierString())};
+
+      // Check for "nullptr" again in case of a different non-compliant implementation of "Create()".
+      assert(proxy_interface != nullptr);  // "Failed to create proxy implementation."
+
+      concrete = std::dynamic_pointer_cast<ProxyImplInterface>(proxy_interface);
+
+      // If downcasting fails, the factory created the wrong binding-specific proxy-side.
+      assert(concrete != nullptr);  // "Failed to downcast due to wrong proxy implementation."
+    }  // VECTOR Next Line AutosarC++17_10-A15.3.4: MD_SOCAL_AutosarC++17_10-A15.3.4_Caught_exception_is_too_general
+    catch (std::exception const& e) {
+      ::ara::core::Abort(e.what());
+    }
+    // VECTOR NC AutosarC++17_10-A15.3.4: MD_SOCAL_AutosarC++17_10-A15.3.4_Using_catch_all
+    // VECTOR NC AutosarC++17_10-M0.3.1: MD_SOCAL_AutosarC++17_10-M0.3.1_Dead_exception_handler
+    catch (...) {
+      ::ara::core::Abort("Proxy::ConstructInterface: Unknown exception.");
+    }
+
+    return concrete;
+  }
+```
+
+
+
+
+
+`StartApplicationCmService1_ServiceInterfaceProxy`构造的时候，调用了`StartApplicationCmService1_ServiceInterfaceProxySomeIpBinding`的`Initialize()`，而其构造是使用工厂类的`Create()`方法（在`ConstructInterface()时`）
 ```cpp
 // ====================== Proxy constructor (deprecated) ======================
 StartApplicationCmService1_ServiceInterfaceProxy::StartApplicationCmService1_ServiceInterfaceProxy(
