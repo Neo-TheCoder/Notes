@@ -3991,6 +3991,72 @@ void operator()() override { event_.NotifySubscriptionStateUpdateSync(); }
 # Skeleton端发送数据
 
 ## Event
+简单梳理函数调用：
+1. `StartApplicationCmService1_ServiceInterfaceSkeleton`对象的`events::StartApplicationEvent1`(`SkeletonEvent<...>`)类型的成员变量`StartApplicationEvent1`.Send(data)
+2. 得到`SomeIpSkeletonEventManager`对象，调用：
+```cpp
+// SomeIpSkeletonEventManager   一个event对应一个
+  void Send(SampleType const& data) final { backend_->Send(data); }
+
+// ------ 以下类，用户无法直接访问 ------
+// SomeIpSkeletonEventBackend   一个event对应一个
+  void Send(SampleType const& data) {
+    // 计算 head_size, payload size
+    // 分配相应长度的内存
+    // 实例化一个序列化Writer
+    // 转发{ instance_id, 序列化后的paclet } 给AraComSomeIpBindingServerManager对象
+  }
+```
+注意，其中的调用涉及到非局部变量资源了！
+```cpp
+    MemoryBufferPtr packet{tx_buffer_allocator_.Allocate(alloc_size)};
+```
+
+3. `AraComSomeIpBindingServerManager`对象，调用`SendEventNotification(instance_id, packet)`
+```cpp
+// AraComSomeIpBindingServerManager   唯一的
+    bool const result{someip_posix_.Send(instance_id, std::move(packet))};
+```
+4. `SomeIpDaemonClient`
+```cpp
+  bool Send(amsr::someip_protocol::internal::InstanceId instance_id,
+            vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> packet) {
+    CheckIsRunning();
+    return routing_controller_.SendSomeIpMessage(instance_id, std::move(packet));
+  }
+```
+5. `RoutingController`
+```cpp
+  /*! \copydoc amsr::someip_daemon_client::internal::ActiveConnection::SendSomeIpMessage */
+  bool SendSomeIpMessage(RoutingMessageInstanceId instance_id, MemoryBufferPtr packet) {
+    return client_.SendSomeIpMessage(instance_id, std::move(packet));
+  }
+```
+6. `ActiveConnection`
+```cpp
+bool SendSomeIpMessage(amsr::someip_protocol::internal::InstanceId instance_id,
+                         vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer> packet) {
+    // ...
+    std::lock_guard<std::mutex> const lock_guard{lock_};
+    if (connection_state_ == ConnectionState::kConnected) {
+      EnqueueSomeIpMessage(instance_id, std::move(packet));
+      result = true;
+    }
+    // ...
+}
+```
+文档表示`Send()`：
+> Threadsafe : FALSE for same class instance, TRUE for different instances.
+Not threadsafe against following APIs of the associated Skeleton instance:
+- Skeleton::OfferService
+- Skeleton::StopOfferService
+> Reentrant : FALSE for same class instance, FALSE for different instances.
+> Synchronous : TRUE
+程序的现象是：一个线程在执行Send时，不允许该进程有别的线程执行Send（否则，发送数据会混乱（很可能是因为SomeIpSkeletonEventBackend::Send中计算header和payload出错了） --> 导致接收端收到的数据异常）
+
+根本原因是，实际上调用`Send(sample)`发送数据的过程分为：构造数据、发送数据
+`SkeletonEvent<...>`的实例1在调用`Send()`时，涉及到的实例是自己对象独有的，和实例2无关，所以线程1调用实例1的`Send`，不影响线程2调用实例2的`Send`
+
 
 
 ## Method

@@ -2858,6 +2858,12 @@ struct tm* localtime_s(const time_t* restrict timer, struct tm* restrict buf);  
 
 
 
+# `vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer>`
+```cpp
+    MemoryBufferPtr packet{tx_buffer_allocator_.Allocate(alloc_size)};
+```
+
+
 
 
 
