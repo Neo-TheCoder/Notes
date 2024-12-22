@@ -2742,7 +2742,7 @@ PS: `ara::com::FindServiceHandler<HandleType>`中的`Handler字样`表明是一�
 PS: 这里的`InstanceSpecifierLookupTableEntry`是怎么拿到自己的`BindingInterface* binding_;`的呢？
   --> 是在`SomeipBindingInitializer`::`RegisterServiceInstances`一路传递过来的
 
-`Proxy`::`StartFindService`
+`Proxy`::`StartFindService`静态函数
 ```cpp
   /*!
    * \brief Start an asynchronous FindService notification about service updates.
@@ -2870,7 +2870,7 @@ PS: 这里的`InstanceSpecifierLookupTableEntry`是怎么拿到自己的`Binding
 2. 把`FindService`的结果，作为`最外层的包装的回调`的实参进行调用
   通过以上实参（实际上是`InstanceHandle`类型，可提供对proxy factory的指针）可以得到`proxy factory`的指针，从而构造`proxy对象`
 
-`Proxy`::`FindService`
+static `Proxy`::`FindService`
 ```cpp
   /*!
    * \brief Call binding-specific FindService operation and convert returned InstanceHandles back into HandleTypes.
@@ -2927,7 +2927,7 @@ PS: 这里的`InstanceSpecifierLookupTableEntry`是怎么拿到自己的`Binding
 
 具体binding到someip的`FindService`函数：入参是`proxy_id，instance`，拿着这两块来查找，很好理解
 返回值类型为`InstanceHandle`（！！！该类型只是这两个函数内部使用）
-`class AraComSomeIpBindingClientManager::FindService`
+`AraComSomeIpBindingClientManager::FindService`
 ```cpp
   /*!
    * \brief           Execute a synchronous FindService call.
@@ -3991,6 +3991,9 @@ void operator()() override { event_.NotifySubscriptionStateUpdateSync(); }
 # Skeleton端发送数据
 
 ## Event
+观察下数据的流向：
+一路传递`const ValueType&`，中途新建指针，根据data进行序列化数据（具体见其他板块），然后data就失去意义了，接下来一路`std::move`
+
 简单梳理函数调用：
 1. `StartApplicationCmService1_ServiceInterfaceSkeleton`对象的`events::StartApplicationEvent1`(`SkeletonEvent<...>`)类型的成员变量`StartApplicationEvent1`.Send(data)
 2. 得到`SomeIpSkeletonEventManager`对象，调用：
@@ -4007,14 +4010,14 @@ void operator()() override { event_.NotifySubscriptionStateUpdateSync(); }
     // 转发{ instance_id, 序列化后的paclet } 给AraComSomeIpBindingServerManager对象
   }
 ```
-注意，其中的调用涉及到非局部变量资源了！
+注意，其中的调用涉及到非局部变量资源了！（所以同一个实例的Send()必然无法被多线程正常调用）
 ```cpp
     MemoryBufferPtr packet{tx_buffer_allocator_.Allocate(alloc_size)};
 ```
 
 3. `AraComSomeIpBindingServerManager`对象，调用`SendEventNotification(instance_id, packet)`
 ```cpp
-// AraComSomeIpBindingServerManager   唯一的
+// AraComSomeIpBindingServerManager   是唯一的
     bool const result{someip_posix_.Send(instance_id, std::move(packet))};
 ```
 4. `SomeIpDaemonClient`
@@ -4043,8 +4046,10 @@ bool SendSomeIpMessage(amsr::someip_protocol::internal::InstanceId instance_id,
       result = true;
     }
     // ...
-}
+  TransmitSomeIpMessage(transmit_queue_entry.GetInstanceId(), transmit_queue_entry.GetMemoryBuffer().get());
 ```
+PS: 这里的`EnqueueSomeIpMessage`实现中，之所以是判断`size==1`才调`TransmitSomeIpMessage`，是因为`TransmitSomeIpMessage`中，会把数据传输干净，队列要么为空，要么就是1个元素
+
 文档表示`Send()`：
 > Threadsafe : FALSE for same class instance, TRUE for different instances.
 Not threadsafe against following APIs of the associated Skeleton instance:
@@ -4056,6 +4061,7 @@ Not threadsafe against following APIs of the associated Skeleton instance:
 
 根本原因是，实际上调用`Send(sample)`发送数据的过程分为：构造数据、发送数据
 `SkeletonEvent<...>`的实例1在调用`Send()`时，涉及到的实例是自己对象独有的，和实例2无关，所以线程1调用实例1的`Send`，不影响线程2调用实例2的`Send`
+但是数据错乱的现象表明，肯定是使用到线程间共享的资源了
 
 
 
@@ -4116,7 +4122,7 @@ someip_daemon_client `Start()`同步调用
 # Proxy端接收数据
 通过`Unix Domain Socket`和`Someipd`通信，接收来自skeleton的消息
 
-**调用顺序：**
+**调用顺序**
 任务类`*EventNotificationTask`（嵌套于class`ProxyEventBase`中）
 
 线程池中线程调用该任务类的`operator()`函数，
@@ -4126,23 +4132,40 @@ someip_daemon_client `Start()`同步调用
 
 
 ## 接收`event`类型的数据
-每个app的com模块代码中，会创建reactor线程，专门处理unix domain socket读写事件。
+<!-- 观察下数据的流向： -->
+简单梳理函数调用：
+！！！
+PS: `ProxyEvent`的模板形参列表中有一个函数指针，指向的是一个继承关系中身为父类的类定义的函数（使得socal层的ProxyEvent在不知道接口名的情况下调用到（src-gen中的孙类实现的）接口，因为是模板类，就是有些接口没有充分实现也没关系）
+  假设爷-父-孙的继承关系，
+  爷是`ProxyImplInterface`
+  父是`StartApplicationCmService1_ServiceInterfaceProxyImplInterface`
+  孙是`StartApplicationCmService1_ServiceInterfaceProxySomeIpBinding`
+```cpp
+// 成员函数
+startapplication::cm::service1::internal::StartApplicationCmService1_ServiceInterfaceProxyImplInterface::GetEventManagerStartApplicationEvent1
+```
+该接口的目的是得到`SomeipProxyEventManager<StartApplicationCmService1_ServiceInterfaceProxySomeIpEventConfigurationStartApplicationEvent1>对象`
+
+每个app的com模块代码中，会创建reactor线程，用于监听socket上的读写事件，并触发相应的回调
 当可读事件发生时，触发初始化阶段注册的回调：
+`class Connection`
 ```cpp
       case ConnectionState::kConnected:
         if (events.HasReadEvent()) {
           reader_.OnReactorEvent(native_handle_);
         }
 ```
-经过一系列调用
-`StartReceiving()`
+
+经过一系列调用...
+`class ActiveConnection::StartReceiving()`
 ```cpp
     osabstraction::io::ipc1::ReceiveCompletionCallback completion_callback{
         [this](ara::core::Result<std::size_t>&& receive_complete_result) {
           OnReceiveCompletion(std::move(receive_complete_result));
         }};
 ```
-`OnReceiveCompletion`
+
+`class ActiveConnection::OnReceiveCompletion`
 ```cpp
       // Verify that we received at least generic header and specific header
       if (received_length >= kHeaderLength) {
@@ -4152,17 +4175,22 @@ someip_daemon_client `Start()`同步调用
         StartReceiving();
       }
 ```
-`OnSomeIpRoutingMessage`
-```cpp
-        someip_daemon_client_.OnSomeIpRoutingMessage(routing_someip_header.instance_id_,
-                                                     std::move(reception_buffer_.receive_message_body));
-```
 
-```cpp
-client_manager_->HandleReceive(instance_id, someip_header, std::move(someip_message));
-```
+`OnReceiveCompletion(receive_complete_result)`:
+`ProcessReceivedMessage()`:
+  `SomeIpDaemonClient::OnSomeIpRoutingMessage`
+  ```cpp
+    someip_daemon_client_.OnSomeIpRoutingMessage(routing_someip_header.instance_id_,
+                                                std::move(reception_buffer_.receive_message_body));
+  ```
 
-`HandleReceive`
+`OnSomeIpRoutingMessage`:
+  `RoutingController`::`ProcessSomeIpMessage`
+  ```cpp
+    client_manager_->HandleReceive(instance_id, someip_header, std::move(someip_message));
+  ```
+
+`class AraComSomeIpBindingClientManager::HandleReceive`
 ```cpp
   void HandleReceive(::amsr::someip_protocol::internal::InstanceId const instance_id,
                      ::amsr::someip_protocol::internal::SomeIpMessageHeader const& header,
@@ -4176,20 +4204,26 @@ client_manager_->HandleReceive(instance_id, someip_header, std::move(someip_mess
           RouteEventNotification(instance_id, header, std::move(packet));  // delegate to concrete proxy-binding
           break;
         }
+      // ...
+      }
+    }
+  }
 ```
 
+`RouteEventNotification`，这里实际指向的是`SomeipProxyEventBackend`对象
 ```cpp
       it->second->OnEvent(std::move(packet));
 ```
 
 `SomeipProxyEventBackend`的`OnEvent`
-！！！和proxy event的`sample cache`相关联了，`sample cache`是多级的，分为用户可见 和 用户不可见
+！！！和proxy event的`sample cache`相关联了，`sample cache`是多级的，分为：`用户可见` 和 `用户不可见`
 
 该回调是为了把新读取到的数据存储到`invisible_sample_cache_`，长度为`Subscribe`设置的参数
 需要记录序号(从0开始自增)，用于更新策略
 为每一个`event_manager`调用`HandleEventNotification()`
 同时维护一个`last_event_entry_`，只存储最新的条目
 
+`SomeipProxyEventBackend`::`OnEvent`
 ```cpp
   void OnEvent(MemoryBufferPtr packet) override {
     // Create Entry
@@ -4243,7 +4277,7 @@ client_manager_->HandleReceive(instance_id, someip_header, std::move(someip_mess
     }
   }
 ```
-注意到，检测到set了receive handler，就构造`EventNotificationTask`对象，`AddTask()`
+注意到，检测到set过receive handler，就构造`EventNotificationTask`对象，`AddTask()`
 `EventNotificationTask`嵌套在`ProxyEventBase`类中
 `EventNotificationTask`
 其构造函数，先构造基类对象，再将引用成员绑定到入参
@@ -4349,7 +4383,7 @@ PS：如果发送端频率不快，并且接收端处理地也不慢，那么Sub
   当发送很快来不及处理时，只能选择性处理，lastN表示处理最老的，newestN表示处理最新的(那么老数据是否还存在于内存？)
 
 
-更新用户可见的内存
+更新用户可见的内存`Update(filter_function)`
 ```cpp
   /*!
    * \brief Updates the event cache container visible to the user via GetCachedSamples()
@@ -8108,9 +8142,239 @@ auto ValidateControlHeaderAndForwardToHandler(
           static_cast<char const*>(__func__), __LINE__);
     }
   }
-
-
 ```
+
+
+
+# `vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer>`相关调用
+抽象基类`MemoryBuffer<IovecType>`
+```cpp
+/*!
+ * \brief Alias for MemoryBuffer pointer
+ * \tparam IovecType type for io (should contain base_pointer and size, usually struct iovec from <sys/uio.h> is used).
+ */
+template <typename IovecType>
+using MemoryBufferPtr = std::unique_ptr<MemoryBuffer<IovecType>>;
+
+/*!
+ * \brief   Abstract class to manage a created memory buffer by MemoryBufferAllocator.
+ * \details This class must be inherited by the concrete implementation depending on the container type.
+ *          Each subclass inheriting from MemoryBuffer must have its own MemoryBufferAllocator subclass that can create
+ *          it.
+ * \tparam IovecType type for io (should contain base_pointer and size, usually struct iovec from <sys/uio.h> is used).
+ */
+template <class IovecType>
+class MemoryBuffer {
+ public:
+  /*!
+   * \brief The value type of a MemoryBuffer is simply a byte.
+   */
+  using value_type = std::uint8_t;
+  /*!
+   * \brief The value type of a MemoryBuffer is simply a byte.
+   */
+  using const_value_type = value_type const;
+
+  /*!
+   * \brief Alias for Container View Type.
+   */
+  using MemoryBufferView = ara::core::Vector<IovecType>;
+
+  virtual size_type CopyIn(size_type offset, size_type copy_size, void const* buffer) const noexcept {
+    // ...
+  }
+
+  virtual size_type CopyOut(size_type offset, size_type copy_size, void* buffer) const noexcept {
+  // ...
+  }
+
+  //  嵌套类
+  /*!
+   * \brief   Iterator for a MemoryBuffer.
+   * \details By providing an iterator returned by MemoryBuffer::begin() and MemoryBuffer::end(), it is possible
+   *          to use MemoryBuffer as a drop-in replacement for ara::core::Vector in the serializer (and elsewhere).
+   * \tparam  T The type to iterate: "MemoryBuffer" or "MemoryBuffer const".
+   * \tparam  V The corresponding value type: value_type or const_value_type.
+   */
+  template <typename T, typename V>
+  class Iterator final : public std::iterator<std::forward_iterator_tag, V> {
+  // ...
+  }
+};
+```
+
+派生类`FlexibleUniqueMemoryBuffer`
+```cpp
+template <class IovecType>
+class FlexibleUniqueMemoryBuffer final : public MemoryBuffer<IovecType> {
+ public:
+  using Base = MemoryBuffer<IovecType>;
+
+  using MemoryBufferPtr = std::unique_ptr<Base>;
+
+  using BufferType = ara::core::Vector<std::uint8_t>;
+
+  typename Base::MemoryBufferView GetView(typename Base::size_type offset) const noexcept final {
+  // ...
+  };
+
+  typename Base::size_type size() const noexcept final { return buffer_.size(); }
+
+  void resize(typename Base::size_type nbytes) noexcept final {
+    // ...
+  }
+
+  void push_back(typename Base::value_type const &value) noexcept final { buffer_.push_back(value); }
+
+ private:
+  /*!
+   * \brief The unique buffer.
+   */
+  BufferType buffer_;
+};
+```
+
+模板实参`MutableIOBuffer`
+```cpp
+  // class SomeIpSkeletonEventBackend
+  using MemoryBufferPtr = vac::memory::MemoryBufferPtr<osabstraction::io::MutableIOBuffer>;
+
+  /*!
+ * \brief Mutable IO buffer
+ *
+ * \details
+ * IO operations such as read or receive may write data to this buffer.
+ *
+ * The memory layout has to comply with the operating system expectations for IO scatter / gather buffers (e.g. iovec).
+ *
+ * \trace DSGN-Osab-MutableIOBuffer
+ */
+struct MutableIOBuffer {
+  /*!
+   * \brief Base pointer to a mutable buffer.
+   */
+  void* base_pointer;
+
+  /*!
+   * \brief Buffer's size.
+   */
+  std::size_t size;
+};
+```
+
+`上层调用`
+```cpp
+  void Send(SampleType const& data) {
+    // Allocate required memory size
+    std::size_t const header_size{CalculateHeaderSize()};
+    std::size_t const payload_size{PayloadSerializer::GetRequiredBufferSize(data)};
+    std::size_t const alloc_size{header_size + payload_size};
+
+    // Allocate memory for the serialization
+    MemoryBufferPtr packet{tx_buffer_allocator_.Allocate(alloc_size)};
+
+    // Get linear access to allocated MemoryBuffer via Writer
+    // Due to the limitation that only flexible memory with a single view is used we can safely cast.
+    MemoryBuffer::MemoryBufferView packet_view{packet->GetView(0)};
+    // VECTOR Next Line AutosarC++17_10-M5.2.8:MD_SOMEIPBINDING_AutosarC++17_10-M5.2.8_conv_from_voidp
+    BufferView body_view{static_cast<std::uint8_t*>(const_cast<void*>(packet_view[0].base_pointer)), packet->size()};
+    Writer writer{body_view};
+
+    // Serialize the headers + payload
+    Serialize(writer, body_view, payload_size, data);
+
+    // Finally transmit the serialized packet via ServerManager
+    if (EventConfig::kMessageType == ::amsr::someipd_app_protocol::internal::MessageType::kPdu) {
+      someip_binding_server_manager_.SendPduEventNotification(instance_id_, std::move(packet));
+    } else {
+      someip_binding_server_manager_.SendEventNotification(instance_id_, std::move(packet));
+    }
+  }
+```
+
+`Allocate(size)`：内部维护一个`ara::core::Vector<std::uint8_t>`，分配size字节的数据，就是调`vec.resize(size)`
+返回一个`FlexibleUniqueMemoryBuffer<osabstraction::io::MutableIOBuffer>`对象，其类型是`MemoryBuffer<osabstraction::io::MutableIOBuffer>`的派生类
+```cpp
+// 类型声明
+  using MemoryBufferAllocator =
+      vac::memory::flexible::FlexibleUniqueMemoryBufferAllocator<osabstraction::io::MutableIOBuffer>;
+
+// 调用
+    MemoryBufferPtr packet{tx_buffer_allocator_.Allocate(alloc_size)};
+
+// 函数声明
+  typename Base::MemoryBufferPtr Allocate(typename MemoryBuffer<IovecType>::size_type size) noexcept override {
+  // ...
+  }
+```
+
+`MemoryBuffer::MemoryBufferView`是什么东西？
+```cpp
+// class MemoryBuffer:
+  using MemoryBufferView = ara::core::Vector<IovecType>;
+
+// IovecType对应的模板实参是：
+struct MutableIOBuffer {
+  /*!
+   * \brief Base pointer to a mutable buffer.
+   */
+  void* base_pointer;
+
+  /*!
+   * \brief Buffer's size.
+   */
+  std::size_t size;
+};
+```
+
+`GetView(offset)`，返回一个`vector<MutableIOBuffer>`，包含一个元素，{buffer元素首地址, `{序列化数据字节数}`个元素}
+`buffer_`实际是`Vector<std::uint8_t>`，每个元素的数据都是连续的
+```cpp
+  /*!
+   * \brief  Get a view of this memory buffer.
+   * \param  offset The offset at which to start.
+   * \return A view of the buffer, starting at the desired offset.
+   */
+  typename Base::MemoryBufferView GetView(typename Base::size_type offset) const noexcept final {
+    typename Base::MemoryBufferView view{};
+    if (offset < buffer_.size()) {
+      view.push_back({&buffer_[offset], buffer_.size() - offset});
+    }
+    return view;
+  }
+```
+
+`BufferView`是什么？  用来构造临时`Writer`对象
+```cpp
+  using BufferView = ::amsr::someip_protocol::internal::serialization::BufferView;
+
+  using BufferView = ara::core::Span<std::uint8_t>;   // span不管理数据的生命周期，提供对连续数据的访问，构造方式：1. 起始地址 2. 元素个数
+```
+
+然后调用序列化：
+```cpp
+  template <typename T1 = E2eProfileConfig, typename T2 = EventConfig>
+  auto Serialize(Writer& writer, BufferView const&, std::size_t const payload_size, SampleType const& data) {
+    // 构造someip header(payload_size是可变部分，涉及计算)
+    // 序列化payload
+  }
+```
+PS: 这里所使用的`Serializer`是`SerializerStartApplicationEvent1`（这么说ara::com调用了一些尚未实现的部分？这是怎么通过编译的？--> C++模板支持一些不确定的、（模板类引入的）函数，恐怕未被调用到的接口都不会参与编译）
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

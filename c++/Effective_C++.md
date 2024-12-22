@@ -850,19 +850,19 @@ void PrettyMenu::changeBackground(std::istream& imgSrc){
 实际的实现通常是**pimpl idiom**：将所有“隶属对象的数据”从原对象放进另一个对象内，然后赋予原对象一个指针，指向副本。
 ```cpp
 // 为了强烈保证而再度优化
-struct PMImpl{
-    std::shared_ptr<Image>bgImage;
+struct PMImpl {
+    std::shared_ptr<Image> bgImage;
     int imageChanges;
 };  // 封装它的shared_ptr已经在class里设计为private
 
-class PrettyMenu{
-    ...
+class PrettyMenu {
+    // ...
 private:
     Mutex mutex;
     std::shared_ptr<PMImpl> pImpl;
 };
 
-void PrettyMenu::changeBackground(std::istream& imgSrc){
+void PrettyMenu::changeBackground(std::istream& imgSrc) {
     using std::swap;    // 为了高效地swap
     Lock m1(&mutex);
     std::shared_ptr<PMImpl>pNew(new PMImpl(*pImpl));    // 通过本体产生副本对象
@@ -930,10 +930,11 @@ pf();   // 由于是通过函数指针调用的函数体，不会被内联
 
 # 31 将文件间的编译依存关系降至最低
 如果只改动c++的某个class的private部分的实现，会导致大量的重新编译和链接。--> 原因是接口和实现分离做的不好。
-比如class Person中私有成员是自定义的Date类型，那么在定义class Person的头文件里必然会有calss Date的定义。此处就形成了**依赖关系**，被依赖的部分有改变，那么相应地部分也必须重新编译。这种连串的编译依存关系是灾难性的。
-那如果不用头文件include，而是在相应的namespace里采用类的前置声明呢？比如在std的namespace里前置声明class string。
+比如class Person中私有成员是自定义的Date类型，那么在定义class Person的头文件里必然会有calss Date的定义。此处就形成了**依赖关系**，被依赖的部分有改变，那么相应地部分也必须重新编译。这种**连串**（因为实际情况可能是一连串）的编译依存关系是灾难性的。
+那如果不用头文件include，而是在相应的namespace里采用类的前置声明呢？
+比如在std的namespace里前置声明class string。
 有两个问题：
-1. string不是class，它本质上是对basic_string<char>的typedef，因此简单的***class string;***是错误的，正确的前置声明很复杂
+1. string不是class，它本质上是对`basic_string<char>`的`typedef`，因此简单的`class string;`是错误的，正确的前置声明很复杂
 2. 前置声明只适用于编译器在编译期间知道对象大小的情况，要不然编译器根本不知道类占据多少空间
 如果是Java，A类定义中，如果B类的对象是成员变量，实际底层实现是持有B类型的指针。
 因此在C++中我们也可以尝试将对象实现细节隐藏在指针背后：
@@ -945,33 +946,33 @@ class PersonImpl;
 class Date;
 class Address;
 
-class Person{
+class Person {
 public:
     Person(const std::string& name, ...Data...);
     std::string name() const;
     std::string birthDate() const;
-    ...
+    // ...
 private:
     std::shared_ptr<PersonImpl> pImpl;
 };
 ```
 这就是所谓的pimpl idiom（pointer to implementation），实现了接口和实现的分离
-它遵循了**编译依存性最小化的本质：让头文件尽可能自我满足，如果做不到，就让它与其他文件内的声明（而非定义）相依（即：以声明的依存性替换定义的依存性）**
+它遵循了**编译依存性最小化的本质：让头文件尽可能自我满足，如果做不到，就让它与其他文件内的`声明`（而非定义）相依（即：以声明的依存性替换定义的依存性）**
 这个指导思想还产生了一些其他的设计策略：
-1. 如果使用引用或者指针可以完成任务，就不要使用对象，因为仅需类的声明就能定义指针或者引用，而创建对象需要类的实现
+1. 如果使用`引用`或者`指针`可以完成任务，就不要使用对象，因为仅需类的声明就能定义指针或者引用，而创建对象需要类的实现
 
-2. 尽可能地以class的声明式替换class定义式，因为**声明函数的时候式不用类的定义的，类的声明已经足够**
+2. 尽可能地以class的声明式替换class定义式，因为**声明函数的时候是不用类的定义的，类的声明已经足够**
 ```cpp
 class Date; // 声明
 Date today();
 void clearAppointments(Date d);
 ```
 但是如果是这个函数的调用者，那就必须得到Date的定义式。
-这样做的实际意义在于：一个函数库内可能有数百个函数，每个客户只会调用其中几个，这样把class定义式延迟到含有函数调用的客户文件就实现了去除与客户端之间的编译依存性。
+这样做的实际意义在于：一个函数库内可能有数百个函数，每个客户只会调用其中几个，这样把class定义式`延迟`到含有函数调用的客户文件就实现了去除与客户端之间的编译依存性。
 
 3. 为声明式和定义式提供不同的头文件
-具体来说，比如前面的例子：在datefwd.h文件中，只含有Date的声明而无定义。
-c++标准库有类似的设计：<iosfwd>含有iostream各组件的声明式，而定义分布在<sstream>、<fstream>中，可见本条款也适用于template
+具体来说，比如前面的例子：在`datefwd.h`文件中，只含有Date的声明而无定义。
+c++标准库有类似的设计：`<iosfwd>`含有iostream各组件的声明式，而定义分布在`<sstream>`、`<fstream>`中，可见本条款也适用于`template`
 如果template定义放在非头文件，就可以将“只含有声明”的头文件提供给templates
 
 ```cpp
@@ -980,27 +981,27 @@ c++标准库有类似的设计：<iosfwd>含有iostream各组件的声明式，�
 // Person和PersonImpl有着完全相同的成员函数，接口完全相同
 Person::Person(const std::string& name, ...) : pImpl(new PersonImpl(name, birthday, addr)){}    // 内部调用PersonImpl构造函数
 
-std::string Person::name() const{
+std::string Person::name() const {
     return pImpl->name();
 }
 ```
-让Person变成一个Handle class不会改变它做的事，只会改变它做事的方法
+让Person变成一个`Handle class`不会改变它做的事，只会改变它做事的方法
 
-另一种办法是抽象基类（又称interface class）
+另一种办法是抽象基类（又称`interface class`）
 通常只含有虚析构、一系列纯虚函数、或者也可以含有一定的成员函数的实现
 ```cpp
-class Person{
+class Person {
 public:
     virtual ~Person();
     virtual std::string name() const = 0;
-    ...
+    // ...
 }
 ```
 接口类的客户需要调用其中的函数得到真正的派生类的实例化，这样的函数通常被称为工厂函数，返回智能指针，指向动态分配的对象。而且通常被声明为static
 ```cpp
-class Person{
+class Person {
 public:
-    ...
+    // ...
 static std::shared_ptr<Person>create(const std::string& name, const Data& birthday, const Address& addr);
 }
 
