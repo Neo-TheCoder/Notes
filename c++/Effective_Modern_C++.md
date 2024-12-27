@@ -3209,6 +3209,18 @@ Widget w;                           //错误！
 在`Pimpl惯用法`中使用`std::unique_ptr`会抛出错误，有点惊悚，因为：
 * 第一  std::unique_ptr宣称它支持不完整类型，
 * 第二  Pimpl惯用法是std::unique_ptr的最常见的使用情况之一。
+
+PS：为什么这里`std::shared_ptr`不需要显式定义析构函数？因为std::shared_ptr的删除器不是其类型声明的一部分，即：
+```cpp
+  template <typename _Tp, typename _Dp = default_delete<_Tp>>
+    class unique_ptr
+    { ... }
+
+  template<typename _Tp>
+    class shared_ptr : public __shared_ptr<_Tp>
+    { ... }
+```
+
 幸运的是，让这段代码能正常运行很简单。
 只需要对上面出现的问题的原因有一个基础的认识就可以了。
 在对象w被析构时（例如离开了作用域），问题出现了。

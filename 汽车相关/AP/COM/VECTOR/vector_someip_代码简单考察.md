@@ -8363,6 +8363,30 @@ PS: 这里所使用的`Serializer`是`SerializerStartApplicationEvent1`（这么
 
 
 
+# `reaactor_thread`与`timer_manager`
+`Runtime`真正持有：
+```cpp
+  ara::core::Optional<osabstraction::io::reactor1::Reactor1> reactor_;
+  
+  ara::core::Optional<vac::timer::ThreadSafeTimerManager> timer_manager_;
+```
+
+把这两者的引用传递给`AraComSomeIpBinding` --> `SomeipProxyEventBackend`
+（这里的传递是由于`Runtime提供接口返回二者的引用了，由SomeipInitializer进行传递`）
+`SomeipProxyEventBackend`如何使用`time_manager_`：
+  在订阅时，触发`ReactorSyncTask`：
+  该类的`operator()()`主要做的是：
+  1. 如果是`kPolling`
+    同步调用
+  2. 如果是`kSingleThread`
+  ```cpp
+      Timer::Stop();
+      Timer::SetPeriod(std::chrono::seconds::zero());
+      Timer::Start();
+  ```
+这里如何影响到`reactor线程`？？？
+
+
 
 
 

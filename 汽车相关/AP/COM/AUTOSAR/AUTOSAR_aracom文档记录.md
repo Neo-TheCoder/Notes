@@ -202,7 +202,7 @@ So the possible returns for a call of `ResolveInstanceIDs()` are:
 
 从技术上讲，`ResolveInstanceIDs()`的中间件实现是从进程中捆绑的`service instance manifest`中查找`ara::core::InstanceSpecifier`。
 因此，在捆绑的`service instance manifest`中，`ara::core::InstanceSpecifier`必须是明确的。
-代码示例：
+VECTOR代码示例：
 ```cpp
 // VECTOR NC AutosarC++17_10-M9.3.3, VectorC++-V5.0.1: MD_SOMEIPBINDING_AutosarC++17_10-M9.3.3_Method_can_be_declared_const
 // VECTOR NC AutosarC++17_10-A15.5.3: MD_SOMEIPBINDING_AutosarC++17_10-A15.4.2_A15.5.3_Exception_caught
