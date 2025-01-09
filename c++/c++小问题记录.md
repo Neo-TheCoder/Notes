@@ -1406,8 +1406,6 @@ C++中的"三五法则"（Rule of Three/Five）是指：
 
 
 
-
-
 # 关于多线程时，对全局变量访问为什么必须加锁
 ## 该内存变量是否跨CacheLine？
 如果内存变量是全局变量，现代编译器通常不会让全局变量跨`CacheLine`
@@ -2818,11 +2816,11 @@ int main() {
 那么`std::move`的具体转换结果为：
 std::move(r) 的结果是一个 `const Base&&`。
 而`移动构造函数 Base(Base&&)`不接受常量右值引用，因此只能选择拷贝构造函数
-所以先是选择了以下重载：
+总结：先是选择了以下重载：
 ```cpp
       push(value_type&& __x)
 ```
-在构造函数重载时，选择了`拷贝构造函数`
+在构造函数重载决议时，选择了`拷贝构造函数`
 ```cpp
 	    this->_M_impl.construct(this->_M_impl._M_finish._M_cur,
 				    std::forward<_Args>(__args)...);
@@ -2932,15 +2930,17 @@ PS: `std::vector`这种数据都是定义在`堆`上
 
 
 
-
-
-
-
-
-
-
-
-
+# allocator中用于小内存分配的二级配置器的内存池是什么样子的？
+完全体是含有16个节点的链表，每个链表指向一串链表（如果空间充足的话，是20个节点）
+分别表示`8字节内存块的链表`、`16字节内存块的链表`......`128字节内存块的链表`
+这里的链表节点采用了`union`，很精妙：
+```cpp
+  union _Obj {
+        union _Obj* _M_free_list_link;
+        char _M_client_data[1];    /* The client sees this. */
+  };
+```
+`_M_client_data`恐怕没有实际意义，只是表示一物两用
 
 
 

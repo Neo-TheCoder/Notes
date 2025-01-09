@@ -1,6 +1,20 @@
 # 类是怎样逐步创建的
 起点是`Runtime`，然后是**不同Binding**对应的`Initializer`，
-解析配置的时候就创建了很多对象了，除了`Proxy`端，要到`find service`成功了才创建`Proxy`对象
+解析配置的时候就创建了很多重要对象了！
+关键调用：
+`SomeipBindingInitializer`::`RegisterServiceInstances` -->  `Runtime`::`MapInstanceSpecifierToInstanceId(binding, instance_specifier, instance_identifier, service_shortname_path)`
+`Runtime`::`MapInstanceSpecifierToInstanceId(binding, instance_specifier, instance_identifier, service_shortname_path)`
+这个调用颇为关键：创建了`multimap<instance_specifier， { binding, instance_identifier, service_shortname_path }>`
+```cpp
+void Runtime::MapInstanceSpecifierToInstanceId(
+    amsr::socal::internal::BindingInterface* binding, ara::core::InstanceSpecifier const& instance_specifier,
+    ara::com::InstanceIdentifier const& instance_identifier,
+    amsr::socal::internal::ServiceShortNamePath const& service_shortname_path) noexcept {
+  instance_specifier_table_.MapInstanceSpecifierToInstanceId(binding, instance_specifier, instance_identifier,
+                                                             service_shortname_path);
+}
+```
+除了`Proxy`端，要到`find service`成功了才创建`Proxy`对象
 
 ## someip
 ### 在`InitializeComponent()`时，构造了一些对象
@@ -21,24 +35,24 @@ PS: `instance_specifier`和`instance_identifier`是一对多的关系（很多�
 `AraComSomeIpBindingServerManager<SomeIpDaemonClient>`
 `AraComSomeIpBindingClientManager<SomeIpDaemonClient>`
 
-对`AraComSomeIpBindingServerManager<SomeIpDaemonClient>`而言，关键的成员类有两个：
+#### 对`AraComSomeIpBindingServerManager<SomeIpDaemonClient>`而言，关键的成员类有两个：
 skeleton Binding类、SkeletonFactoryContainer
 
-**Binding类**（`核心`）：
-对于skeleton，是一个skeleton binding
+##### **Binding类**（`核心`）：
+对于skeleton，是一个`skeleton binding`
     如`StartApplicationCmService1_ServiceInterfaceSkeletonSomeIpBinding`
     继承自两个类：
 1. ::amsr::someip_binding_transformation_layer::internal::`AraComSomeIpSkeletonInterface`
-    Interface class for ara::com SOME/IP skeleton implementations.
-    ara::com SOME/IP skeleton实现的接口类
+    > Interface class for ara::com SOME/IP skeleton implementations.
+    > ara::com SOME/IP skeleton实现的接口类
     就定义了一个接口：`HandleMethodRequest(header, packet)`
 
 2. ::startapplication::cm::service1::internal::`StartApplicationCmService1_ServiceInterfaceSkeletonImplInterface`
-    Skeleton implementation interface of service 'StartApplicationCmService1_ServiceInterface'
-    StartApplicationCmService1_ServiceInterface 这一service的 skeleton实现 的接口类（没有强调SOME/IP）
+    > Skeleton implementation interface of service 'StartApplicationCmService1_ServiceInterface'
+    > StartApplicationCmService1_ServiceInterface 这一service的 skeleton实现 的接口类（没有强调SOME/IP）
     定义了接口：`GetEventManagerStartApplicationEvent1()`，使得`SkeletonEvent`通过`binding`类拿到`SomeIpSkeletonEventManager`
 
-**SkeletonFactoryContainer**：
+##### **SkeletonFactoryContainer**：
 Skeleton
     ！！！和`OfferService`之类的外部接口有关，这里的`OfferService`调用极为复杂，`Skeleton`通过`set<InstanceSpecifierLookupTableEntry>`，拿到`AraComSomeIpBinding`，调`OfferService`，从而调到`AraComSomeIpBindingServerManager`::`OfferService`，从而调到`SomeIpDaemonClient`::`OfferService`
 
@@ -93,7 +107,6 @@ PS: 每个`Skeleton`都有一个`static`的`skeleton_id_`（这个对象的类�
 
 
 
-
 #### 对于`event`数据的发送
 skeleton和proxy两端都有`SomeIpSkeletonEventManager` / `SomeIpProxyEventManager`（IPC同理）
 真正的实现都放在`SomeIpSkeletonEventBackend ` / `SomeIpProxyEventBackend`
@@ -131,10 +144,8 @@ skeleton和proxy两端都有`SomeIpSkeletonEventManager` / `SomeIpProxyEventMana
 
 ### proxy
 #### `订阅`流程
-find service流程
-
-
-注意，用户操作的Proxy对象要find service成功了，才创建，对于多重绑定，`StartFindService(function, instance_specifier)`，这里的function的函数签名是`入参是ServiceHandleContainer<HandleType>，函数体是FindService1Handler(handles);`，也就是说，会有多个proxy对象产生？（不太可能吧？那不是和多重绑定的思想冲突了吗？）
+##### find service流程
+注意，用户操作的Proxy对象要find service成功了，才创建，对于多重绑定，`StartFindService(function, instance_specifier)`，这里的function的函数签名是`入参是ServiceHandleContainer<HandleType>，函数体是FindService1Handler(handles);`，也就是说，会有多个proxy对象产生？用户通过instance_identifier进行区分
 Proxy对象的构造和proxy_someip_binding对象的构造如何联系在一起？
 Proxy类持有成员：
 ```cpp
@@ -191,25 +202,25 @@ PS: 在Skeleton端是`std::vector<std::unique_ptr<ConcreteSkeletonImplInterface>
 
 `SomeipBindingInitializer`，持有一个很关键的、唯一的类：
 `AraComSomeIpBinding`，直接持有很多关键对象：
-`AraComSomeIpBindingClientManager<SomeIpDaemonClient>`，两大关键成员：
+#### `AraComSomeIpBindingClientManager<SomeIpDaemonClient>`，两大关键成员：
 proxy Binding类、ProxyFactoryContainer
 
 
-**Binding类**（`核心`）：
+##### **Binding类**（`核心`）：
 对于proxy，是一个proxy binding
     如`StartApplicationCmService1_ServiceInterfaceProxySomeIpBinding`
     继承自两个类：
 1. ::amsr::someip_binding_transformation_layer::internal::`AraComSomeIpProxyInterface`
-    Interface class for ara::com SOME/IP proxy implementations.
-    ara::com SOME/IP proxy实现的接口类
+    > Interface class for ara::com SOME/IP proxy implementations.
+    > ara::com SOME/IP proxy实现的接口类
     就定义了一个接口：`HandleMethodResponse(header, packet)`
 
 2. ::startapplication::cm::service1::internal::`StartApplicationCmService1_ServiceInterfaceProxyImplInterface`
-    Proxy implementation interface for the Service 'StartApplicationCmService1_ServiceInterface'
-    StartApplicationCmService1_ServiceInterface 这一service的 proxy实现 的接口类（没有强调SOME/IP）
+    > Proxy implementation interface for the Service 'StartApplicationCmService1_ServiceInterface'
+    > StartApplicationCmService1_ServiceInterface 这一service的 proxy实现 的接口类（没有强调SOME/IP）
     定义了接口：`GetEventManagerStartApplicationEvent1()`，使得`ProxyEvent`通过`binding`类拿到`SomeipProxyEventManager`
 
-**ProxyFactoryContainer**：
+##### **ProxyFactoryContainer**：
 Proxy
     ！！！和`StartFindService`之类的外部接口有关，这里的`StartFindService`调用极为复杂，是`注册回调--事件触发--异步调用`的模式。
     注册`（用户传入的）回调`进static的`FindServiceObserversManager`对象，对服务进行监听，当服务offer时，触发。
@@ -223,9 +234,7 @@ PS: `InstanceSpecifierLookupTableEntry`是一个重要纽带，连接`Proxy`和`
 
 
 
-
 #### `订阅`流程
-
 
 
 
@@ -259,11 +268,12 @@ PS: `InstanceSpecifierLookupTableEntry`是一个重要纽带，连接`Proxy`和`
 
 2. 当接收到event数据时，
     在ProxyEvent中（对于ipc和someip的binding，各有一个实例）
-    通过指向`Proxy`的指针，拿到指向proxy_someip_binding派生类的指针，拿到event manager对象
+    通过指向`Proxy`的指针，拿到指向`proxy_someip_binding派生类`的指针，拿到event manager对象
 
-具体来说，对于someip_binding，触发：
+连起来看，对于someip_binding，触发：
 `SomeIpDaemonClient::OnSomeIpRoutingMessage(instance_id, receive_memory_buffer)`
-    `AraComSomeIpBindingClientManager`::`HandleReceive(instance_id, header, packet)`, `RouteEventNotification(instance_id, header, packet)`     （`AraComSomeIpBindingClientManager`持有`map<someip_event_id, SomeipProxyEventBackend>`）
+    `AraComSomeIpBindingClientManager`::`HandleReceive(instance_id, header, packet)`, `RouteEventNotification(instance_id, header, packet)`
+    （`AraComSomeIpBindingClientManager`持有`map<someip_event_id, SomeipProxyEventBackend>`）
         转发给相应的`SomeipProxyEventBackend`对象，`SomeipProxyEventBackend`::`OnEvent(packet)`
             `SomeipProxyEventManager`::`HandleEventNotification()`，调用到`ProxyEvent`的`Notify()`
                 `EventNotificationTask`被`AddTask`到线程池
@@ -274,44 +284,16 @@ PS: `InstanceSpecifierLookupTableEntry`是一个重要纽带，连接`Proxy`和`
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # 特点
-1. 为了方便src-gen这种代码参与编译，大量使用<`template`类的函数不被调用（就不会生成代码、参与编译）就可以引入未实现函数的特性>
+1. 为了方便src-gen这种代码参与编译，大量使用“`template`类的函数不被调用（就不会生成代码、参与编译）就可以引入未实现函数”的特性
 2. 由于多重绑定的存在，用户层对socal调用：看似简单的`OfferService`，`Send`等操作，实际上都要遍历每一种binding的对象，调用下一层的接口
     常见场景：
     一个proxy对应两种binding的skeleton，这里如果有someip binding的skeleton，则是跨ECU的
-    并且典型场景下，这里的someipd需要实现端口复用
+    并且典型场景下，这里的someipd需要实现端口复用（详情见aracom_api文档）
 
 3. 第2点是核心思想是：依赖抽象/接口，而不是细节/具体实现
+    用户层直接只管调用`socal`层的接口就完事了，底层binding实现要考虑的事情就多了
+
 
 
 

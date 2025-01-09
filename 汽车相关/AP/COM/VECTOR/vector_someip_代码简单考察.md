@@ -2727,7 +2727,7 @@ PS: 难道是`ServiceInstanceUpdateTask`被触发？？？
 (`OnServiceInstanceUpdate()` -> `ServiceInstanceUpdateTask::operator()`)
 （find service先来一把异步的find service，然很再被动监听service的变化？）
   (` void HandleFindService(::amsr::someip_protocol::internal::ServiceInstance const& service_instance) override {...}`，该函数是`reactor线程`监听到someipd发来的控制消息而触发的
-`ScheduleInitialSnapshotTask`触发时，调用`findservice_observers_manager_.AddObserver()`！！！
+`ScheduleInitialSnapshotTask`触发时，调用`findservice_observers_manager_.AddObserver()`！！！这里进行真正的find service的匹配
 如果service没有成功保活，proxy对象会析构吗？为什么？
 someip_daemon_client层的`ProcessNonSomeIpMessage`：用于处理非SOME/IP类型的消息，也就两种：`kServiceDiscoveryServiceInstanceUpdate`,`kServiceDiscoveryEventSubscriptionState`
 )
@@ -3086,7 +3086,6 @@ static `Proxy`::`FindService`
 ```
 
 重点是其中的  **ScheduleInitialSnapshotTask**  (handle, service_instance)
-
 ```cpp
   /*!
    * \brief Register a new observer and schedule execution of a new InitialSnapShot task.
@@ -8363,7 +8362,7 @@ PS: 这里所使用的`Serializer`是`SerializerStartApplicationEvent1`（这么
 
 
 
-# `reaactor_thread`与`timer_manager`
+# `reactor_thread`与`timer_manager`
 `Runtime`真正持有：
 ```cpp
   ara::core::Optional<osabstraction::io::reactor1::Reactor1> reactor_;
@@ -8374,17 +8373,32 @@ PS: 这里所使用的`Serializer`是`SerializerStartApplicationEvent1`（这么
 把这两者的引用传递给`AraComSomeIpBinding` --> `SomeipProxyEventBackend`
 （这里的传递是由于`Runtime提供接口返回二者的引用了，由SomeipInitializer进行传递`）
 `SomeipProxyEventBackend`如何使用`time_manager_`：
+```cpp
+  std::size_t Subscribe(ServiceProxySomeIpEventInterface* subscriber, std::size_t cache_size);
+```
   在订阅时，触发`ReactorSyncTask`：
   该类的`operator()()`主要做的是：
   1. 如果是`kPolling`
     同步调用
   2. 如果是`kSingleThread`
-  ```cpp
-      Timer::Stop();
-      Timer::SetPeriod(std::chrono::seconds::zero());
-      Timer::Start();
+```cpp
+ReactorSyncTask::operator()() {
+// ...
+    Timer::Stop();
+    Timer::SetPeriod(std::chrono::seconds::zero());
+    Timer::Start();
+// ...
+}
   ```
 这里如何影响到`reactor线程`？？？
+  --> 可能存在计时器机制，Set了0之后，reactor线程那边会感知到。这里算是设置了一个立即到期的计时器
+      `SetPeriod()`，`Start()`连招之后，调用到`TimerManager`::`AddTimer(Timer*)`，肯定会调用`ReactorSyncTask`::`HandleTimer()`，这个调用确实是在`reactor线程`
+！！！`Runtime`中的`reactor线程`该做的事情是在：`InitializeReactorThread(reactor_thread_config)`中就通过lambda传进去了
+也就是说，这里的`Subscribe`就算是`kSingleThread`模式，也是假异步，真同步
+
+
+
+
 
 
 

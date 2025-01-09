@@ -488,7 +488,7 @@ typedef __malloc_alloc_template<0> malloc_alloc;    // 直接将inst指定为0
 
     区块大小是不等的：8, 16, 24, 32, 40, 48 .. 128字节
 ```cpp
-union obj{
+union obj {
     union obj* free_list_link;
     char client_data[1];
 };
@@ -686,9 +686,9 @@ __default_alloc_template<__threads, __inst> ::_S_free_list[
     if (__n > (size_t) _MAX_BYTES) {    // 若大于128则调用第一级配置器，即malloc
       __ret = malloc_alloc::allocate(__n);
     }
-    else {  // 若小于128字节，则检查free list：声明了一个指针变量，通过_S_freelist_index()函数得到了偏移量（free list有十六个空闲内存块，内存块大小是按8递增的）
+    else {  // 若小于128字节，则检查free list：声明了一个指针变量，通过_S_freelist_index()函数得到了偏移量（free list有十六个空闲内存块，这些内存块的大小是按8递增的）
       _Obj* __STL_VOLATILE* __my_free_list
-          = _S_free_list + _S_freelist_index(__n);  // 此处是二级指针，该指针指向一个地址，这个地址，指向一个地址，它存储着free list的某一个节点
+          = _S_free_list + _S_freelist_index(__n);  // 此处是二级指针，该指针指向一个地址，这个地址，指向另一个地址，它存储着free list的某一个节点
       // Acquire the lock here with a constructor call.
       // This ensures that it is released in exit or during stack
       // unwinding.
@@ -700,7 +700,7 @@ __default_alloc_template<__threads, __inst> ::_S_free_list[
       if (__result == 0)  // 没找到可用的free list，重新填充free list
         __ret = _S_refill(_S_round_up(__n));
       else {  // 调整free list
-        *__my_free_list = __result -> _M_free_list_link;  // 空闲内存块链表少了一个元素。总之，这个空闲内存块链表只会保存空闲的内存块，一开始其实是空的，在return之前，访问union的_M_free_list_link操作是有效的
+        *__my_free_list = __result -> _M_free_list_link;  // 空闲内存块链表少了一个元素，重新维护链表。总之，这个空闲内存块链表只会保存空闲的内存块，一开始其实是空的，在return之前，访问union的_M_free_list_link操作是有效的
         __ret = __result;
       }
     }
@@ -896,7 +896,7 @@ __uninitialized_copy_aux(_InputIter __first, _InputIter __last,
   _ForwardIter __cur = __result;
   __STL_TRY {
     for ( ; __first != __last; ++__first, ++__cur)
-      _Construct(&*__cur, *__first);
+      _Construct(&*__cur, *__first);    // PS: placement new
     return __cur;
   }
   __STL_UNWIND(_Destroy(__result, __cur));  // 对于非POD类型，这样处理最稳妥

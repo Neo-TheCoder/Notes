@@ -1,6 +1,6 @@
 <mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/25.0.2 Chrome/128.0.6613.186 Electron/32.2.5 Safari/537.36" version="25.0.2" pages="2">
   <diagram id="C5RBs43oDa-KdzZeNtuy" name="skeleton">
-    <mxGraphModel dx="6116" dy="6422" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="5822" dy="6323" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="WIyWlLk6GJQsqaUBKTNV-0" />
         <mxCell id="WIyWlLk6GJQsqaUBKTNV-1" parent="WIyWlLk6GJQsqaUBKTNV-0" />
@@ -217,7 +217,7 @@
         <mxCell id="omTcRigOU-wn5PtGvHvL-233" value="+    ara::com::ServiceHandleContainer&lt;::amsr::socal::internal::InstanceHandle&gt; FindService(&#xa;      ara::com::AraComServiceId const&amp;, ::amsr::socal::internal::InstanceIdentifierString const&amp; instance,&#xa;      ::amsr::socal::internal::ProxyId proxy_id) override" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;" parent="q6oVtdq998bu4EGGRiEc-20" vertex="1">
           <mxGeometry y="128" width="740" height="52" as="geometry" />
         </mxCell>
-        <mxCell id="omTcRigOU-wn5PtGvHvL-234" value="+    std::unique_ptr&lt;::amsr::socal::internal::SkeletonImplInterface&gt; OfferService(&#xa;      ara::com::AraComServiceId const&amp;, ::amsr::socal::internal::InstanceIdentifierString const&amp; instance,&#xa;      ::amsr::socal::internal::SkeletonInterface&amp; skeleton) override" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;fontStyle=1;fontColor=#FF0000;" parent="q6oVtdq998bu4EGGRiEc-20" vertex="1">
+        <mxCell id="omTcRigOU-wn5PtGvHvL-234" value="+    std::unique_ptr&lt;::amsr::socal::internal::SkeletonImplInterface&gt; OfferService(&#xa;      ara::com::AraComServiceId const&amp;, ::amsr::socal::internal::InstanceIdentifierString const&amp; instance,&#xa;      ::amsr::socal::internal::SkeletonInterface&amp; skeleton) override;" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;fontStyle=1;fontColor=#FF0000;" parent="q6oVtdq998bu4EGGRiEc-20" vertex="1">
           <mxGeometry y="180" width="740" height="52" as="geometry" />
         </mxCell>
         <mxCell id="omTcRigOU-wn5PtGvHvL-235" value="+    void StopOfferService(ara::com::AraComServiceId const&amp;,&#xa;                        ::amsr::socal::internal::InstanceIdentifierString const&amp; instance,&#xa;                        ::amsr::socal::internal::SkeletonId const skeleton_id) override" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;" parent="q6oVtdq998bu4EGGRiEc-20" vertex="1">
@@ -500,7 +500,7 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="omTcRigOU-wn5PtGvHvL-110" value="template &lt;typename TemplateConfiguration&gt;&#xa;class SomeIpDaemonClient" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=44;horizontalStack=0;resizeParent=1;resizeLast=0;collapsible=1;marginBottom=0;rounded=0;shadow=0;strokeWidth=1;fillColor=#fa6800;fontColor=#000000;strokeColor=#C73500;" parent="WIyWlLk6GJQsqaUBKTNV-1" vertex="1">
-          <mxGeometry x="-1053" y="-350.00000000000006" width="640" height="184" as="geometry">
+          <mxGeometry x="-1070" y="-290.00000000000006" width="640" height="184" as="geometry">
             <mxRectangle x="220" y="120" width="160" height="26" as="alternateBounds" />
           </mxGeometry>
         </mxCell>
@@ -646,10 +646,10 @@
             <mxRectangle x="220" y="120" width="160" height="26" as="alternateBounds" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="omTcRigOU-wn5PtGvHvL-165" value="+ void OfferService() noexcept" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;" parent="omTcRigOU-wn5PtGvHvL-164" vertex="1">
+        <mxCell id="omTcRigOU-wn5PtGvHvL-165" value="+ void OfferService() noexcept" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;fontStyle=1;fontColor=#FF0000;" parent="omTcRigOU-wn5PtGvHvL-164" vertex="1">
           <mxGeometry y="50" width="710" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="_xz9jEpGg2IToIsS_AJU-15" value="+ void StopOfferService() noexcept" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;fontColor=#FF0000;" parent="omTcRigOU-wn5PtGvHvL-164" vertex="1">
+        <mxCell id="_xz9jEpGg2IToIsS_AJU-15" value="+ void StopOfferService() noexcept" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;fontColor=#FF0000;fontStyle=1" parent="omTcRigOU-wn5PtGvHvL-164" vertex="1">
           <mxGeometry y="70" width="710" height="20" as="geometry" />
         </mxCell>
         <mxCell id="_xz9jEpGg2IToIsS_AJU-16" value="+ ::ara::core::Future&lt;bool&gt; ProcessNextMethodCall() noexcept" style="text;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;" parent="omTcRigOU-wn5PtGvHvL-164" vertex="1">
@@ -1353,7 +1353,7 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="5PHZPkAGGixvAAZnGgPY-1" value="IpcBindingLifeCycleManager" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeLast=0;collapsible=1;marginBottom=0;rounded=0;shadow=0;strokeWidth=1;" parent="WIyWlLk6GJQsqaUBKTNV-1" vertex="1">
-          <mxGeometry x="2160" y="-180" width="720" height="280" as="geometry">
+          <mxGeometry x="2140" y="-140" width="720" height="280" as="geometry">
             <mxRectangle x="220" y="120" width="160" height="26" as="alternateBounds" />
           </mxGeometry>
         </mxCell>
@@ -1647,7 +1647,7 @@
     </mxGraphModel>
   </diagram>
   <diagram id="GUsFOu1ASRHMfv6vqrYd" name="proxy">
-    <mxGraphModel dx="5289" dy="13436" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="5091" dy="13390" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
