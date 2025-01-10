@@ -2596,6 +2596,268 @@ if(n!= 0){
 
 
 
+## 4.4 deque
+### 4.4.1 deque概述
+**双向**、**连续**、**线性**
+1. `常数时间`内对头端元素`插入/删除`
+2. 没有`capacity`概念，无`reserve`功能（vector::`reserve`是针对内存的，可用于扩容；vector::`resize`是直接操作元素数量的）
+  是动态地以分段连续的空间组合而成，不像vector扩容（旧空间不足而重新配置一块更大空间，复制元素，释放旧空间）
+虽然提供`random access iterator`，但是复杂度高，不是普通的指针
+以至于对deque的排序，最好先复制到vector，将vector排序后，再复制回deque
+
+### 4.4.2 deque的中控器
+deque系由一段一段的定量连续空间构成。
+一旦有必要在deque的前端或尾端增加新空间，便`配置一段定量连续空间`，串接在整个deque的头端或尾端。
+**deque的最大任务，便是在这些分段的定量连续空间上，维护其整体连续的假象，并提供随机存取的接口。**
+避开了“重新配置、复制、释放”的轮回，代价则是`复杂的迭代器架构`。
+受到分段连续线性空间的字面影响，我们可能以为deque的实现复杂度和vector相比虽不中亦不远矣，其实不然。
+主要因为，既日分段连续线性空间，就必须有中央控制，而为了维持整体连续的假象，数据结构的设计及选代器前进后退等操作都颇为繁琐。
+degue的实现代码分量远比vector或list都多得多。deque采用一块所谓的map(注意，不是STL的map容器)作为主控。
+这里所谓 map 是一小块连续空间，其中每个元素(此处称为一个节点，node)都是指针，指向另一段(较大的)连续线性空间，称为缓冲区。
+缓冲区才是deque的储存空间主体。
+SGISTL允许我们指定缓冲区大小，默认值0表示将使用512 bytes 缓冲区。
+```cpp
+template <class T, class Alloc = alloc, size_t BufSiz = 0>
+class deque {
+public:
+  typedef T value_type;
+  typedef value_type* pointer;
+  // ...
+protected:
+  typedef pointer* map_pointer;   // 二级指针
+
+protected:
+  map_pointer map;    // 指向map，是一块连续空间，其内的每个元素都是一个指针，指向某一块缓冲区
+  size_type map_size; // 表示map内可容纳多少指针
+// ...
+};
+```
+当这个map满载，则再找一块更大的空间作为map（缓冲区也更大了）。
+
+
+
+### 4.4.3 deque的迭代器
+维护deque“整体连续”假象的任务，落在了迭代器的和 `operator--`、`operator++`身上。
+让我们思考一下，deque 迭代器应该具备什么结构。
+* 首先，它必须能够指出分段连续空间(亦即缓冲区)在哪里,
+* 其次它必须能够判断自己是否已经处于其所在缓冲区的边缘，如果是，一旦前进或后退时，就必须跳跃至下一个或上一个缓冲区，为了能够正确跳跃，deque 必须随掌握管控中心(map)。
+下面这种实现方式符合需求:
+```cpp
+template <class _Tp, class _Ref, class _Ptr, size_t BufSiz>
+struct _Deque_iterator {  // 不继承std::iterator
+  typedef _Deque_iterator<_Tp, _Tp&, _Tp*, BufSiz> iterator;
+  typedef _Deque_iterator<_Tp, const _Tp&, const _Tp*> const_iterator;
+  static size_t _S_buffer_size() { return __deque_buf_size(BufSiz, sizeof(_Tp)); }
+
+  //  未继承std::iterator，必须自行撰写五个必要迭代器相应型别
+  typedef random_access_iterator_tag iterator_category;
+  typedef _Tp value_type;
+  typedef _Ptr pointer;
+  typedef _Ref reference;
+  typedef size_t size_type;
+  typedef ptrdiff_t difference_type;
+  typedef _Tp** _Map_pointer;
+
+  typedef _Deque_iterator _Self;
+
+  // 迭代器，所持有的四个关键成员
+  _Tp* _M_cur;
+  _Tp* _M_first;
+  _Tp* _M_last;
+  _Map_pointer _M_node;
+// ...
+}
+```
+
+其中用来决定缓冲区大小的函数`buffer_size()`,调用`__deque_buf_size()`，后者是一个全局函数，定义如下：
+```cpp
+// Note: this function is simply a kludge to work around several compilers'
+//  bugs in handling constant expressions.
+inline size_t __deque_buf_size(size_t __size) {
+  return __size < 512 ? size_t(512 / __size) : size_t(1);
+}
+```
+
+假设现在我们产生一个`deque<int>`，并令其缓冲区大小为32，于是每个缓冲区可容纳`32/sizeof(int)=4`（即：每个缓冲区容纳`8`个元素）个元素。
+经过某些操作之后，deque拥有20个元素，那么其`begin()`和`end()`所传回的两个迭代器应该如图4-12所示（start迭代器指向map中三个节点中的第一个，finish迭代器指向map中三个节点中的最后一个，finish迭代器的first指向缓冲区开头，其cur指向第四个元素（8+8+4=20），其last指向缓冲区结尾）。
+这两个迭代器事实上一直保持在deque内，名为`start`和`finish`，稍后在 deque 数据结构中便可看到。
+20个元素需要 `20/8=3` 个缓冲区，所以 map 之内运用了三个节点。
+迭代器start 内的 cur 指针当然指向缓冲区的第一个元素，迭代器 finish 内的cur 指针当然指向缓冲区的最后元素(的下一位置)。
+注意，最后一个缓冲区尚有备用空间。稍后如果有新元素要插人于尾端，可直接拿此备用空间来使用。
+
+`deque::begin()`传回`迭代器start`，`deque::end()`传回`迭代器finish`。
+这两个迭代器都是deque 的data members。图中所示的这个 deque 拥有20个 int 元素，以3个缓冲区储存之。
+每个缓冲区 32 bytes,可储存8个int 元素 map大小为8(起始值)，目前用了3个节点。
+下面是 deque 迭代器的几个关键行为。
+由于迭代器内对各种指针运算都进行了重载操作，所以各种指针运算如加、减、前进、后退都不能直观视之。
+其中**最关键的就是:一旦行进时遇到缓冲区边缘，要特别当心，视前进或后退而定，可能需要调用`set_node()`跳一个缓冲区**
+`_M_set_node()`
+```cpp
+  struct _Deque_iterator {
+    // ...
+    // 一个iterator内部要维护四个指针
+    _Tp* _M_cur;  // 具体指向的元素
+    _Tp* _M_first;
+    _Tp* _M_last;
+    _Map_pointer _M_node;
+  }
+
+  void _M_set_node(_Map_pointer __new_node) {
+    _M_node = __new_node;
+    _M_first = *__new_node;
+    _M_last = _M_first + difference_type(_S_buffer_size());
+  }
+
+  //以下各个重载运算子是__deque_iterator<>成功运作的关键
+  reference operator*() const { return *_M_cur; }
+  pointer operator->() const { return _M_cur; }
+
+  _Self& operator++() {
+    ++_M_cur;
+    if (_M_cur == _M_last) {
+      _M_set_node(_M_node + 1);
+      _M_cur = _M_first;
+    }
+    return *this; 
+  }
+
+  _Self operator++(int) { // 后置式，返回一个拷贝
+    _Self __tmp = *this;
+    ++*this;
+    return __tmp;
+  }
+
+  _Self& operator--() {
+    if (_M_cur == _M_first) {
+      _M_set_node(_M_node - 1);
+      _M_cur = _M_last;
+    }
+    --_M_cur;
+    return *this;
+  }
+
+  _Self operator--(int) {
+    _Self __tmp = *this;
+    --*this;
+    return __tmp;
+  }
+
+  // 随机存取
+  _Self& operator+=(difference_type __n)
+  {
+    difference_type __offset = __n + (_M_cur - _M_first);
+    if (__offset >= 0 && __offset < difference_type(_S_buffer_size()))
+      _M_cur += __n;
+    else {
+      difference_type __node_offset =
+        __offset > 0 ? __offset / difference_type(_S_buffer_size())
+                   : -difference_type((-__offset - 1) / _S_buffer_size()) - 1;
+      _M_set_node(_M_node + __node_offset);
+      _M_cur = _M_first + 
+        (__offset - __node_offset * difference_type(_S_buffer_size()));
+    }
+    return *this;
+  }
+
+  // 不仅要提供operator+=，也要提供operator+
+  _Self operator+(difference_type __n) const
+  {
+    _Self __tmp = *this;
+    return __tmp += __n;
+  }
+
+  _Self& operator-=(difference_type __n) { return *this += -__n; }  // operator+=的参数可正可负
+ 
+  _Self operator-(difference_type __n) const {
+    _Self __tmp = *this;
+    return __tmp -= __n;
+  }
+
+  reference operator[](difference_type __n) const { return *(*this + __n); }
+
+  bool operator==(const _Self& __x) const { return _M_cur == __x._M_cur; }
+  bool operator!=(const _Self& __x) const { return !(*this == __x); }
+  bool operator<(const _Self& __x) const {
+    return (_M_node == __x._M_node) ? 
+      (_M_cur < __x._M_cur) : (_M_node < __x._M_node);
+  }
+
+  bool operator>(const _Self& __x) const  { return __x < *this; }
+  bool operator<=(const _Self& __x) const { return !(__x < *this); }
+  bool operator>=(const _Self& __x) const { return !(*this < __x); }
+```
+
+
+
+### 4.4.4 deque的数据结构
+deque 除了维护一个先前说过的指向 map 的指针外,也维护start，finish两个迭代器，分别指向第一缓冲区的第一个元素和最后缓冲区的最后一个元素(的下一位置)。
+此外，它当然也必须记住目前的map大小。因为一旦map所提供的节点不足，就必须重新配置更大的一块map
+```cpp
+// 见__deque_buf_size()。Bufsize默认值为0的唯一理由是为了闪避某些编译器在处理常数算式(constant expressions)时的臭虫
+// 缺省使用 alloc 为配置器
+template <class T, class Alloc = al1oc, size_t BufSiz = 0>
+class deque {
+public:
+  typedef T value_type;   // Basic types
+  typedef value_type* pointer;
+  typedef size_t size_type;
+
+public:
+  typedef __deque_iterator<T, T&, T*, BufSiz> iterator;
+
+protected:
+  typedef pointer* _Map_pointer;
+
+protected:
+  iterator start;
+  iterator finish;
+
+  map_pointer map;  // 指向存储二维指针的缓冲区
+
+  size_type map_size;
+};
+```
+
+有了以上结构，以下机制便可轻易完成：
+```cpp
+public:                         // Basic accessors
+  iterator begin() { return _M_start; }
+  iterator end() { return _M_finish; }
+
+  reference operator[](size_type __n)
+    { return _M_start[difference_type(__n)]; }
+
+  reference front() { return *_M_start; }
+  reference back() {
+    iterator __tmp = _M_finish;
+    --__tmp;
+    return *__tmp;
+  }
+
+  size_type size() const { return _M_finish - _M_start; }
+  size_type max_size() const { return size_type(-1); }
+  bool empty() const { return _M_finish == _M_start; }
+```
+
+
+
+### 4.4.5 deque的构造与内存管理(`ctor, push_back, push_front`)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # 第五章 关联式容器
 标准的STL`关联式`容器分为`set(集合)`和`map(映射表)`两大类，以及这两大类的`衍生体multiset(多键集合)`和`multimap(多键映射表)`。
