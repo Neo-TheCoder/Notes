@@ -389,7 +389,7 @@ fstatat会计算相对于当前目录的pathname参数。
 第2个参数 bu是一个指针，它指向一个我们必须提供的结构。函数来填充由 buf指向的结
 构。
 结构的实际定义可能随具体实现有所不同，但其基本形式是:
-```c
+```cpp
 #ifdef __USE_LARGEFILE64
 /* Note stat64 has the same shape as stat for x86-64.  */
 struct stat64

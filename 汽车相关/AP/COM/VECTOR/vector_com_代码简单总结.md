@@ -285,7 +285,7 @@ PS: `InstanceSpecifierLookupTableEntry`是一个重要纽带，连接`Proxy`和`
 
 
 # 特点
-1. 为了方便src-gen这种代码参与编译，大量使用“`template`类的函数不被调用（就不会生成代码、参与编译）就可以引入未实现函数”的特性
+1. 为了方便src-gen这种代码参与编译，大量使用 “`template`类的函数不被调用（就不会生成代码、参与编译）就可以引入未实现函数” 的特性
 2. 由于多重绑定的存在，用户层对socal调用：看似简单的`OfferService`，`Send`等操作，实际上都要遍历每一种binding的对象，调用下一层的接口
     常见场景：
     一个proxy对应两种binding的skeleton，这里如果有someip binding的skeleton，则是跨ECU的
@@ -298,17 +298,6 @@ PS: `InstanceSpecifierLookupTableEntry`是一个重要纽带，连接`Proxy`和`
 
 
 # 哪些设计模式
-
-
-
-
-
-
-
-
-
-
-
 
 
 

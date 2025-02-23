@@ -4359,6 +4359,20 @@ startapplication::cm::service1::internal::StartApplicationCmService1_ServiceInte
 ```
 总之，，每次该proxy event有可读事件时，就最终触发到客户注册的`Receive Handler`，可以看作是同步的
 
+收到的event数据什么时候进行反序列化?
+--> src-gen中的`GetSample()`
+```cpp
+  template <typename DeserializerConfiguration,
+            std::enable_if_t<std::is_void<typename DeserializerConfiguration::E2eProfileConfigType>::value,
+                             std::uint8_t> = 0U>
+  auto GetSample() -> GetSampleResult {
+//  ...
+          SampleDeserializationResult deserialization_result{DeserializeSample<DeserializerConfiguration>(
+              serialized_sample_->GetView(0U), serialized_sample_->size())};
+// ...
+}
+```
+
 ```cpp
 void StartApplicationCmClientService1::ReceiveHandlerService1Event1() {
   log_.LogInfo() << "[Service1] [Event1] Receive handler was called.";
@@ -5250,7 +5264,7 @@ PS: `visible_sample_cache`表示的是：
 其实就是预分配 `Subscribe()`时传进来的参数 + 1 个的`vector<Ptr>`
 
 `SampleReader<SampleType>`的`ReadSamples()`
-PS: 核心是for循环遍历 min(max_samples, invisible_sample_container.size()) 次，
+PS: 核心是for循环遍历 `min(max_samples, invisible_sample_container.size())` 次，
   每次从`visible_sample_container`取出一个指针，调用`DeserializeSample`以接收反序列化数据
     ！！！注意 ：传入`DeserializeSample`的是对visible_cache_slot进行`两级解引用`的结果
       把`std::shared_ptr<socal::internal::events::MemoryWrapperInterface<SampleDataType>>`对象，进行两次解引用，第一次得到`MemoryWrapper<SampleType>`对象，他是一个派生类对象，对其解引用可以得到`SampleType&`类型
@@ -6961,11 +6975,62 @@ Runtime::~Runtime() noexcept {
 
 
 
+# 关于SOME/IP序列化 / 反序列化
+## 大致流程
+**发送数据**
+```cpp
+// 用户层
+Send()
 
+// socal::SkeletonEvent<typename Skeleton, typename EventSampleType, typename SkeletonImplInterface, typename EventManagerReturnType, EventManagerReturnType* (SkeletonImplInterface::*GetEventManagerMethod)()>
 
+  (interface.get()->*GetEventManagerMethod)()->Send(data);  // for循环遍历多重binding
 
+// someip_binding_transformation_layer::SomeIpSkeletonEventManager<EventConfig>
+  void Send(SampleType const& data) final { backend_->Send(data); }
 
-# 关于SOME/IP序列化
+// `SomeIpSkeletonEventBackend<EventConfig>`::`Send`
+  void Send(SampleType const& data) {
+      // 一系列序列化操作
+      Serialize(writer, body_view, payload_size, data); // ！！！
+
+      // ...
+      someip_binding_server_manager_.SendEventNotification(instance_id_, std::move(packet));
+      // ...
+  }
+```
+
+`SomeIpSkeletonEventBackend`::`Send`
+```cpp
+  void Send(SampleType const& data) {
+    // Allocate required memory size
+    std::size_t const header_size{CalculateHeaderSize()};
+    std::size_t const payload_size{PayloadSerializer::GetRequiredBufferSize(data)};
+    std::size_t const alloc_size{header_size + payload_size};
+
+    // Allocate memory for the serialization
+    MemoryBufferPtr packet{tx_buffer_allocator_.Allocate(alloc_size)};
+
+    // Get linear access to allocated MemoryBuffer via Writer
+    // Due to the limitation that only flexible memory with a single view is used we can safely cast.
+    MemoryBuffer::MemoryBufferView packet_view{packet->GetView(0)};
+    // VECTOR Next Line AutosarC++17_10-M5.2.8:MD_SOMEIPBINDING_AutosarC++17_10-M5.2.8_conv_from_voidp
+    BufferView body_view{static_cast<std::uint8_t*>(const_cast<void*>(packet_view[0].base_pointer)), packet->size()};
+    Writer writer{body_view};
+
+    // Serialize the headers + payload
+    Serialize(writer, body_view, payload_size, data);
+
+    // Finally transmit the serialized packet via ServerManager
+    if (EventConfig::kMessageType == ::amsr::someipd_app_protocol::internal::MessageType::kPdu) {
+      someip_binding_server_manager_.SendPduEventNotification(instance_id_, std::move(packet));
+    } else {
+      someip_binding_server_manager_.SendEventNotification(instance_id_, std::move(packet));
+    }
+  }
+```
+
+`Serialize()`
 ```cpp
   /*!
    * \brief Serializes SOME/IP event notification packet in case the event is E2E protected.
@@ -7007,15 +7072,47 @@ Runtime::~Runtime() noexcept {
         static_cast<std::uint8_t>(::amsr::someip_protocol::internal::kHeaderLength)};
 
     // Serialize the event sample
-    PayloadSerializer::Serialize(writer, data);
+    PayloadSerializer::Serialize(writer, data);   // ！！！
 
     // Finally close the E2E header serializer which updates the attributes of the already allocated E2E header.
     e2e_header_serializer.Close();
   }
 ```
 
+这里的`PayloadSerializer`主要提供：
+```cpp
+class SerializerStartApplicationEvent1 {
+ public:
+  constexpr static std::size_t GetRequiredBufferSize(std::uint8_t const &data) noexcept {
+    return serialization::GetRequiredBufferSize<
+      TpPackDataPrototype,
+      // Byte-order of primitive datatype (/AUTOSAR/StdTypes/uint8_t)
+      typename serialization::Tp<TpPackDataPrototype>::ByteOrder
+
+      >(data);
+  }
+
+  static void Serialize(serialization::Writer &writer, std::uint8_t const &data);
+
+ private:
+  using TpPackDataPrototype = serialization::TpPack<
+      BigEndian,
+      serialization::SizeOfArrayLengthField<4>,
+      serialization::SizeOfVectorLengthField<4>,
+      serialization::SizeOfMapLengthField<4>,
+      serialization::SizeOfStringLengthField<4>,
+      serialization::SizeOfStructLengthField<0>,
+      serialization::SizeOfUnionLengthField<4>,
+      serialization::SizeOfUnionTypeSelectorField<4>,
+      serialization::StringBomActive,
+      serialization::StringNullTerminationActive,
+      serialization::DynamicLengthFieldSizeInactive>;
+};
+```
+
 ！！！序列化的剩余部分的代码，在`src-gen`中
 因而减少了C++ template的代码，调用了一个模板函数
+`src-gen`，这里会调用到`someip-protocol/internal/serialization/ser_wrapper.h`
 ```cpp
 void SerializerStartApplicationEvent1::Serialize(serialization::Writer
 &writer, std::uint8_t const &data) {
@@ -7028,12 +7125,10 @@ void SerializerStartApplicationEvent1::Serialize(serialization::Writer
       >(writer, data);
 }
 ```
-其实函数就传递两坨实参，第一个writer、第二个是待序列化数据
+其实函数就传递两坨实参，`第一个`  `writer`、`第二个`是  `待序列化数据`
 实际传递2个模板实参：
 `TpPackDataPrototype`
 `ByteOrder`
-
-
 
 其中，第一个参数类型`TpPackDataPrototype`的定义为：
 (以下代码来自`src-gen`)
@@ -7050,7 +7145,6 @@ void SerializerStartApplicationEvent1::Serialize(serialization::Writer
       serialization::StringBomActive,
       serialization::StringNullTerminationActive,
       serialization::DynamicLengthFieldSizeInactive>;
-
 };
 ```
 
@@ -7101,7 +7195,6 @@ auto SomeIpProtocolSerialize(Writer& w, Primitive const& t) noexcept
 ```cpp
   std::uint8_t* data() const { return std::next(buffer_view_.data(), static_cast<std::ptrdiff_t>(write_index_)); }
 ```
-
 
 这里看一下`writer`类
 ```cpp
@@ -7595,8 +7688,64 @@ class Writer {
 ```
 PS: `std::next`函数用于`返回一个 指向当前迭代器位置之后 第n个位置的 迭代器`。
 
+**接收数据**
+```cpp
+// 异步调用：触发一系列回调：
+// Connection::OnReactorCallback()
+        if (events.HasReadEvent()) {
+          reader_.OnReactorEvent(native_handle_);
+        }
 
+// class ActiveConnection::OnReceiveCompletion
+      // Verify that we received at least generic header and specific header
+      if (received_length >= kHeaderLength) {
+        ProcessReceivedMessage();
 
+        // Trigger an asynchronous reception again.
+        StartReceiving();
+      }
+
+// ProcessReceivedMessage():
+// SomeIpDaemonClient::OnSomeIpRoutingMessage
+    someip_daemon_client_.OnSomeIpRoutingMessage(routing_someip_header.instance_id_,
+                                                std::move(reception_buffer_.receive_message_body));
+
+// OnSomeIpRoutingMessage
+  // RoutingController::ProcessSomeIpMessage
+    client_manager_->HandleReceive(instance_id, someip_header, std::move(someip_message));
+    
+    it->second->OnEvent(std::move(packet)); // 操作invisible_sample_cache_
+
+// SomeipProxyEventBackend的OnEvent
+  void HandleEventNotification() override {
+    if (subscribed_) {
+      // Notify EventReceiveHandler
+      service_event_->Notify();   // 同步调用AddTask
+    }
+  }
+
+//  先主动调用Update()更新visble_cache
+  // UpdateNewest()或者UpdateLast()都会：
+  // 调用到反序列化：
+  template <typename T = E2eProfileConfig>
+  auto GetSample(std::shared_ptr<SomeIpSampleCacheEntry<SampleType>> const& entry) ->
+      typename std::enable_if<!std::is_void<T>::value, SomeIpSampleCacheEntryResult>::type {
+    return entry->template GetSample<DeserializerConfiguration>(e2e_transformer_);
+  }
+
+//  再主动调用GetCachedSamples()
+template <typename ServiceInterface, typename ProxyImplInterface, typename ProxyHandleType, typename EventSampleType,
+          typename EventManagerReturnType, EventManagerReturnType* (ProxyImplInterface::*GetEventManagerMethod)()>
+class ProxyEvent {
+// ...
+public:
+    const SampleContainer& GetCachedSamples() const noexcept {
+        // Protect concurrent modification of visible_sample_cache_ by Update(), GetCachedSamples(), Cleanup() APIs.
+        std::lock_guard<std::mutex> guard(visible_sample_cache_lock_);
+        return visible_sample_cache_;
+      }
+}
+```
 
 # VECTOR R20-11 关于someipd的fatal: 
 ```log

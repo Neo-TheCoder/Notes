@@ -1323,7 +1323,9 @@ lambda的应用场景是只在一两个地方使用的简单操作
 头文件functional
 可以将bind函数看作一个通用的函数适配器
 ***接收一个可调用对象，生成一个新的可调用对象来适应原对象的参数列表***
-auto newCallable = bind(callable,arg_list);
+```cpp
+auto newCallable = bind(callable, arg_list);
+```
 实际上就是：
 当我们调用newCallable时，newCallable会调用callable，并传递给它atg_list中的参数（其中可能是_n这样的名字，意思是占位符）
 
@@ -1331,9 +1333,10 @@ auto newCallable = bind(callable,arg_list);
 ```c++
 // check_size是一个函数 接收一个string类型的参数
 auto check6 = std::bind(check_size, _1, 6);
-/* 意思是：check6作为一个可调用对象，接受一个string类型的参数，并用此string和值6来调用check_size函数
-只有_1一个占位符表示check6只接受单一参数
-占位符出现在arg_list的第一个尾置表示check6的此参数对应check_size的第一个参数
+/*
+    意思是：check6作为一个可调用对象，接受一个string类型的参数，并用此string和值6来调用check_size函数
+    只有_1一个占位符表示check6只接受单一参数
+    占位符出现在arg_list的第一个尾置表示check6的此参数对应check_size的第一个参数
 */
 string s = "hello";
 bool b1 = check6(s);
@@ -1352,14 +1355,18 @@ bool b1 = check6(s);
 也可以用bind绑定给定可调用对象中的参数 重新安排顺序
 ```c++
 auto g = bind(f, a, b, _2, c, _1);
+```
 f本身接受5个参数
 新生成的g有两个参数:_2和_1
 意思是:
 g将自己的参数作为第三个和第五个参数传递给f
 其他的参数绑定到a,b,c
 调用的时候也就是:
+```cpp
 g(_1,_2)
+```
 -->
+```cpp
 f(a,b,_2,c,_1)
 // 也就是说 bind可以把原来的函数的参数固定化
 ```
@@ -1367,13 +1374,15 @@ f(a,b,_2,c,_1)
 
 
 #### 用bind重排参数顺序
+```cpp
 bind(isShorter, _2, _1)
+```
 
 #### 绑定引用参数
-**bind拷贝参数,如果想传递对象而不拷贝(有些对象不能拷贝),就必须使用std::ref函数
+**bind拷贝参数,如果想传递对象而不拷贝(有些对象不能拷贝),就必须使用`std::ref`函数
+```cpp
 bind(print,ref(of),_1,'')
-
-
+```
 
 ## 10.4 再探迭代器
 iterator头文件中还有其他几种迭代器
