@@ -598,8 +598,13 @@ bool ServiceDiscoveryPayloadBuilder::EvaluatePayload(ServiceDiscoveryMessagePayl
 ```
 
 
-
-
+# 配置注意点
+## subscribe也有`有效期`
+`subscribe entry`里面的`TTL`代表这次`订阅`在服务端存活的时间是TTL秒，时间到后服务端自动取消订阅。
+客户端为什么会重复订阅呢？
+原来是服务端周期`offer service`，在`客户端`的sd模块的`on_message`里面处理：收到offersvice后创建resubscribe.
+所以`客户端的TTL`时间要 `大于` `服务端的cyclic_offer_delay时间`
+过期了就要重复订阅了
 
 
 

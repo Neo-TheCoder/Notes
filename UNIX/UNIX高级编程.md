@@ -1420,6 +1420,26 @@ PS：
 
 
 
+## 9.9 shell执行程序
+```sh
+ps -o pid,ppid,pgid,sid,comm
+
+# 输出
+    PID    PPID    PGID     SID COMMAND
+1654501 1654497 1654501 1654501 bash
+1678170 1654501 1678170 1654501 ps
+```
+bash是当前终端会话中的主要进程
+
+在你运行 ps 的瞬间：
+bash 是父进程（PPID = 1 或其他更高层进程）。
+ps 是由 bash 启动的子进程（PPID 等于 bash 的 PID）。
+**ps 默认只会显示当前会话中的进程（与当前终端相关的进程）**
+
+
+
+
+
 
 
 
