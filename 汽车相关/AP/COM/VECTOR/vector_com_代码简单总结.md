@@ -24,7 +24,7 @@ void Runtime::MapInstanceSpecifierToInstanceId(
 * event_backend：`SomeIpSkeletonEventBackend<{ServiceInterfaceSkeletonSomeipEventConfigEvent1}>`，添加到`static`的`map<instance_id, event_backend>`
 * 调接口（怎么个调用法，都是src-gen生成的）：`MapInstanceSpecifierToInstanceId(aracom_someip_binding, instance_specifier, instance_identifier, service_name)`
     `Runtime`维护一个`InstanceSpecifierLookupTable`类型的`instance_specifier_table_`，往里构造对象`<aracom_someip_binding, instance_specifier, instance_identifier, service_name>`
-PS: `instance_specifier`和`instance_identifier`是一对多的关系（很多时候是一对一），后者会显露具体的binding
+PS: `instance_specifier`和`instance_identifier`是一对多的关系（当然，很多时候是一对一），后者会显露具体的binding
 
 
 
@@ -290,6 +290,7 @@ PS: `InstanceSpecifierLookupTableEntry`是一个重要纽带，连接`Proxy`和`
     常见场景：
     一个proxy对应两种binding的skeleton，这里如果有someip binding的skeleton，则是跨ECU的
     并且典型场景下，这里的someipd需要实现端口复用（详情见aracom_api文档）
+    回调中，遍历service_handle数组，来针对不同的绑定做不同的处理
 
 3. 第2点是核心思想是：依赖抽象/接口，而不是细节/具体实现
     用户层直接只管调用`socal`层的接口就完事了，底层binding实现要考虑的事情就多了
