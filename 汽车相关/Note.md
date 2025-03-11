@@ -110,46 +110,117 @@ src-gen中包含关键binding类，如果是Skeleton端，就是`SkeletonBinding
 
 
 # SOME/IP服务发现流程
+集中式
 ## 几个阶段
 ### OfferService、FindService
-都是多播消息
+都是udp多播消息
 Offer报文中包含若干个提供的服务（service id, instance id, version, ttl），附加字段里包含ip + port
 find报文中包含若干个请求的服务（service id, instance id, version, ttl）
+（someipd显然需要维护一个可用服务列表）
 
-### subscribe, subscribe ack
+### subscribe, subscribe ack（event）
 单播
 subscribe报文包含若干个请求订阅的event group（service id, instance id, event group id, version, ttl），附加字段里包含ip + port
 subscribe ack报文包含对若干个请求订阅的event group（service id, instance id, event group id, version, ttl）的确认
+可配置`多播阈值`：0：单播   X：订阅数低于阈值事件，则单播，大于等于阈值，则多播
 
-### 持续发Offer以保活？？？
+服务上线了，不代表event准备好了，没准备好就订阅，则返回Subscribe Nack
+
+### request，response
+#### 半周期回复offer
+`周期发Offer`阶段，前1/2周期收到的Find，回复一条`单播`的Offer
+                  后1/2周期收到的Find，回复一条`组播`的Offer（收到得晚，可能网络拥塞）
 
 
+
+
+### 持续发Offer以保活
+Offer：当前服务可用，有效事件TTL
+client端进行计时，超过了TTL还没收到Offer，则认为服务下线
+
+### SD状态机
+#### Server SD
+##### Down
+下线阶段
+服务不可用 / 未注册
+服务异常（网络连接中断）
+
+
+当服务准备完毕后，进入以下状态
+#### Ready
+每个子状态都含有一个计时器，定时进入下一个阶段
+##### Initial Wait Phase
+经过`初始delay时间`后，发送第一包`OfferService`，进入下一阶段
+如果服务不可用，返回上一阶段
+
+##### Repetition Phase（可通过配置重复时间为0，跳过此阶段）
+可配置重复次数、重复时间，发送间隔以指数形式增长（2的n次幂）
+期间就算收到了FindService，也要延迟`（可配置的）一段时间`，发单播`OfferService`给服务请求端
+如果服务不可用，返回`Down阶段`，并发送`StopOffer`
+收到`SubscribeEventGroup`时，发送单播Ack/Nack，**启动此`订阅Entry`的TTL计时器**（如果收到`StopSubscribeEventGroup`，则停止计时器）
+
+当以上阶段发送完N次（可配置次数），进入下一阶段
+##### Main Phase
+除非服务主动下线，否则一般不会再退出
+固定周期（可配置）地发送OfferService
+期间就算收到了FindService，也要延迟`（可配置的）一段时间`，发单播`OfferService`给服务请求端
+如果服务不可用，返回`Down阶段`，并发送`StopOffer`
+收到`SubscribeEventGroup`时，发送单播Ack/Nack，**启动此`订阅Entry`的TTL计时器**（如果收到`StopSubscribeEventGroup`，则停止计时器）
+
+#### Client SD
+##### Down
+
+在Down状态下，收到OfferService，启动TTL计时器，进入下一阶段（如果同时服务被请求直接进入主阶段）
+##### Initial Wait Phase
+等待一段时间（可配置）
+如果收到`OfferService`，则TTL计时器取消，直接进入主阶段
+发送第一个`FindService`，进入重复阶段
+服务请求被释放的话，返回Down
+
+##### Repetition Phase
+以指数增长的间隔发送若干次`FindService`
+期间如果收到OfferService（停止发送和计时），直接进入主阶段，延迟一定时间发送`SubscribeEventGroup`
+收到`StopOffer`的话，返回Down
+
+##### Main Phase
+如果是事件服务，延迟一定时间，触发发送`SubscribeEventGroup`
+收到`StopOffer`的话，停止所有计时器，返回Down
+
+client端特别的点在于，一旦收到Offer后，直接进入主阶段
+而server端在主阶段不断周期发送Offer，而client不发（因为find是为了激活对端上线，一直发没有意义，浪费网络带宽，Offer不断发送以保活，刷新TTL）
 
 
 # DDS服务发现流程
-## 1. DomainParticipant发现阶段（PDP）：
+关键字
+发现机制、收发机制、QOS机制
+
+## 1. DomainParticipant发现阶段（PDP, Participant Discovery Protocol）：
 在此阶段，`DomainParticipant`参与者确认彼此的存在。
 为此，每个DomainParticipant都会定期发送通知消息。
 当两个给定的DomainParticipant存在于同一DDS域中时，它们将匹配。
-默认情况下，使用已知的`多播地址`和`端口`（使用DomainId计算）发送通知消息。
-此外，还可以指定使用单播发送通知的地址列表。
+默认情况下，使用已知的`多播地址`和`端口`（使用`Domain Id`计算）发送通知消息。
+此外，还可以指定使用`单播`发送通知的地址列表。
 此外，还可以配置此类通知的周期性。
 
 
 
-## 2. 端点发现阶段（EDP）：
+## 2. 端点发现阶段（EDP, Endpoint Discovery Protocol）：
 在此阶段，`DataWriter`和`DataReader`相互确认。
-为此，DomainParticipants使用PDP期间建立的通信信道，彼此共享有关其DataWriter和DataReader的信息。
+为此，`DomainParticipants`使用PDP期间建立的通信信道，彼此共享有关其`DataWriter`和`DataReader`的信息。
 除其他外，此信息还包含`主题`和`数据类型`。
-要使两个端点匹配，其主题和数据类型必须一致。
+要使两个`端点`匹配，**其主题和数据类型必须一致**。
 一旦DataWriter和DataReader匹配，它们就可以发送/接收用户数据流量了。
 
-
-
-
-
-
-
+### 四种发现机制
+Fast DDS提供以下发现机制：
+1. 简单发现：
+    这是默认机制。它支持PDP和EDP的RTPS标准，因此提供与任何其他DDS和RTPS实现的兼容性。
+2. 静态发现：
+    该机制在PDP阶段使用简单参与者发现协议（SPDP）（如RTPS标准所规定），但允许在事先知道所有DataWriter和DataReader的IP和端口、数据类型和主题时跳过简单端点发现协议（SEDP）阶段。
+3. 发现服务器：
+    此发现机制使用集中式发现架构，其中DomainParticipant（称为服务器）充当元流量发现的中心。
+4. 手动发现：
+    此机制仅与RTPS层兼容。它禁用PDP，允许用户使用其选择的任何外部元信息通道手动匹配和取消匹配RTPSParticipant、RTPSReader和RTPSWriter。因此，用户必须访问DomainParticipant实现的RTPSParticipant，并直接匹配RTPS实体。
 
 
 
