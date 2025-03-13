@@ -1,7 +1,6 @@
 # 介绍一下vector ap的使用
 AUTOSAR定义了超过300个AR-ELEMENT，VECTOR由自定义了一些，对AP模型进行了扩展
 
-## 供应商。。。使用者。。。（？？？）
 
 
 
@@ -47,6 +46,74 @@ src-gen中包含关键binding类，如果是Skeleton端，就是`SkeletonBinding
 
 ## per
 
+
+
+
+
+# AUTOSAR AP
+## com
+### skeleton
+#### 一些关键调用
+对于someip而言，每个app就是一板一眼地给someipd发控制消息，socket连接都是由someipd建立。
+##### skeleton
+static `Skeleton`::`OfferService()`
+    fastdds:    `DomainParticipant`、`Publisher`、`Subscriber`
+                而`DataWriter`要到`EventImpl`的`OfferEvent`里才进行`create`，也就是`registerService`（还是在`OfferService()`）
+
+static `Skeleton`::`StopOfferService()`
+
+###### event
+`Send()`
+
+###### method 
+定义回调
+
+##### proxy
+static `Proxy`::`StartFindService([](handles) { UserFindServiceHandler(handles) }, specifier)`
+    fastdds:    service proxy端，一个publisher和一个subscriber就够用了
+static `Proxy`::`StopFindService(handle)`
+
+###### event
+`SetReceiveHandler`
+
+###### method
+Future<> `operator()(Args&&... args)`
+
+#### 主要逻辑
+skeleton binding和proxy binding都有`factory`
+
+skeleton端，有一个代理类：构造时执行各种`Offer`操作
+1. event
+用户层调用的`EventDispatcher`类，被`EventImpl`代理（因为多重绑定，所以是一对多的关系，通过list来存储代理类指针），调`Write()`
+
+2. method
+数据类型定义中会形成：
+```cpp
+request::dds_type_t
+reply::dds_type_t
+```
+
+在`on_data_available`里面，触发一个函数：
+```cpp
+Execute(MethodImplBase* method, typename MethodImplBase::requestId_t requestId);    // MethodCallProcessingMode判断
+```
+
+调用到用户层的method回调
+```cpp
+enum class MethodCallProcessingMode
+{
+    kPoll,
+    kEvent,             // 线程池
+    kEventSingleThread  // 直接在on_data_available的线程执行用户层method回调
+};
+```
+
+### proxy
+1. event
+用户层调`SetReceiveHandler`，这个回调实际上放在`on_data_available`里调用
+
+2. method
+用户层直接同步调用`operator()`，`SetRequestData()`，promise存储到`pendingRequests_`，返回future对象（对应的Promise的set是在`on_data_available()`）
 
 
 
@@ -191,8 +258,19 @@ client端特别的点在于，一旦收到Offer后，直接进入主阶段
 
 
 # DDS服务发现流程
-关键字
+## 关键字
 发现机制、收发机制、QOS机制
+
+发现协议的目的是允许每个 RTPS 参与者发现其他相关参与者及其端点。
+一旦远程端点已经发现，实现可以相应地配置本地端点以建立通信。
+DDS 规范同样依赖于使用发现机制来建立通信匹配的 DataWriters 和 DataReaders。
+DDS 实现必须自动发现远程实体，无论是在他们加入和离开网络时。
+RTPS 规范将发现协议拆分为两个独立的协议：（大型网络的基本发现协议。）
+`Participant Discovery Protocol（PDP）【参与者发现协议】`
+`Endpoint Discovery Protocol（EDP）【端点发现协议】`
+为了互操作性，所有 RTPS 实现必须至少提供以下发现协议：（中小型网络的基本发现协议。）
+Simple Participant Discovery Protocol （SPDP）
+Simple Endpoint Discovery Protocol （SEDP）
 
 ## 1. DomainParticipant发现阶段（PDP, Participant Discovery Protocol）：
 在此阶段，`DomainParticipant`参与者确认彼此的存在。
@@ -224,8 +302,186 @@ Fast DDS提供以下发现机制：
 
 
 
+# fastdds
+## 关键字
+### eProsima Fast DDS-Gen
+eProsima Fast DDS-Gen是一个 Java 应用程序，它使用 IDL（接口定义语言）文件中定义的数据类型生成eProsima Fast DDS源代码。
+eProsima Fast DDS-Gen生成的源代码使用Fast CDR，这是一个提供数据序列化和编码机制的 C++11 库。
+因此，正如RTPS 标准中所述，发送数据时，它们会使用相应的通用数据表示 (CDR) 进行序列化和编码。
+CDR 传输语法是代理间传输的低级表示，从 OMG IDL 数据类型映射到字节流。
+
+### foonathan_memory_vendor
+an STL compatible C++ memory allocator library.
+
+### fastcdr
+a C++ library for data serialization according to the CDR standard (Section 10.2.1.2 OMG CDR).
+
+### fastrtps
+the core library of eProsima Fast DDS library.
 
 
+RTPS协议
+一个domain  --  若干个participant   --  若干个Publisher（和DataWriter是`一对多`关系）、若干个Subscriber（和DataReader是`一对多`关系）
+**一个`participant`对应若干个`topic`**
+**一个`Publisher`对应若干个`topic`**
+
+
+
+### 域（Domain）：
+这是用于链接所有发布者和订阅者的概念，属于一个或多个应用程序，它们在不同主题下交换数据。
+这些参与域的单个应用程序称为DomainParticipant。DDS域由`domain ID`标识。
+DomainParticipant定义Domain ID以指定它所属的DDS域。
+具有不同ID的两个DomainParticipants不知道彼此在网络中的存在。
+因此，可以创建多个通信通道。
+这适用于涉及多个DDS应用程序的场景，它们各自的DomainParticipants相互通信，但这些应用程序不得干扰。
+DomainParticipant充当其他 DCPS实体的容器，充当发布者、订阅者和主题实体的工厂，并在域中提供管理服务。
+
+### 主题（Topic）：
+它是将发布者的`DataWriters`与订阅者的`DataReaders`绑定的实体，在DDS域中是`唯一的`。
+它可在进程之间交换的数据的消息，数据表示为可以包含不同数据类型的结构，如整数，字符串等;
+
+### 数据写入器（Data Writer）：
+它是负责`发布消息`的实体，用户在创建此实体时必须提供一个主题，该主题将是发布数据的主题；
+
+### 数据读取器（Data Reader）：
+它是订阅主题以`接收发布`的实体，用户在创建此实体时必须提供订阅主题；
+
+### 发布者（Publisher）：
+它是负责`创建 和 配置`其实现的`DataWriters`的DCPS实体。
+`DataWriter`是负责实际`发布消息`的实体。
+每个人都有一个分配的主题，在该主题下发布消息;
+
+### 订阅者（Subscriber）：
+它是DCPS实体，负责接收在其订阅的主题下发布的数据。
+它为一个或多个`DataReader`对象提供服务，这些对象负责将新数据的可用性传达给应用程序;
+
+### 发布消息步骤：
+创建要发布数据的 idl ，并通过 fast-gen 生成对应的数据结构，并生成该数据结构序列化的类
+通过 `DomainParticipantFactory` 创建 participant ，参数为 `domain id` 和 `qos`
+将 participant 注册到 type ，该类型提供 helloworld 的序列化支持
+通过 participant 创建 publisher ，用于发布数据
+`PubListener` 继承于 `DataWriterListener` ，用于给发布者注册消息通知函数。
+DDS 通过服务发现，将消息最终给到应用
+publisher 创建 writer ，用于最终的消息发布
+
+## 收数据的接口
+`on_data_available`是transport层的接口
+一个channel对应一个线程
+udp的实现：（使用`asio`了）
+```cpp
+while() {
+    //  ...
+    receive_from()
+}
+```
+
+shm的实现：
+```cpp
+    /**
+     * Function to be called from a new thread, which takes cares of performing a blocking receive
+     * operation on the ReceiveResource
+     * @param input_locator - Locator that triggered the creation of the resource
+     */
+    void perform_listen_operation(
+            Locator input_locator) {
+        while() {
+            // 阻塞队列Pop
+            // ...
+            // OnDataReceived();
+        }
+    }
+```
+
+## 文档介绍
+# Intra-process delivery
+包含若干要求，每个要求都占有一个章节。
+
+## 识别本地端点
+相同进程中端点的`GUID`前缀的前8个八位字节内容相同。
+
+### GUID_t重构
+* 提供方法`is_builtin()`、`is_on_same_process_as(other_guid)`和`is_on_same_host_as(other_guid)`
+* 考虑其他改进
+    * 将`Guid.h`拆分为三个头文件（guid、prefix和entity_id）
+    * 将EntityId_t转换为uint32_t
+    * 在GuidPrefix_t上使用联合以高效比较其部分
+
+### 获取指向本地端点的指针
+* 在RTPSDomain上添加方法，根据其guid返回`reader/writer`的指针
+* 应意识到内置端点的存在
+
+## 进程内接收
+订阅者上的新数据处理由写入数据的线程执行。
+此线程负责将`CacheChange_t`复制到`ReaderHistory`并调用`NotifyChanges()`。
+这一决定是为了与传输层来的当前运行的接收线程操作方式保持一致。
+
+用户文档应明确指出，注册`listener`以获取`新更改信息`意味着同时阻塞了传输接收线程和写入数据的线程。
+还应解释另一种读取样本的方法是使用用户线程中的`wait_for_unread_samples()`函数，然后进行读取。
+
+当前的Reader API将被本地写入者用于数据传递。本地写入者将直接调用`processDataMsg`。
+
+## Reader：本地写入者的管理
+在匹配写入者时，Reader应检查是否在同一进程中。
+
+**销毁时的考虑**
+直到现在，Reader可以安全地被销毁，因为我们确信不会有线程访问它。这可能是因为：
+* 使用Reader的所有事件首先被销毁。因此，事件线程永远不会访问Reader。
+* Reader从`ReceiverResource`对象中注销。因此任何接收线程都不会再访问Reader。
+
+现在，Reader可能会被本地进程中的写入者访问。但是只有当通过发现机制与写入者匹配时才会发生这种情况。因此，在Reader被销毁之前，我们应该确保使用发现机制与写入者取消匹配。由于EDP内置端点将使用进程内机制，这种取消匹配将是即时的。
+
+### 有状态读取器（StatefulReader）
+对本地写入者的输出流量不应执行。
+在WriterProxy上的更改：
+remote_locators_shrinked 应对本地写入者返回一个空向量。
+定时事件“心跳响应”对于本地写入者不应启动。
+定时事件“初始acknack”应直接调用本地写入者的process_acknack方法。
+
+## 写入者：本地读取器的管理
+在匹配到读取器时，写入者应该检查它是否位于同一进程中。
+
+不应对本地读取者执行输出流量。
+样本通过processDataMsg发送给本地读取者。
+当使用transient_local持久性时，一旦本地读取器被匹配，它应当自动通过processDataMsg接收数据。
+
+### 无状态写入者（StatelessWriter）
+在ReaderLocator::start时，如果读者是本地的，则不添加定位符。
+
+### 有状态写入者（StatefulWriter）
+发送给本地读取者的样本会自动确认。
+发送给本地读取者的Gaps应直接调用processGapMsg。
+发送给本地读取者的心跳信息应直接调用processHeartbeatMsg。
+对于本地读取者，定时事件不应启动，除了“初始心跳”。
+
+## 发现过程
+### 参与者发现(PDP)
+为了在同一进程中保持域的分离，我们将继续使用标准机制进行参与者发现。内置PDP读取者和写入者的内部进程交付将不会被使用。
+
+### 端点发现(EDP)
+端点发现也将依赖标准机制，但是内置端点将会使用新的机制来发送/接收WriterProxyData和ReaderProxyData到/从本地进程中。
+
+## 其他考虑事项
+### 安全性
+如果我们依靠比较GUID来识别同一进程中的端点，那么那些属于安全参与者的将不会被考虑在内，因为在这种情况下，GUID将使用整个参与者GUID的哈希重新计算。
+
+### 活跃度（Liveliness）
+活跃度声明机制不需要任何更改，只是manual_by_topic声明应该直接调用本地读取者的processHeartbeatMsg方法。
+
+### 副作用
+此设计隔离了所有来自网络的消息流量，这意味着像Wireshark™这样的工具将变得无用。考虑到我们的大多数客户实际上运行的是进程内代码，并且使用Wireshark™跟踪报告他们的问题，这些变化会造成支持噩梦。可能的解决办法是提供一个标志以抑制调试目的的过程内行为，并明确指出，在性能测试期间应关闭该标志。
+一旦为进程间通信开发了共享内存传输，进程内的机制将变得无关紧要。因为速度增益和源复杂性的权衡将非常昂贵。从内存消耗的角度来看，使用进程间发现数据库比拥有每个进程的发现数据库会有更多优势。
+
+
+
+# someip_to_dds
+## 关键词
+单例、设置回调
+一个`DomainParticipant`
+一个`Publisher`
+一个`Subscriber`
+
+若干组`Topic` 和 `TypeSupport`
+若干`DataReaderListener`
 
 
 
