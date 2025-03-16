@@ -30,7 +30,7 @@ socal层定义了一些绑定无关的抽象类/接口类：如Skeleton、Skelet
 `intance_specifier`（字符串拼接，port的名字）/ `instance_identifier`（包含具体binding），二者是一对多的关系（存在多重绑定的概念）
 进行service匹配（）
 
-用户先进行服务配置（event、method、field（？？？对应什么样子的数据？？？）），然后根据需求进行服务部署，选择具体的绑定、部署的平台（一些可能的端口配置）
+用户先进行服务配置（event（）、method、field），然后根据需求进行服务部署，选择具体的绑定、部署的平台（一些可能的端口配置）
 调用`ara::core::Initialize()`，进行统一的初始化
     先读取配置文件，以单例方式实例化一些配置相关的对象，关键类是`map<specifier, binding类>`
 
@@ -116,6 +116,16 @@ enum class MethodCallProcessingMode
 用户层直接同步调用`operator()`，`SetRequestData()`，promise存储到`pendingRequests_`，返回future对象（对应的Promise的set是在`on_data_available()`）
 
 
+## state_manager
+需要维护，每个function group的状态
+配置文件里配置了，每个app在哪一个fg的哪一个状态
+在代码里控制什么时候，启动哪些功能组的什么状态（这里的实现是使用em提供的api：`ara::exec::StateClient`，底层是使用管道发消息）
+
+## execution_manager
+每个app有一个exe_config.json，主要关于：
+调度策略、调度优先级（静态优先级，是实时进程才使用的）、nice_value（常见的优先级，越小优先级越高）
+    三种调度策略：`SCHED_RR`（一个进程吃完时间片，就到队列尾部，如果有优先级高的，就抢占）, `SCHED_FIFO`（先到先得、是非抢占的、有可能长时间运行），`SCHED_OTHER`（公平的分时调度，时间片轮转，时间片长度是动态调整的），前两种是实时调度策略，
+环境变量、执行依赖、绑核、进入时间、退出时间、用户id、组id
 
 # powerap
 ## com
@@ -161,7 +171,11 @@ enum class MethodCallProcessingMode
 
 ## per
 ### 关键词
+全局函数`OpenKeyValueStorage(instance_specifier)`，`OpenFileStorage(instance_specifier)`，返回基类指针，对外接口的实现类里的实现当然是加锁了的
+存储的时候一并存储版本信息、crc校验信息、冗余备份
+调用Sync接口以同步到文件系统
 
+文件存储的话，则是ReadAccessor、ReadWriteAccessor，打开某个名字的文件，读写字符
 
 ### 架构设计
 
@@ -544,13 +558,13 @@ remote_locators_shrinked 应对本地写入者返回一个空向量。
 
 
 
-## `write()`如何调用到`serialize()`？？？
+## `write()`如何调用到`serialize()`
 可以还原类型
-`DataWriterImpl`可以拿到`TypeSupport`（继承自`shared_ptr`），由`Participant`持有
+**`DataWriterImpl`可以拿到`TypeSupport`（继承自`shared_ptr`），由`Participant`持有**
 序列化的数据，若序列化失败，塞到`payload_pool`
 成功则塞进`history_`（由`DataWriterImpl`持有）
 
-### fastbuffer
+
 
 
 ## 接收端如何被通知？
@@ -596,8 +610,20 @@ ROS2的`service`映射到`fastdds`，会含有`rq`字段
 若干组`Topic` 和 `TypeSupport`
 若干`DataReaderListener`
 
+### method
+ROS2 as client
+生产者消费者模型：收到fastdds request（ROS2 request）数据时，记录`writer_guid`和`sequence_number`，一并存储到阻塞队列中，
+线程1不断将数据出队列，调用AP method回调，将future存储到阻塞队列中，
+线程2不断地轮询future，将结果转成dds格式数据，发回给ROS2端
+```cpp
+    write_params.related_sample_identity().writer_guid() = info.related_sample_identity.writer_guid();
+    write_params.related_sample_identity().sequence_number().high = info.sample_identity.sequence_number().high;
+    write_params.related_sample_identity().sequence_number().low = info.sample_identity.sequence_number().low;
+```
+
+
 ### 性能
-camera Image数据，20几Hz
+camera Image数据（几十M），20几Hz
 其他数据上百Hz，也能保证收发频率一致
 
 # recorder
@@ -606,7 +632,7 @@ debug模式（？？？分钟级别，一分钟一个文件，不接受trigger�
 
 生产者消费者模型、阻塞队列
 线程池
-mcap（序列化方式）
+**mcap**
 ```cpp
 /**
  * @brief Describes a schema used for message encoding and decoding and/or
@@ -695,9 +721,14 @@ struct MCAP_PUBLIC Message
     const std::byte* data = nullptr;
 };
 ```
+注意到：`Message`中包含有`ChannelId`，而`Channel`和`Schema`是一一对应的
+
+
+
 根据topic，大量生成如下代码：用于`McapWriter`
 ```cpp
-// 需要读取一些.msg文件（ros2所使用的），目的是可供ROS2环境使用、支持plotjuggler    而rosbag play 跟 plotjugger 对schema的data的处理不一样。
+// 需要读取一些.msg文件（ros2所使用的），目的是可供ROS2环境使用、支持plotjuggler    而rosbag play 跟 plotjugger 对schema的data的处理不一样
+// schema       确保：发送方和接收方 对于 所交换数据的理解是一致的
 schema_test_->name = "sensor_msgs/msg/Image";
 schema_test_->encoding = "ros2msg";                 // schema的encoding
 auto [format_test, full_text_test] = msgdef_cache.get_full_text(schema_test_->name);                    // 读取.msg文件
@@ -705,26 +736,58 @@ schema_test_->data.assign(reinterpret_cast<const std::byte*>(full_text_test.data
     reinterpret_cast<const std::byte*>(full_text_test.data() + full_text_test.size()));
 writer_->addSchema(*schema_test_);
 
+// channel
 channel_test_->topic = "/sensor/camera/front/h264";
 channel_test_->messageEncoding = "cdr";             // channel的encoding
 channel_test_->schemaId = schema_test_->id;
-channel_test_->metadata.emplace("offered_qos_profiles", QosToString(TOPIC_QOS_DEFAULT));
+channel_test_->metadata.emplace("offered_qos_profiles", QosToString(TOPIC_QOS_DEFAULT));                // 遵从metadata.yaml里的配置
 available_channels_.push_back(channel_test_);
 
 for (auto channel : available_channels_) {
 writer_->addChannel(*channel);
 }
+
+template <typename T>
+class TypeConverterMsg
+{
+  public:
+    void ConvertToMsg(mcap::Message* msg, T& data, mcap::ChannelId channel_id)
+    {
+        // serialize DDS structure to binary stream using fastcdr
+        eprosima::fastcdr::Cdr serializer(
+            fast_buffer_, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, eprosima::fastcdr::Cdr::DDS_CDR);
+        serializer.serialize_encapsulation();
+        serializer << data;
+        size_t size = serializer.getSerializedDataLength();
+        // create the mcap message
+        auto timestamp_ns{
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count()};
+
+        msg->sequence = 0;
+        msg->channelId = channel_id;
+        msg->logTime = static_cast<uint64_t>(timestamp_ns);
+        msg->publishTime = msg->logTime;                //  用于plotjugger播包
+
+        std::byte* ptr = new std::byte[size];
+        std::memcpy(ptr, fast_buffer_.getBuffer(), size);
+        msg->data = ptr;
+        msg->dataSize = size;
+    }
+    eprosima::fastcdr::FastBuffer fast_buffer_;
+};
 /*
     收到数据时，进行两层格式转换：
     1. AP格式的数据   -->  DDS格式的数据
+        ConvertToIdl()
     2. DDS格式的数据  -->  Mcap的msg  需要填充信息
         ConvertToMsg()
 */
 ```
 
-存储池  ？？？
-切片    ？？？debug特有
-/tmp下的内存中的文件，最后会被写入磁盘
+存储池
+切片    product特有，实际上就是从/tmp下的内存中的文件进行选择（根据时间戳选择前M后N的秒级文件），合并，然后调用`copy_file_range`拷贝到磁盘
+
 
 文件结构
 ```xml
@@ -750,7 +813,7 @@ Data End
 
 # data collector
 单线程-单循环模式
-数据的收集（根据收集文件的类型，包装成相应任务类，尽量均匀地完成文件的拷贝，`copy_file_range(src_fd, des_fd, size)`）、压缩（`gzip`）、上传（`poco`）
+数据的收集（根据收集文件的类型，包装成相应任务类，尽量均匀地完成文件的拷贝，`C++17 filesystem接口，copy_file_range(src_fd, des_fd, size)`）、压缩（`gzip`）、上传（`poco`）
 线程池
 云端通信
 读取配置，得到`url`
@@ -765,7 +828,17 @@ Data End
 
 
 
+
+
+
+
 # c++14新特性
+
+
+# 项目中碰到的问题
+SOME/IP，重新订阅
+TTL过短
+多线程`Send()`
 
 
 
@@ -775,6 +848,5 @@ Data End
 
 vector代码
 
-
-
+## `copy_on_range`，内核内的复制
 

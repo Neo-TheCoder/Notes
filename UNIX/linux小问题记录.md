@@ -278,7 +278,7 @@ int main() {
 > 从**用户空间**来看，进程优先级就是`nice value`和`scheduling priority`；
 对应到**内核**，有`静态优先级`、`realtime优先级`、`归一化优先级`和`动态优先级`等概念
 ### 用户空间的视角
-在用户空间，进程优先级有两种含义：`nice value`和`scheduling priority`。
+在用户空间，进程优先级有两种含义：`nice value`和`scheduling priority`（静态优先级，是实时进程才使用的）。
 对于`普通进程`而言，进程优先级就是`nice value`，从`-20`（优先级最高）～`19`（优先级最低），通过修改`nice value`可以改变普通进程获取`cpu资源`的比例。
 随着实时需求的提出，进程又被赋予了另外一种属性`scheduling priority`，而这些进程被称为`实时进程`。
 实时进程的优先级的范围可以通过`sched_get_priority_min`和`sched_get_priority_max`，对于linux而言，实时进程的`scheduling priority`的范围是`1`（优先级最低）～`99`（优先级最高）。
@@ -505,7 +505,7 @@ nice 值从 -20(优先级最高) ~ 19（优先级最低） ，nice值是越小�
 （会对normal和rt线程优先级nice值做**归一化**，对内核来讲都是一个个的`task_struct`，`归一化`有利于后面调度策略的计算和选择）
 从用户空间的rt优先级值和normal线程的nice值看到，它们的定义似乎是相反的，一个越大代表优先级越高，一个越小优先级越高，怎么归一化呢，实际上内核中是用99 - rt 值进行了反转
 
-normal_priority RT线程优先级：0~99 （注意这里的0~99 和用户空间真实设定的值是相反的关系，用户空间设置rt优先级99，这里就是0）
+normal_priority RT线程优先级：0~99 （注意这里的 0~99 和用户空间真实设定的值是相反的关系，用户空间设置rt优先级99，这里就是0）
 normal_priority normal线程优先级：100~139 （nice值为 -20，代表这里的100）
 
 
