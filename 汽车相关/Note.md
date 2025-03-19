@@ -115,6 +115,18 @@ enum class MethodCallProcessingMode
 };
 ```
 
+3. field
+会维护：
+```cpp
+  /*!
+   * \brief The field on skeleton-side shall always have access to the latest value, which has been set via Update.
+   * This is necessary, in case no GetHandler is registered.
+   */
+  FieldType field_data_{};
+```
+
+
+
 ### proxy
 1. event
 用户层调`SetReceiveHandler`，这个回调实际上放在`on_data_available`里调用
@@ -857,20 +869,25 @@ ReturnCode_t DataWriterImpl::create_new_change_with_params(ChangeKind_t changeKi
     return perform_create_new_change(changeKind, data, wparams, handle);
 }
 
-// ！！！
+// ！！！PS：用户层可以通过loan_sample(void*& sample, LoanInitializationKind initialization)接口取得
 ReturnCode_t DataWriterImpl::perform_create_new_change(ChangeKind_t change_kind, void* data, WriteParams& wparams, const InstanceHandle_t& handle)
 {
     std::unique_lock<RecursiveTimedMutex> lock(writer_->getMutex());
     PayloadInfo_t payload;
     bool was_loaned = check_and_remove_loan(data, payload);
     // 如果有借用，则从记录的借用列表中移除
-    // 如果没有借用。则从内存池中取出free payload       这里借用的意思，可能就是区别于直接分配内存
+    // 如果没有借用。则调用：
+        get_free_payload_from_pool(type_->getSerializedSizeProvider(data), payload)     // 先把数据指针转移到CacheChange_t对象中，再转移到payload中
+    // 从内存池中取出free payload（这里的内存池实际对象和是否开启data sharing[数据共享交付 DataReader共享DataWriter的history 难道就是零拷贝？？？]有关，DataSharingPayloadPool / TopicPayloadPool。PREALLOCATED_WITH_REALLOC_MEMORY_MODE等QOS配置也影响到此处）
+    ！！！free_payloads_其实是vector的结构
     // 调用序列化
-    // ！！！调用到RTPSWriter的接口
-
-
-
+    // 构造一个新的CacheChange_t对象，把上面的payload的数据再转移进去
+    // 把数据塞进history，调用到rtps层的add_change_(CacheChange_t* a_change, WriteParams& wparams, std::chrono::time_point<std::chrono::steady_clock> max_blocking_time)，其中有一行关键调用：
+    notify_writer(a_change, max_blocking_time);     // RTPSWriter有好几种！！！
 }
+
+// 提供一个指向内部缓冲区（池）的指针，用户可以直接在此缓冲区内准备数据以供发送。此方法仅适用于平凡数据类型的DataWriter
+ReturnCode_t DataWriterImpl::loan_sample(void*& sample, LoanInitializationKind initialization);
 
 ```
 

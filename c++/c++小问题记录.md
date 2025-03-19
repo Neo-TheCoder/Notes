@@ -3109,10 +3109,73 @@ List* node;   // 错误！无法进行bool判断，一定要赋值成nullptr，�
 
 
 
+# JNI技术
+`HelloJNICpp.java`，使用`javac`来编译
+```java
+public class HelloJNICpp {
+   static {
+      System.loadLibrary("hello"); // hello.dll (Windows) or libhello.so (Unixes)
+   }
 
+   // Native method declaration
+   private native void sayHello();   // ！！！通过native关键字，告诉JVM，这个函数的实现是其他语言的，之后就可以从相应的so库里面，根据函数名称的映射规则，找到相应的实现！！！
 
+   // Test Driver
+   public static void main(String[] args) {
+      new HelloJNICpp().sayHello();  // Invoke native method
+   }
+}
+```
 
+用于生成C/C++的头文件
+```sh
+javah HelloJNICpp
+```
+生成出`HelloJNICpp.h`！！！这里的命名是按照这样的规则：`Java_{package_and_classname}_{function_name}(JNI arguments)`
+```cpp
+JNIEXPORT void JNICALL Java_HelloJNICpp_sayHello(JNIEnv*, jobject);
+```
 
+`HelloJNICppImpl.h`
+```cpp
+#ifndef _HELLO_JNI_CPP_IMPL_H
+#define _HELLO_JNI_CPP_IMPL_H
 
+#ifdef __cplusplus
+        extern "C" {
+#endif
+        void sayHello();
+#ifdef __cplusplus
+        }
+#endif
+
+#endif
+```
+
+真正的实现
+`HelloJNICppImpl.cpp`
+```cpp
+#include "HelloJNICppImpl.h"
+#include  <iostream>
+
+using namespace std;
+
+void sayHello() {
+    cout << "Hello World from C++!" << endl;
+    return;
+}
+```
+
+`HelloJNICpp.c` ！！！实现了：C代码和Java代码的交互！！！
+```cpp
+#include <jni.h>
+#include "HelloJNICpp.h"
+#include "HelloJNICppImpl.h"
+
+JNIEXPORT void JNICALL Java_HelloJNICpp_sayHello(JNIEnv *env, jobject thisObj) {  // JNIEnv*表示指向JNI运行环境的指针，jobject则是this指针
+    sayHello();  // invoke C++ function
+    return;
+}
+```
 
 
