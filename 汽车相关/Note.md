@@ -152,6 +152,8 @@ enum class MethodCallProcessingMode
 多态、继承、模板、胶水代码
 根据模型生成中间文件（.camke）、链接不同的库
 
+代理模式
+
 对于dds binding而言
     arxml提取数据类型信息生成idl文件，调用fastddsgen
 
@@ -883,12 +885,60 @@ ReturnCode_t DataWriterImpl::perform_create_new_change(ChangeKind_t change_kind,
     // 调用序列化
     // 构造一个新的CacheChange_t对象，把上面的payload的数据再转移进去
     // 把数据塞进history，调用到rtps层的add_change_(CacheChange_t* a_change, WriteParams& wparams, std::chrono::time_point<std::chrono::steady_clock> max_blocking_time)，其中有一行关键调用：
-    notify_writer(a_change, max_blocking_time);     // RTPSWriter有好几种！！！
+        // WriterHistory:
+        notify_writer(a_change, max_blocking_time);     // RTPSWriter有好几种！！！具体选择哪种实例化应该是createRTPSWriter(...)里面决定的，内部是根据QOS配置来决定的：如果是reliable就是StatefulWriter、如果是unreliable就是StatelessWriter
+            // 内部实现：
+            mp_writer->unsent_change_added_to_history(a_change, max_blocking_time);
 }
 
-// 提供一个指向内部缓冲区（池）的指针，用户可以直接在此缓冲区内准备数据以供发送。此方法仅适用于平凡数据类型的DataWriter
+// DataWriter提供一个指向内部缓冲区（池）的指针，用户可以直接在此缓冲区内准备数据以供发送。此方法仅适用于平凡数据类型的DataWriter
 ReturnCode_t DataWriterImpl::loan_sample(void*& sample, LoanInitializationKind initialization);
 
+        /*
+            上面的数据写入到history之后，显然会异步地发送
+            先把数据传到FlowController对象，塞进Scheduler，其维护一个Queue
+        */
+                sched.add_new_sample(writer, change);
+
+                // 专门的线程，跑while循环
+                // 通知具体的Writer，数据可以走底层发送了，调接口判断采取哪种方式进行分发
+                    fastrtps::rtps::DeliveryRetCode ret_delivery = current_writer->deliver_sample_nts(
+                        change_to_process, async_mode.group, locator_selector,
+                        std::chrono::steady_clock::now() + std::chrono::hours(24));
+```
+
+数据最终如何分发？分为三种情况：
+同一进程内的DataReader、
+同一个域的、跨域的
+```cpp
+DeliveryRetCode StatefulWriter::deliver_sample_nts(
+        CacheChange_t* cache_change,
+        RTPSMessageGroup& group,
+        LocatorSelectorSender& locator_selector, // Object locked by FlowControllerImpl
+        const std::chrono::time_point<std::chrono::steady_clock>& max_blocking_time)
+{
+    DeliveryRetCode ret_code = DeliveryRetCode::DELIVERED;
+
+    if (there_are_local_readers_)
+    {
+        deliver_sample_to_intraprocesses(cache_change);
+    }
+
+    // Process datasharing then
+    if (there_are_datasharing_readers_)
+    {
+        deliver_sample_to_datasharing(cache_change);
+    }
+
+    if (there_are_remote_readers_)
+    {
+        ret_code = deliver_sample_to_network(cache_change, group, locator_selector, max_blocking_time);
+    }
+
+    check_acked_status();
+
+    return ret_code;
+}
 ```
 
 
@@ -898,6 +948,30 @@ ReturnCode_t DataWriterImpl::loan_sample(void*& sample, LoanInitializationKind i
 # 项目中碰到的问题
 1. SOME/IP TTL过短，导致重新订阅
 2. 多线程`Send()`，接收端数据错乱
+    尽管注释里说，同一个类非线程安全，不同的类实例线程安全，但是不同的实例应该也不是线程安全的
+    因为虽然`Send()`是这样调用的：
+```cpp
+    std::lock_guard<std::mutex> const impl_interfaces_guard{skeleton_->GetImplInterfacesLock()};
+
+    // Get the binding implementations (backends) that are retrieved on an OfferService of the skeleton object.
+    typename Skeleton::SkeletonImplInterfacePtrCollection const& binding_interfaces{
+        skeleton_->GetBindingImplInterfaces()};
+
+    // Send the event sample to all the binding implementations via the binding-specific event manager.
+    // VCA_SOCAL_VALID_SKELETON_IMPL_INTERFACE_COLLECTION
+    for (typename Skeleton::SkeletonImplInterfacePtr const interface : binding_interfaces) {
+      result = SendInternal(interface, data);
+    }
+```
+但是`SendInternal`是这样实现的
+```cpp
+    return (concrete_impl_interface->*GetEventManagerMethod)()->Send(data);
+```
+不同实例的`SomeipEventManager`
+
+
+
+
 3. 总是需要去看源码实现
 ROS2 as client，内部会维护一个`pending_request`的map
 ROS2 as server，
