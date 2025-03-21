@@ -852,7 +852,7 @@ Data End
 
 
 # fastdds实现
-## `write(void*)`
+## 发数据 `write(void*)`
 ```cpp
 DataWriterImpl::write(void* data)
 
@@ -908,8 +908,9 @@ ReturnCode_t DataWriterImpl::loan_sample(void*& sample, LoanInitializationKind i
 ```
 
 数据最终如何分发？分为三种情况：
-同一进程内的DataReader、
-同一个域的、跨域的
+1. 同一进程内的DataReader、
+2. 同一个域的
+3. 跨域的
 ```cpp
 DeliveryRetCode StatefulWriter::deliver_sample_nts(
         CacheChange_t* cache_change,
@@ -940,10 +941,44 @@ DeliveryRetCode StatefulWriter::deliver_sample_nts(
     return ret_code;
 }
 ```
+这里如何通知到udp writer？/ 如何和transport层交互？？？
+可能是通过条件变量，notify某一个listner线程，让其执行
+
+？？？locator是什么东西？？？网络定位符？是ip + port吗？
 
 
 
+## 收数据
+每种通道，都有一个线程在执行`while`
+```cpp
+void UDPChannelResource::perform_listen_operation(
+        Locator input_locator)
+{
+    Locator remote_locator;
 
+    while (alive())
+    {
+        // Blocking receive.
+        auto& msg = message_buffer();
+        if (!Receive(msg.buffer, msg.max_size, msg.length, remote_locator))
+        {
+            continue;
+        }
+
+        // Processes the data through the CDR Message interface.
+        if (message_receiver() != nullptr)
+        {
+            message_receiver()->OnDataReceived(msg.buffer, msg.length, input_locator, remote_locator);
+        }
+        else if (alive())
+        {
+            logWarning(RTPS_MSG_IN, "Received Message, but no receiver attached");
+        }
+    }
+
+    message_receiver(nullptr);
+}
+```
 
 
 
