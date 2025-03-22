@@ -30,7 +30,7 @@ socal层定义了一些绑定无关的抽象类/接口类：如Skeleton、Skelet
 `intance_specifier`（字符串拼接，port的名字）/ `instance_identifier`（包含具体binding），二者是一对多的关系（存在多重绑定的概念）
 进行service匹配（）
 
-用户先进行服务配置（event、method、field（？？？对应什么样子的数据？？？）），然后根据需求进行服务部署，选择具体的绑定、部署的平台（一些可能的端口配置）
+用户先进行服务配置（event、method、field），然后根据需求进行服务部署，选择具体的绑定、部署的平台（一些可能的端口配置）
 调用`ara::core::Initialize()`，进行统一的初始化
     先读取配置文件，以单例方式实例化一些配置相关的对象，关键类是`map<specifier, binding类>`
 
@@ -52,6 +52,13 @@ src-gen中包含关键binding类，如果是Skeleton端，就是`SkeletonBinding
 
 # AUTOSAR AP
 ## com
+本身就是对底层所使用的通信中间件的封装，就比如ROS2中通过环境变量来配置使用哪个中间件
+AUTOSAR把通信抽象成服务，对于每一个服务提供OfferService & StopOfferService，StartFindService和StopFindService接口
+对于服务中的event提供`Send`接口或者是`SetReceiveHandler`接口（在回调中可以调用`GetNewSamples`来取数据）
+对于method则是提供method回调，或者是`operator()`接口
+
+
+
 ### skeleton
 #### 一些关键调用
 对于someip而言，每个app就是一板一眼地给someipd发控制消息，socket连接都是由someipd建立。
@@ -108,6 +115,18 @@ enum class MethodCallProcessingMode
 };
 ```
 
+3. field
+会维护：
+```cpp
+  /*!
+   * \brief The field on skeleton-side shall always have access to the latest value, which has been set via Update.
+   * This is necessary, in case no GetHandler is registered.
+   */
+  FieldType field_data_{};
+```
+
+
+
 ### proxy
 1. event
 用户层调`SetReceiveHandler`，这个回调实际上放在`on_data_available`里调用
@@ -116,12 +135,24 @@ enum class MethodCallProcessingMode
 用户层直接同步调用`operator()`，`SetRequestData()`，promise存储到`pendingRequests_`，返回future对象（对应的Promise的set是在`on_data_available()`）
 
 
+## state_manager
+需要维护，每个function group的状态
+配置文件里配置了，每个app在哪一个fg的哪一个状态
+在代码里控制什么时候，启动哪些功能组的什么状态（这里的实现是使用em提供的api：`ara::exec::StateClient`，底层是使用管道发消息）
+
+## execution_manager
+每个app有一个exe_config.json，主要关于：
+调度策略、调度优先级（静态优先级，是实时进程才使用的）、nice_value（常见的优先级，越小优先级越高）
+    三种调度策略：`SCHED_RR`（一个进程吃完时间片，就到队列尾部，如果有优先级高的，就抢占）, `SCHED_FIFO`（先到先得、是非抢占的、有可能长时间运行），`SCHED_OTHER`（公平的分时调度，时间片轮转，时间片长度是动态调整的），前两种是实时调度策略，
+环境变量、执行依赖、绑核、进入时间、退出时间、用户id、组id
 
 # powerap
 ## com
 ### 关键词
 多态、继承、模板、胶水代码
 根据模型生成中间文件（.camke）、链接不同的库
+
+代理模式
 
 对于dds binding而言
     arxml提取数据类型信息生成idl文件，调用fastddsgen
@@ -161,7 +192,11 @@ enum class MethodCallProcessingMode
 
 ## per
 ### 关键词
+全局函数`OpenKeyValueStorage(instance_specifier)`，`OpenFileStorage(instance_specifier)`，返回基类指针，对外接口的实现类里的实现当然是加锁了的
+存储的时候一并存储版本信息、crc校验信息、冗余备份
+调用Sync接口以同步到文件系统
 
+文件存储的话，则是ReadAccessor、ReadWriteAccessor，打开某个名字的文件，读写字符
 
 ### 架构设计
 
@@ -224,7 +259,7 @@ client端进行计时，超过了TTL还没收到Offer，则认为服务下线
 可配置重复次数、重复时间，发送间隔以指数形式增长（2的n次幂）
 期间就算收到了FindService，也要延迟`（可配置的）一段时间`，发单播`OfferService`给服务请求端
 如果服务不可用，返回`Down阶段`，并发送`StopOffer`
-收到`SubscribeEventGroup`时，发送单播Ack/Nack，**启动此`订阅Entry`的TTL计时器**（如果收到`StopSubscribeEventGroup`，则停止计时器）
+收到`SubscribeEventGroup`时，发送`单播Ack/Nack`，**启动此`订阅Entry`的TTL计时器**（如果收到`StopSubscribeEventGroup`，则停止计时器）
 
 当以上阶段发送完N次（可配置次数），进入下一阶段
 ##### Main Phase
@@ -232,7 +267,7 @@ client端进行计时，超过了TTL还没收到Offer，则认为服务下线
 固定周期（可配置）地发送OfferService
 期间就算收到了FindService，也要延迟`（可配置的）一段时间`，发单播`OfferService`给服务请求端
 如果服务不可用，返回`Down阶段`，并发送`StopOffer`
-收到`SubscribeEventGroup`时，发送单播Ack/Nack，**启动此`订阅Entry`的TTL计时器**（如果收到`StopSubscribeEventGroup`，则停止计时器）
+收到`SubscribeEventGroup`时，发送`单播Ack/Nack`，**启动此`订阅Entry`的TTL计时器**（如果收到`StopSubscribeEventGroup`，则停止计时器）
 
 #### Client SD
 ##### Down
@@ -255,6 +290,25 @@ client端进行计时，超过了TTL还没收到Offer，则认为服务下线
 
 client端特别的点在于，一旦收到Offer后，直接进入主阶段
 而server端在主阶段不断周期发送Offer，而client不发（因为find是为了激活对端上线，一直发没有意义，浪费网络带宽，Offer不断发送以保活，刷新TTL）
+
+
+## VECTOR AP SOME/IP协议栈
+someipd实际上就一个`主线程`和一个`reactor线程`
+someipd，对于每一个**sd endpoint**，维护`server_observers_map_`以及`client_observers_map_`（观察者模式）
+`ServiceDiscoveryServer`如果收到`FindService`，所持有的`state_owner_`（持有当前某个状态的状态机，根据实际状态，调用同名的函数）
+当收到订阅消息时，`event_manager_`所持有的`message_scheduler_`，调用`ScheduleSubscribeEventgroupAckEntry`以发送`SubscribeAck`
+而`scheduler_`持有一个`<AddressPair, UnicastOneshotTimerUniquePtr>`的`TimerMap`（XXXTimer继承自Timer）
+在reactor线程中会执行：
+```cpp
+      timer_manager_.HandleTimerExpiry();   // 相当于reactor线程去轮询计时器是否到期了
+```
+这个reactor要负责监听sd socket、数据socket、unix domain socket
+
+### 每一个service，都要维护一个状态机（Server SD / Client SD）
+使用多态（虚函数）
+
+
+
 
 
 # DDS服务发现流程
@@ -319,8 +373,7 @@ a C++ library for data serialization according to the CDR standard (Section 10.2
 ### fastrtps
 the core library of eProsima Fast DDS library.
 
-
-RTPS协议
+### RTPS协议
 一个domain  --  若干个participant   --  若干个Publisher（和DataWriter是`一对多`关系）、若干个Subscriber（和DataReader是`一对多`关系）
 **一个`participant`对应若干个`topic`**
 **一个`Publisher`对应若干个`topic`**
@@ -328,10 +381,11 @@ RTPS协议
 Fast DDS中的`RTPS层`实现了`RTPS`协议，它作为DDS标准的⼀部分，负责处理底层⽹络通信、发现服务、数据传输以及QoS策略的具体实现等。
 在Fast DDS中，`DCPS层`为`⽤⼾`提供抽象接⼝，隐藏了底层通信机制的复杂性；
 ⽽`RTPS层`则是`实际执⾏这些操作并保证数据可靠传输`的基础。
+实际代码中，存在这样的映射：`DCPS` --> `RTPS`
 
 ### 并⾏模型
-FastDDS中每个节点（也叫 DomainParticipant）具有：
-⼀个`主线程`（⽤⼾持有）
+FastDDS中每个节点（也叫 `DomainParticipant`）具有：
+⼀个`主程序线程`（⽤⼾持有）
 ⼀个`事件和周期性任务`的线程
 ⼀个`异步发送线程`，⽤于⽤⼾完成写⼊数据后，异步得完成⽹络通信
 多个`接收线程`，每个`reception channel`，取决于传输层的实现⽅式
@@ -349,7 +403,7 @@ DomainParticipant定义Domain ID以指定它所属的DDS域。
 DomainParticipant充当其他 DCPS实体的容器，充当发布者、订阅者和主题实体的工厂，并在域中提供管理服务。
 
 ### 主题（Topic）：
-它是将发布者的`DataWriters`与订阅者的`DataReaders`绑定的实体，在DDS域中是`唯一的`。
+**它是将发布者的`DataWriters`与订阅者的`DataReaders`绑定的实体，在DDS域中是`唯一的`**。
 它可在进程之间交换的数据的消息，数据表示为可以包含不同数据类型的结构，如整数，字符串等;
 
 ### 数据写入器（Data Writer）：
@@ -375,6 +429,46 @@ DomainParticipant充当其他 DCPS实体的容器，充当发布者、订阅者�
 `PubListener` 继承于 `DataWriterListener` ，用于给发布者注册消息通知函数。
 DDS 通过服务发现，将消息最终给到应用
 publisher 创建 writer ，用于最终的消息发布
+
+### QOS
+#### someip_to_dds所使用的
+基本上就是ROS2里默认的QOS profile
+1. DataWriter
+```cpp
+  wqos.reliability().kind = RELIABLE_RELIABILITY_QOS;
+  wqos.history().kind = KEEP_LAST_HISTORY_QOS;
+  wqos.history().depth = 10;                    // 必须配合 KEEP_LAST_HISTORY_QOS
+  wqos.endpoint().history_memory_policy = eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+```
+2. DataReader
+```cpp
+  rqos_adasv2positiontopic.reliability().kind = RELIABLE_RELIABILITY_QOS;
+  rqos_adasv2positiontopic.history().kind = KEEP_LAST_HISTORY_QOS;
+  rqos_adasv2positiontopic.history().depth = 10;
+  rqos_adasv2positiontopic.endpoint().history_memory_policy = eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+```
+
+`enumerator PREALLOCATED_MEMORY_MODE`
+Preallocated memory.   预分配内存。
+
+Size set to the data type maximum. Largest memory footprint but smallest allocation count.
+Size 设置为数据类型 maximum。内存占用量最大，但分配计数最小。
+
+`enumerator PREALLOCATED_WITH_REALLOC_MEMORY_MODE`
+Default size preallocated, requires reallocation when a bigger message arrives.
+默认大小 `preallocated`，当更大的消息到达时需要重新分配。
+
+Smaller memory footprint at the cost of an increased allocation count.
+内存占用更少，但代价是分配计数增加。
+
+
+#### best effort
+减少重传和确认机制
+
+
+#### reliable
+使用了消息确认机制
+
 
 ## 收数据的接口
 `on_data_available`是transport层的接口
@@ -480,13 +574,55 @@ remote_locators_shrinked 应对本地写入者返回一个空向量。
 活跃度声明机制不需要任何更改，只是manual_by_topic声明应该直接调用本地读取者的processHeartbeatMsg方法。
 
 ### 副作用
-此设计隔离了所有来自网络的消息流量，这意味着像Wireshark™这样的工具将变得无用。考虑到我们的大多数客户实际上运行的是进程内代码，并且使用Wireshark™跟踪报告他们的问题，这些变化会造成支持噩梦。可能的解决办法是提供一个标志以抑制调试目的的过程内行为，并明确指出，在性能测试期间应关闭该标志。
+此设计隔离了所有来自网络的消息流量，这意味着像Wireshark这样的工具将变得无用。考虑到我们的大多数客户实际上运行的是进程内代码，并且使用Wireshark™跟踪报告他们的问题，这些变化会造成支持噩梦。可能的解决办法是提供一个标志以抑制调试目的的过程内行为，并明确指出，在性能测试期间应关闭该标志。
 一旦为进程间通信开发了共享内存传输，进程内的机制将变得无关紧要。因为速度增益和源复杂性的权衡将非常昂贵。从内存消耗的角度来看，使用进程间发现数据库比拥有每个进程的发现数据库会有更多优势。
 
 
 
+## `write()`如何调用到`serialize()`
+可以还原类型
+**`DataWriterImpl`可以拿到`TypeSupport`（继承自`shared_ptr`），由`Participant`持有**
+序列化的数据，若序列化失败，塞到`payload_pool`
+成功则塞进`history_`（由`DataWriterImpl`持有）
+
+
+
+
+## 接收端如何被通知？
+
+
+
+
+# SOME/IP 和 DDS的对比
+## 集中式SOME/IP协议的好处
+SOME/IP（Scalable service-Oriented MiddlewarE over IP）
+    是一种专门为汽车工业设计的中间件协议，旨在通过IP网络实现面向服务的通信。
+其集中式架构具有以下优点：
+简化集成与维护：
+    由于采用集中式管理，系统中的各个组件可以通过一个中心节点进行配置和监控，这大大简化了系统的集成和后续维护工作。
+易于管理和控制：
+    所有服务请求都需经过中央服务器处理，便于实施统一的安全策略、访问控制以及服务质量保证。
+高效资源利用：
+    通过优化路由和服务调度，可以更有效地利用网络资源和计算资源。
+
+## 分布式DDS协议的好处
+DDS（Data Distribution Service）数据分发服务
+    是一种用于实时系统中发布/订阅模式的数据连接的中间件标准。
+它的分布式特性带来了如下优势：
+`高可用性`和可靠性：
+    由于没有单点故障，**即使部分节点出现故障，系统仍然能够正常运行**，提高了整体的可靠性和可用性。
+灵活性和扩展性：
+    每个节点都可以独立地发布或订阅数据，使得系统`非常灵活且容易扩展`。新节点加入网络时不需要对现有系统做大量修改。
+低延迟和实时性能：
+    DDS协议支持`点对点`直接通信，减少了消息传递的延迟，非常适合需要快速响应的应用场景，如自动驾驶等。
+
 # someip_to_dds
 ## 关键词
+ROS2 rmw通信层也是默认使用fastdds，只要someip_to_dds的配置与ROS2端保持一致，理论上就能够通信。
+arxml -- idl保持一致，执行运行时的数据拷贝。
+ROS2的`topic`映射到`fastdds`，会含有`rt`字段
+ROS2的`service`映射到`fastdds`，会含有`rq`字段
+
 单例、设置回调
 一个`DomainParticipant`
 一个`Publisher`
@@ -495,6 +631,354 @@ remote_locators_shrinked 应对本地写入者返回一个空向量。
 若干组`Topic` 和 `TypeSupport`
 若干`DataReaderListener`
 
+### method
+ROS2 as client
+生产者消费者模型：收到fastdds request（ROS2 request）数据时，记录`writer_guid`和`sequence_number`，一并存储到阻塞队列中，
+线程1不断将数据出队列，调用AP method回调，将future存储到阻塞队列中，
+线程2不断地轮询future，将结果转成dds格式数据，发回给ROS2端
+```cpp
+    write_params.related_sample_identity().writer_guid() = info.related_sample_identity.writer_guid();              // 不set的话，收不到数据
+    write_params.related_sample_identity().sequence_number().high = info.sample_identity.sequence_number().high;    // 不set的话，认为服务无效
+    write_params.related_sample_identity().sequence_number().low = info.sample_identity.sequence_number().low;
+```
+
+
+### 性能
+camera Image数据（几十M），20几Hz
+其他数据上百Hz，也能保证收发频率一致
+
+# recorder
+debug模式（分钟级别，一分钟一个文件，不接受trigger） + product模式（秒级别，一秒钟一个文件，接受trigger）两种模式可以切换
+类似于行车记录仪，自动删除最老的数据
+
+生产者消费者模型、阻塞队列
+线程池
+**mcap**
+```cpp
+/**
+ * @brief Describes a schema used for message encoding and decoding and/or
+ * describing the shape of messages. One or more Channel records map to a single
+ * Schema.
+ */
+struct MCAP_PUBLIC Schema
+{
+    SchemaId id;
+    std::string name;
+    std::string encoding;
+    ByteArray data;
+
+    Schema() = default;
+
+    Schema(const std::string_view name, const std::string_view encoding, const std::string_view data)
+        : name(name),
+          encoding(encoding),
+          data{reinterpret_cast<const std::byte*>(data.data()),
+               reinterpret_cast<const std::byte*>(data.data() + data.size())}
+    {
+    }
+
+    Schema(const std::string_view name, const std::string_view encoding, const ByteArray& data)
+        : name(name), encoding(encoding), data{data}
+    {
+    }
+};
+
+/**
+ * @brief Describes a Channel that messages are written to. A Channel represents
+ * a single connection from a publisher to a topic, so each topic will have one
+ * Channel per publisher. Channels optionally reference a Schema, for message
+ * encodings that are not self-describing (e.g. JSON) or when schema information
+ * is available (e.g. JSONSchema).
+ */
+struct MCAP_PUBLIC Channel
+{
+    ChannelId id;
+    std::string topic;
+    std::string messageEncoding;
+    SchemaId schemaId;
+    KeyValueMap metadata;
+
+    Channel() = default;
+
+    Channel(const std::string_view topic,
+            const std::string_view messageEncoding,
+            SchemaId schemaId,
+            const KeyValueMap& metadata = {})
+        : topic(topic), messageEncoding(messageEncoding), schemaId(schemaId), metadata(metadata)
+    {
+    }
+};
+
+/**
+ * @brief A single Message published to a Channel.
+ */
+struct MCAP_PUBLIC Message
+{
+    ChannelId channelId;
+    /**
+     * @brief An optional sequence number. If non-zero, sequence numbers should be
+     * unique per channel and increasing over time.
+     */
+    uint32_t sequence;
+    /**
+     * @brief Nanosecond timestamp when this message was recorded or received for
+     * recording.
+     */
+    Timestamp logTime;
+    /**
+     * @brief Nanosecond timestamp when this message was initially published. If
+     * not available, this should be set to `logTime`.
+     */
+    Timestamp publishTime;
+    /**
+     * @brief Size of the message payload in bytes, pointed to via `data`.
+     */
+    uint64_t dataSize;
+    /**
+     * @brief A pointer to the message payload. For readers, this pointer is only
+     * valid for the lifetime of an onMessage callback or before the message
+     * iterator is advanced.
+     */
+    const std::byte* data = nullptr;
+};
+```
+注意到：`Message`中包含有`ChannelId`，而`Channel`和`Schema`是一一对应的
+
+
+
+根据topic，大量生成如下代码：用于`McapWriter`
+```cpp
+// 初始化阶段进行以下操作：
+
+// 需要读取一些.msg文件（ros2所使用的），目的是可供ROS2环境使用、支持plotjuggler    而rosbag play 跟 plotjugger 对schema的data的处理不一样
+// schema       确保：发送方和接收方 对于 所交换数据的理解是一致的
+schema_test_->name = "sensor_msgs/msg/Image";
+schema_test_->encoding = "ros2msg";                 // schema的encoding
+auto [format_test, full_text_test] = msgdef_cache.get_full_text(schema_test_->name);                    // 读取.msg文件
+schema_test_->data.assign(reinterpret_cast<const std::byte*>(full_text_test.data()),                    // 将消息定义转换成字节流
+    reinterpret_cast<const std::byte*>(full_text_test.data() + full_text_test.size()));
+writer_->addSchema(*schema_test_);
+
+// channel
+channel_test_->topic = "/sensor/camera/front/h264";
+channel_test_->messageEncoding = "cdr";             // channel的encoding
+channel_test_->schemaId = schema_test_->id;
+channel_test_->metadata.emplace("offered_qos_profiles", QosToString(TOPIC_QOS_DEFAULT));                // 遵从metadata.yaml里的配置
+available_channels_.push_back(channel_test_);
+
+for (auto channel : available_channels_) {
+writer_->addChannel(*channel);
+}
+
+template <typename T>
+class TypeConverterMsg
+{
+  public:
+    void ConvertToMsg(mcap::Message* msg, T& data, mcap::ChannelId channel_id)
+    {
+        // serialize DDS structure to binary stream using fastcdr
+        eprosima::fastcdr::Cdr serializer(
+            fast_buffer_, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, eprosima::fastcdr::Cdr::DDS_CDR);
+        serializer.serialize_encapsulation();
+        serializer << data;
+        size_t size = serializer.getSerializedDataLength();
+        // create the mcap message
+        auto timestamp_ns{
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count()};
+
+        msg->sequence = 0;
+        msg->channelId = channel_id;
+        msg->logTime = static_cast<uint64_t>(timestamp_ns);
+        msg->publishTime = msg->logTime;                //  用于plotjugger播包
+
+        std::byte* ptr = new std::byte[size];
+        std::memcpy(ptr, fast_buffer_.getBuffer(), size);
+        msg->data = ptr;
+        msg->dataSize = size;
+    }
+    eprosima::fastcdr::FastBuffer fast_buffer_;
+};
+/*
+    收到数据时，进行两层格式转换：
+    1. AP格式的数据   -->  DDS格式的数据
+        ConvertToIdl()
+    2. DDS格式的数据  -->  Mcap的msg  需要填充信息
+        ConvertToMsg()
+*/
+```
+
+存储池
+当收到切片信号时（product特有），
+实际上就是从/tmp下的内存中的文件进行选择（根据时间戳选择前M后N的秒级文件），合并，然后调用`copy_file_range`拷贝到磁盘
+
+
+文件结构
+```xml
+<Magic>
+<Header>
+<Data section>[<Summary section>][<Summary Offset section>]
+<Footer>
+<Magic>
+```
+**Data Section**
+数据部分包含带有消息数据，附件和支持记录的记录。
+数据部分允许出现以下记录：
+```sh
+Schema
+Channel
+Message
+Attachment
+Chunk
+Message Index
+Metadata
+Data End
+```
+
+# data collector
+单线程-单循环模式
+数据的收集（根据收集文件的类型，包装成相应任务类，尽量均匀地完成文件的拷贝，`C++17 filesystem接口，copy_file_range(src_fd, des_fd, size)`）、压缩（`gzip`）、上传（`poco`）
+线程池
+云端通信
+读取配置，得到`url`
+`SetHeader()`, `SetBody()`组合出一个`request`
+```cpp
+    BigFileUploadRequestFactory factory = BigFileUploadRequestFactory(info);
+    BigFileUploadRequest request = factory.MakeRequest(header, body);
+
+    auto result = request.Execute(header, body);
+```
+重试和分片是怎么做的？断点续传？
+
+
+# fastdds实现
+## 发数据 `write(void*)`
+```cpp
+DataWriterImpl::write(void* data)
+
+DataWriterImpl::create_new_change(ALIVE, data)  // ALIVE, 表示样本有效，其他状态还包括：被处置、注销、处置以及注销
+{
+    WriteParams wparams;
+    return create_new_change_with_params(changeKind, data, wparams);
+}
+
+ReturnCode_t DataWriterImpl::create_new_change_with_params(ChangeKind_t changeKind, void* data, WriteParams& wparams)
+{
+    ReturnCode_t ret_code = check_new_change_preconditions(changeKind, data);
+    // ...
+    InstanceHandle_t handle;
+    // ...
+    return perform_create_new_change(changeKind, data, wparams, handle);
+}
+
+// ！！！PS：用户层可以通过loan_sample(void*& sample, LoanInitializationKind initialization)接口取得
+ReturnCode_t DataWriterImpl::perform_create_new_change(ChangeKind_t change_kind, void* data, WriteParams& wparams, const InstanceHandle_t& handle)
+{
+    std::unique_lock<RecursiveTimedMutex> lock(writer_->getMutex());
+    PayloadInfo_t payload;
+    bool was_loaned = check_and_remove_loan(data, payload);
+    // 如果有借用，则从记录的借用列表中移除
+    // 如果没有借用。则调用：
+        get_free_payload_from_pool(type_->getSerializedSizeProvider(data), payload)     // 先把数据指针转移到CacheChange_t对象中，再转移到payload中
+    // 从内存池中取出free payload（这里的内存池实际对象和是否开启data sharing[数据共享交付 DataReader共享DataWriter的history 难道就是零拷贝？？？]有关，DataSharingPayloadPool / TopicPayloadPool。PREALLOCATED_WITH_REALLOC_MEMORY_MODE等QOS配置也影响到此处）
+    ！！！free_payloads_其实是vector的结构
+    // 调用序列化
+    // 构造一个新的CacheChange_t对象，把上面的payload的数据再转移进去
+    // 把数据塞进history，调用到rtps层的add_change_(CacheChange_t* a_change, WriteParams& wparams, std::chrono::time_point<std::chrono::steady_clock> max_blocking_time)，其中有一行关键调用：
+        // WriterHistory:
+        notify_writer(a_change, max_blocking_time);     // RTPSWriter有好几种！！！具体选择哪种实例化应该是createRTPSWriter(...)里面决定的，内部是根据QOS配置来决定的：如果是reliable就是StatefulWriter、如果是unreliable就是StatelessWriter
+            // 内部实现：
+            mp_writer->unsent_change_added_to_history(a_change, max_blocking_time);
+}
+
+// DataWriter提供一个指向内部缓冲区（池）的指针，用户可以直接在此缓冲区内准备数据以供发送。此方法仅适用于平凡数据类型的DataWriter
+ReturnCode_t DataWriterImpl::loan_sample(void*& sample, LoanInitializationKind initialization);
+
+        /*
+            上面的数据写入到history之后，显然会异步地发送
+            先把数据传到FlowController对象，塞进Scheduler，其维护一个Queue
+        */
+                sched.add_new_sample(writer, change);
+
+                // 专门的线程，跑while循环
+                // 通知具体的Writer，数据可以走底层发送了，调接口判断采取哪种方式进行分发
+                    fastrtps::rtps::DeliveryRetCode ret_delivery = current_writer->deliver_sample_nts(
+                        change_to_process, async_mode.group, locator_selector,
+                        std::chrono::steady_clock::now() + std::chrono::hours(24));
+```
+
+数据最终如何分发？分为三种情况：
+1. 同一进程内的DataReader、
+2. 同一个域的
+3. 跨域的
+```cpp
+DeliveryRetCode StatefulWriter::deliver_sample_nts(
+        CacheChange_t* cache_change,
+        RTPSMessageGroup& group,
+        LocatorSelectorSender& locator_selector, // Object locked by FlowControllerImpl
+        const std::chrono::time_point<std::chrono::steady_clock>& max_blocking_time)
+{
+    DeliveryRetCode ret_code = DeliveryRetCode::DELIVERED;
+
+    if (there_are_local_readers_)
+    {
+        deliver_sample_to_intraprocesses(cache_change);
+    }
+
+    // Process datasharing then
+    if (there_are_datasharing_readers_)
+    {
+        deliver_sample_to_datasharing(cache_change);
+    }
+
+    if (there_are_remote_readers_)
+    {
+        ret_code = deliver_sample_to_network(cache_change, group, locator_selector, max_blocking_time);
+    }
+
+    check_acked_status();
+
+    return ret_code;
+}
+```
+这里如何通知到udp writer？/ 如何和transport层交互？？？
+可能是通过条件变量，notify某一个listner线程，让其执行
+
+？？？locator是什么东西？？？网络定位符？是ip + port吗？
+
+
+
+## 收数据
+每种通道，都有一个线程在执行`while`
+```cpp
+void UDPChannelResource::perform_listen_operation(
+        Locator input_locator)
+{
+    Locator remote_locator;
+
+    while (alive())
+    {
+        // Blocking receive.
+        auto& msg = message_buffer();
+        if (!Receive(msg.buffer, msg.max_size, msg.length, remote_locator))
+        {
+            continue;
+        }
+
+        // Processes the data through the CDR Message interface.
+        if (message_receiver() != nullptr)
+        {
+            message_receiver()->OnDataReceived(msg.buffer, msg.length, input_locator, remote_locator);
+        }
+        else if (alive())
+        {
+            logWarning(RTPS_MSG_IN, "Received Message, but no receiver attached");
+        }
+    }
+
+    message_receiver(nullptr);
+}
+```
 
 
 
@@ -507,12 +991,75 @@ remote_locators_shrinked 应对本地写入者返回一个空向量。
 
 
 
+
+
+# c++14新特性
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 项目中碰到的问题
+1. SOME/IP TTL过短，导致重新订阅
+2. 多线程`Send()`，接收端数据错乱
+    尽管注释里说，同一个类非线程安全，不同的类实例线程安全，但是不同的实例应该也不是线程安全的
+    因为虽然`Send()`是这样调用的：
+```cpp
+    std::lock_guard<std::mutex> const impl_interfaces_guard{skeleton_->GetImplInterfacesLock()};
+
+    // Get the binding implementations (backends) that are retrieved on an OfferService of the skeleton object.
+    typename Skeleton::SkeletonImplInterfacePtrCollection const& binding_interfaces{
+        skeleton_->GetBindingImplInterfaces()};
+
+    // Send the event sample to all the binding implementations via the binding-specific event manager.
+    // VCA_SOCAL_VALID_SKELETON_IMPL_INTERFACE_COLLECTION
+    for (typename Skeleton::SkeletonImplInterfacePtr const interface : binding_interfaces) {
+      result = SendInternal(interface, data);
+    }
+```
+但是`SendInternal`是这样实现的
+```cpp
+    return (concrete_impl_interface->*GetEventManagerMethod)()->Send(data);
+```
+不同实例的`SomeipEventManager`
+
+
+
+
+3. 总是需要去看源码实现
+ROS2 as client，内部会维护一个`pending_request`的map
+ROS2 as server，
+someip_to_dds本地需要维护一个`pending_requests_`的map
+给每个请求编号，在method回调里去向ROS2发请求。（注意配置someip_to_dds的线程池个数为多个）
+然后再把response返回
+
+4. TCP连接时间长的问题，method调用会失败
 
 # 看过比较精妙的代码
-std::allocator内存分配器
-自由链表
+`std::allocator`内存分配器针对小内存的内存池设计
+按照长度大小分类的自由链表，这个是申请小内存块的时候所使用的，因为直接申请小内存块容易产生内存碎片
+配置和回收
 
 vector代码
+大量的封装、针对不同平台的封装
+大量的类设计，单一职责
+整体的重构，包括`ara::core`
+
+
+## `copy_on_range`，内核内的复制
+
+
 
 
 

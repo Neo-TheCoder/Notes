@@ -148,11 +148,11 @@ network endpoint   **IpAddress（实际是string类型）**  、  **TCP Port**  
 
 
 # 调用顺序 `SOME/IP daemon`
-**PS：Run()函数做了什么？**
+**PS：`Run()`函数做了什么？**
 ![image.png](https://atlas.pingcode.com/files/public/65460c103a27284c5ca127f4/origin-url)
 * 解析并验证配置（若无效，则直接终止）
 * 启动signal handling（为了恰当地终止）
-* 启动reactor线程（用于通信和时间处理）
+* 启动`reactor`线程（用于通信和时间处理）
 * 创建用于APP在运行时来进行的BasicIPC通信连接
 * 启动服务发现（多播通信）
 
@@ -549,10 +549,8 @@ void ReactorThread::StartReactor() noexcept {
 
 
 #### 关于如何使用epoll处理event
-
 当event事件到来，epoll_wait退出，通过  **epoll_events_[i]**  取得事件，调用  **HandleOneEvent**  ()开始处理
-
-```
+```cpp
 /*!
  * \internal
  * - Enter exclusive area of callback entry.
@@ -599,8 +597,7 @@ void Reactor1::HandleOneEvent(CallbackHandle callback_handle, struct epoll_event
   }
 }
 ```
-
-检测callback是否注册到reactor，以及是否为已经收到的事件注册，
+检测callback是否注册到reactor，以及是否为已经收到的事件注册
 
 
 
