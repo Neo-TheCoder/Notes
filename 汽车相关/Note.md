@@ -18,23 +18,34 @@ AUTOSAR定义了超过300个AR-ELEMENT，VECTOR由自定义了一些，对AP模�
 3. 第2点是核心思想是：依赖抽象/接口，而不是细节/具体实现
     用户层直接只管调用`socal`层的接口就完事了，底层binding实现要考虑的事情就多了
 
-### vector层
+### vector实现层
+其实也是代理模式，谁代理谁？
+--> 用户层的Skeleton对象，被`用户层的SkeletonBinding类`所代理
+    SomeIpSkeletonEventManager代理SkeletonEvent
+
 socal层、具体binding层
-socal层定义了一些绑定无关的抽象类/接口类：如Skeleton、SkeletonEvent
-核心单例：`Runtime`持有关键对象`map<specifier, binding类>`，这里的binding类象征着所使用的绑定
-`具体binding类`持有`XXXBindingServerManager`和`XXXBindingClientManager`，这两个类和具体协议相关，调用具体协议相关的接口，收发数据
-`XXXBindingServerManager`会持有`XXXSkeletonEventManager`，`XXXSkeletonMethodManager`；
-`XXXBindingClientManager`会持有``
+socal层定义了一些绑定无关的抽象类/接口类：如`Skeleton`、`SkeletonEvent`
+核心单例：`Runtime`持有关键对象`map<specifier, binding类>`，这里的binding类象征着所使用的绑定（是单例的！！！）
+`具体binding类（如AraComSomeIpBinding）`持有`XXXBindingServerManager`和`XXXBindingClientManager`，这两个类和具体协议相关，调用具体协议相关的接口，收发数据
+`用户层的SkeletonBinding类`会持有`XXXSkeletonEventManager`，`XXXSkeletonMethodManager`；
+`用户层的Proxyinding类`会持有`XXXProxyEventManager`，`XXXProxyMethodManager`
+**这里所说的`用户层的SkeletonBinding类`和`用户层的Proxyinding类`其实就相当于`radarServiceAdapter`，持有`EventImpl`等实现类，用户无法直接接触到**（通过指针取到用户层的`SkeletonBinding`或者`ProxyBinding`）
+
+
 
 ### 用户层
-`intance_specifier`（字符串拼接，port的名字）/ `instance_identifier`（包含具体binding），二者是一对多的关系（存在多重绑定的概念）
-进行service匹配（）
+`intance_specifier`（字符串拼接，port的名字，其实someip_config.json或者ipc_config.json里也都是这个`instance_specifier`）/ `instance_identifier`（包含具体binding），二者是一对多的关系（存在多重绑定的概念）
 
+建模集成阶段：
 用户先进行服务配置（event、method、field），然后根据需求进行服务部署，选择具体的绑定、部署的平台（一些可能的端口配置）
+
+代码逻辑：
 调用`ara::core::Initialize()`，进行统一的初始化
     先读取配置文件，以单例方式实例化一些配置相关的对象，关键类是`map<specifier, binding类>`
+    `OfferService`和`FindService`的实现中都需要查表：
+        `std::set<InstanceSpecifierLookupTableEntry>`
 
-根据所选择的binding，生成`static` `XXXBindingInitialzier`对象（这些类的成员函数的实现在src-gen）
+根据所选择的binding，生成`static` `XXXBindingInitializer`对象（这些类的成员函数的实现在src-gen）
 
 src-gen中包含关键binding类，如果是Skeleton端，就是`SkeletonBinding`，或者是`ProxyBinding`
 
@@ -45,7 +56,7 @@ src-gen中包含关键binding类，如果是Skeleton端，就是`SkeletonBinding
 
 
 ## per
-
+KVS，或者FS，Open的时候都是查找``<instance_specifier, 单例的实例>`
 
 
 
@@ -471,13 +482,13 @@ Smaller memory footprint at the cost of an increased allocation count.
 
 
 ## 收数据的接口
-`on_data_available`是transport层的接口
+`on_data_available`由`transport层`的接口调用到
 一个channel对应一个线程
 udp的实现：（使用`asio`了）
 ```cpp
 while() {
     //  ...
-    receive_from()
+    receive_from();
 }
 ```
 
@@ -589,7 +600,7 @@ remote_locators_shrinked 应对本地写入者返回一个空向量。
 
 
 ## 接收端如何被通知？
-
+底层transport层进行通知
 
 
 
@@ -1015,6 +1026,7 @@ void UDPChannelResource::perform_listen_operation(
 2. 多线程`Send()`，接收端数据错乱
     尽管注释里说，同一个类非线程安全，不同的类实例线程安全，但是不同的实例应该也不是线程安全的
     因为虽然`Send()`是这样调用的：
+`SkeletonEvent`::`SendInternal(Sample const& data)`
 ```cpp
     std::lock_guard<std::mutex> const impl_interfaces_guard{skeleton_->GetImplInterfacesLock()};
 
@@ -1032,19 +1044,29 @@ void UDPChannelResource::perform_listen_operation(
 ```cpp
     return (concrete_impl_interface->*GetEventManagerMethod)()->Send(data);
 ```
-不同实例的`SomeipEventManager`
-
+不同实例的`SomeipEventManager`（R20-11中命名为`SkeletonEventXf`），可能是在`ApplicationConnection`那层使用到了临界资源：很可能就是存储message header的buffer
 
 
 
 3. 总是需要去看源码实现
-ROS2 as client，内部会维护一个`pending_request`的map
+需要模拟ROS2端，所以要看ROS2的源码实现
+ROS2 as client，
+ROS2发请求，网关程序收到，要立马调用AP的method方法，转发请求给提供method服务的app，得到并存储`future`，塞进队列，
+有个线程专门取队列元素，
+需要轮询每个future是否可取得值，取得值则发回给ROS2端
+
+
 ROS2 as server，
 someip_to_dds本地需要维护一个`pending_requests_`的map
-给每个请求编号，在method回调里去向ROS2发请求。（注意配置someip_to_dds的线程池个数为多个）
-然后再把response返回
+当APP发送请求给网关程序时，转发请求给ROS2端，注意塞数据时ROS2端要有效（ROS2端是使用2个fastdds的topic来实现的），
+给每个请求编号，在method回调里执行如下逻辑：（注意配置someip_to_dds的线程池个数为多个）
+{
+    去向ROS2发请求
+    从`pending_requests_`根据id来取值，没有就阻塞住（相当于阻塞map）
+    然后再把response返回
+}
 
-4. TCP连接时间长的问题，method调用会失败
+1. TCP连接时间长的问题，method调用会失败
 
 # 看过比较精妙的代码
 `std::allocator`内存分配器针对小内存的内存池设计
@@ -1052,12 +1074,11 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
 配置和回收
 
 vector代码
-大量的封装、针对不同平台的封装
+大量的封装、针对不同平台的封装，从而实现兼容
 大量的类设计，单一职责
-整体的重构，包括`ara::core`
+实现了整体的重构，包括`ara::core`
 
 
-## `copy_on_range`，内核内的复制
 
 
 
