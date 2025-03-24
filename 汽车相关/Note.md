@@ -482,9 +482,40 @@ Smaller memory footprint at the cost of an increased allocation count.
 
 
 ## 收数据的接口
-`on_data_available`由`transport层`的接口调用到
-一个channel对应一个线程
-udp的实现：（使用`asio`了）
+`on_data_available`由`transport层`的接口调用到`perform_listen_operation(Locator)`
+```cpp
+void UDPChannelResource::perform_listen_operation(
+        Locator input_locator)
+{
+    Locator remote_locator;
+
+    while (alive())
+    {
+        // Blocking receive.
+        auto& msg = message_buffer();
+        if (!Receive(msg.buffer, msg.max_size, msg.length, remote_locator))
+        {
+            continue;
+        }
+
+        // Processes the data through the CDR Message interface.
+        if (message_receiver() != nullptr)
+        {
+            message_receiver()->OnDataReceived(msg.buffer, msg.length, input_locator, remote_locator);
+        }
+        else if (alive())
+        {
+            logWarning(RTPS_MSG_IN, "Received Message, but no receiver attached");
+        }
+    }
+
+    message_receiver(nullptr);
+}
+```
+
+一种channel对应一个线程
+udp的实现：（使用`asio`中的接口，阻塞地收数据）
+
 ```cpp
 while() {
     //  ...
@@ -991,7 +1022,12 @@ void UDPChannelResource::perform_listen_operation(
 }
 ```
 
+## 内存池
+### WriterPool
 
+
+
+### ReaderPool
 
 
 
