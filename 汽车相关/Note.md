@@ -68,6 +68,11 @@ AUTOSAR把通信抽象成服务，对于每一个服务提供OfferService & Stop
 对于服务中的event提供`Send`接口或者是`SetReceiveHandler`接口（在回调中可以调用`GetNewSamples`来取数据）
 对于method则是提供method回调，或者是`operator()`接口
 
+### 关键字
+skeleton method调用处理模式
+轮询模式（适用于手动控制何时处理下一个请求的情况）、事件触发模式（并发处理）、单线程模式（按顺序处理，潜台词是允许method回调不可并发执行，尽管proxy method并发地调用，避免了skeleton端method回调对于同步机制的要求）
+kPoll, kEvent, kEventSingleThread
+
 
 
 ### skeleton
@@ -1024,6 +1029,16 @@ void UDPChannelResource::perform_listen_operation(
 
 ## 内存池
 ### WriterPool
+每个序列化后的数据，是以`CacheChange_t`的形式存储的
+
+
+内存池其实就是：
+```cpp
+std::vector<PayloadNode*> free_payloads_;
+```
+每个`PayloadNode`所申请的内存长度是不一的，必要时才重新申请（直接调底层的`realloc(ptr, size)`）
+
+
 
 
 
@@ -1047,19 +1062,9 @@ void UDPChannelResource::perform_listen_operation(
 
 
 
-
-
-
-
-
-
-
-
-
-
 # 项目中碰到的问题
 1. SOME/IP TTL过短，导致重新订阅
-2. 多线程`Send()`，接收端数据错乱
+2. 多线程`Send()`，接收端数据错乱（表示udp someip-tp消息重组发生错乱）
     尽管注释里说，同一个类非线程安全，不同的类实例线程安全，但是不同的实例应该也不是线程安全的
     因为虽然`Send()`是这样调用的：
 `SkeletonEvent`::`SendInternal(Sample const& data)`
@@ -1082,17 +1087,13 @@ void UDPChannelResource::perform_listen_operation(
 ```
 不同实例的`SomeipEventManager`（R20-11中命名为`SkeletonEventXf`），可能是在`ApplicationConnection`那层使用到了临界资源：很可能就是存储message header的buffer
 
-
-
 3. 总是需要去看源码实现
 需要模拟ROS2端，所以要看ROS2的源码实现
-ROS2 as client，
+**ROS2 as client**
 ROS2发请求，网关程序收到，要立马调用AP的method方法，转发请求给提供method服务的app，得到并存储`future`，塞进队列，
 有个线程专门取队列元素，
 需要轮询每个future是否可取得值，取得值则发回给ROS2端
-
-
-ROS2 as server，
+**ROS2 as server**
 someip_to_dds本地需要维护一个`pending_requests_`的map
 当APP发送请求给网关程序时，转发请求给ROS2端，注意塞数据时ROS2端要有效（ROS2端是使用2个fastdds的topic来实现的），
 给每个请求编号，在method回调里执行如下逻辑：（注意配置someip_to_dds的线程池个数为多个）
@@ -1102,7 +1103,16 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
     然后再把response返回
 }
 
-1. TCP连接时间长的问题，method调用会失败
+4. 使用VLAN
+
+5. 扩展配置：someipd过载保护
+设置连续通知的最小时间间隔，在间隔前到来的event被缓冲，过了时间间隔再转发，在时间间隔内来的event只会被转发最后一个。
+
+6. 不可能只会配置、只看文档，为了研究配置参照AUTOSAR AP文档进行了开发
+
+
+
+
 
 # 看过比较精妙的代码
 `std::allocator`内存分配器针对小内存的内存池设计
