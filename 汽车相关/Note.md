@@ -153,11 +153,11 @@ enum class MethodCallProcessingMode
 
 ## state_manager
 需要维护，每个function group的状态
-配置文件里配置了，每个app在哪一个fg的哪一个状态
+配置文件里配置了，每个app运行在哪一个fg的哪一个状态
 在代码里控制什么时候，启动哪些功能组的什么状态（这里的实现是使用em提供的api：`ara::exec::StateClient`，底层是使用管道发消息）
 
 ## execution_manager
-每个app有一个exe_config.json，主要关于：
+每个app有一个`exe_config.json`，主要关于：进程的启动、关闭、基于cgroup的资源管理、用户管理
 调度策略、调度优先级（静态优先级，是实时进程才使用的）、nice_value（常见的优先级，越小优先级越高）
     三种调度策略：`SCHED_RR`（一个进程吃完时间片，就到队列尾部，如果有优先级高的，就抢占）, `SCHED_FIFO`（先到先得、是非抢占的、有可能长时间运行），`SCHED_OTHER`（公平的分时调度，时间片轮转，时间片长度是动态调整的），前两种是实时调度策略，
 环境变量、执行依赖、绑核、进入时间、退出时间、用户id、组id
@@ -166,16 +166,17 @@ enum class MethodCallProcessingMode
 ## com
 ### 关键词
 多态、继承、模板、胶水代码
-根据模型生成中间文件（.camke）、链接不同的库
+根据模型生成中间文件（`.cpp`，`.camke`）、链接不同的库
 
-代理模式
+主要使用到的设计模式：
+**代理模式**，**单例模式**，
 
 对于dds binding而言
     arxml提取数据类型信息生成idl文件，调用fastddsgen
 
 整体来说，就是AUTOSAR AP规定了基于service通信的接口，其中提供不同的绑定（甚至可以多重绑定），让用户无感知地调用接口，想要换绑定，只要改配置文件就行了，达到一种这样的效果
 
-
+内存管理？？？
 
 
 ### 架构设计
@@ -924,7 +925,7 @@ ReturnCode_t DataWriterImpl::perform_create_new_change(ChangeKind_t change_kind,
     std::unique_lock<RecursiveTimedMutex> lock(writer_->getMutex());
     PayloadInfo_t payload;
     bool was_loaned = check_and_remove_loan(data, payload);
-    // 如果有借用，则从记录的借用列表中移除
+    // 如果有借用，则可以通过指针或者说地址得知，从记录的借用列表中移除
     // 如果没有借用。则调用：
         get_free_payload_from_pool(type_->getSerializedSizeProvider(data), payload)     // 先把数据指针转移到CacheChange_t对象中，再转移到payload中
     // 从内存池中取出free payload（这里的内存池实际对象和是否开启data sharing[数据共享交付 DataReader共享DataWriter的history 难道就是零拷贝？？？]有关，DataSharingPayloadPool / TopicPayloadPool。PREALLOCATED_WITH_REALLOC_MEMORY_MODE等QOS配置也影响到此处）
@@ -1029,27 +1030,27 @@ void UDPChannelResource::perform_listen_operation(
 
 ## 内存池
 ### WriterPool
-每个序列化后的数据，是以`CacheChange_t`的形式存储的
-
+调`write()`时，计算数据长度（递归计算），向内存池申请一块内存，
+它存储每个序列化后的数据buffer，以`CacheChange_t`的形式存储，存储到`DataWriter`的history中
 
 内存池其实就是：
 ```cpp
 std::vector<PayloadNode*> free_payloads_;
 ```
 每个`PayloadNode`所申请的内存长度是不一的，必要时才重新申请（直接调底层的`realloc(ptr, size)`）
-
-
-
-
+内存池大小和history的深度相关
 
 ### ReaderPool
 
 
+## data sharing
+Although Data-sharing delivery uses shared memory, it differs from Shared Memory Transport in that Shared Memory is a full-compliant transport. That means that with Shared Memory Transport the data being transmitted must be copied from the DataWriter history to the transport and from the transport to the DataReader. With Data-sharing these copies can be avoided.
 
+尽管数据共享传输使用共享内存，但它与共享内存传输不同 因为共享内存是完全兼容的传输。 这意味着，使用共享内存传输 必须将正在传输的数据从 DataWriter 历史记录复制到传输 以及从运输到 DataReader。 通过数据共享，可以避免这些副本。
 
-
-
-
+省略了writer的缓存和reader的缓存（？？？设计了巧妙的数据结构和同步机制）
+--> 环形缓冲区
+无锁编程？
 
 
 
