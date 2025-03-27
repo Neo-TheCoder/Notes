@@ -68,6 +68,11 @@ AUTOSAR把通信抽象成服务，对于每一个服务提供OfferService & Stop
 对于服务中的event提供`Send`接口或者是`SetReceiveHandler`接口（在回调中可以调用`GetNewSamples`来取数据）
 对于method则是提供method回调，或者是`operator()`接口
 
+### 关键字
+skeleton method调用处理模式
+轮询模式（适用于手动控制何时处理下一个请求的情况）、事件触发模式（并发处理）、单线程模式（按顺序处理，潜台词是允许method回调不可并发执行，尽管proxy method并发地调用，避免了skeleton端method回调对于同步机制的要求）
+kPoll, kEvent, kEventSingleThread
+
 
 
 ### skeleton
@@ -148,11 +153,11 @@ enum class MethodCallProcessingMode
 
 ## state_manager
 需要维护，每个function group的状态
-配置文件里配置了，每个app在哪一个fg的哪一个状态
+配置文件里配置了，每个app运行在哪一个fg的哪一个状态
 在代码里控制什么时候，启动哪些功能组的什么状态（这里的实现是使用em提供的api：`ara::exec::StateClient`，底层是使用管道发消息）
 
 ## execution_manager
-每个app有一个exe_config.json，主要关于：
+每个app有一个`exe_config.json`，主要关于：进程的启动、关闭、基于cgroup的资源管理、用户管理
 调度策略、调度优先级（静态优先级，是实时进程才使用的）、nice_value（常见的优先级，越小优先级越高）
     三种调度策略：`SCHED_RR`（一个进程吃完时间片，就到队列尾部，如果有优先级高的，就抢占）, `SCHED_FIFO`（先到先得、是非抢占的、有可能长时间运行），`SCHED_OTHER`（公平的分时调度，时间片轮转，时间片长度是动态调整的），前两种是实时调度策略，
 环境变量、执行依赖、绑核、进入时间、退出时间、用户id、组id
@@ -161,16 +166,17 @@ enum class MethodCallProcessingMode
 ## com
 ### 关键词
 多态、继承、模板、胶水代码
-根据模型生成中间文件（.camke）、链接不同的库
+根据模型生成中间文件（`.cpp`，`.camke`）、链接不同的库
 
-代理模式
+主要使用到的设计模式：
+**代理模式**，**单例模式**，
 
 对于dds binding而言
     arxml提取数据类型信息生成idl文件，调用fastddsgen
 
 整体来说，就是AUTOSAR AP规定了基于service通信的接口，其中提供不同的绑定（甚至可以多重绑定），让用户无感知地调用接口，想要换绑定，只要改配置文件就行了，达到一种这样的效果
 
-
+内存管理？？？
 
 
 ### 架构设计
@@ -482,9 +488,40 @@ Smaller memory footprint at the cost of an increased allocation count.
 
 
 ## 收数据的接口
-`on_data_available`由`transport层`的接口调用到
-一个channel对应一个线程
-udp的实现：（使用`asio`了）
+`on_data_available`由`transport层`的接口调用到`perform_listen_operation(Locator)`
+```cpp
+void UDPChannelResource::perform_listen_operation(
+        Locator input_locator)
+{
+    Locator remote_locator;
+
+    while (alive())
+    {
+        // Blocking receive.
+        auto& msg = message_buffer();
+        if (!Receive(msg.buffer, msg.max_size, msg.length, remote_locator))
+        {
+            continue;
+        }
+
+        // Processes the data through the CDR Message interface.
+        if (message_receiver() != nullptr)
+        {
+            message_receiver()->OnDataReceived(msg.buffer, msg.length, input_locator, remote_locator);
+        }
+        else if (alive())
+        {
+            logWarning(RTPS_MSG_IN, "Received Message, but no receiver attached");
+        }
+    }
+
+    message_receiver(nullptr);
+}
+```
+
+一种channel对应一个线程
+udp的实现：（使用`asio`中的接口，阻塞地收数据）
+
 ```cpp
 while() {
     //  ...
@@ -888,7 +925,7 @@ ReturnCode_t DataWriterImpl::perform_create_new_change(ChangeKind_t change_kind,
     std::unique_lock<RecursiveTimedMutex> lock(writer_->getMutex());
     PayloadInfo_t payload;
     bool was_loaned = check_and_remove_loan(data, payload);
-    // 如果有借用，则从记录的借用列表中移除
+    // 如果有借用，则可以通过指针或者说地址得知，从记录的借用列表中移除
     // 如果没有借用。则调用：
         get_free_payload_from_pool(type_->getSerializedSizeProvider(data), payload)     // 先把数据指针转移到CacheChange_t对象中，再转移到payload中
     // 从内存池中取出free payload（这里的内存池实际对象和是否开启data sharing[数据共享交付 DataReader共享DataWriter的history 难道就是零拷贝？？？]有关，DataSharingPayloadPool / TopicPayloadPool。PREALLOCATED_WITH_REALLOC_MEMORY_MODE等QOS配置也影响到此处）
@@ -991,14 +1028,29 @@ void UDPChannelResource::perform_listen_operation(
 }
 ```
 
+## 内存池
+### WriterPool
+调`write()`时，计算数据长度（递归计算），向内存池申请一块内存，
+它存储每个序列化后的数据buffer，以`CacheChange_t`的形式存储，存储到`DataWriter`的history中
+
+内存池其实就是：
+```cpp
+std::vector<PayloadNode*> free_payloads_;
+```
+每个`PayloadNode`所申请的内存长度是不一的，必要时才重新申请（直接调底层的`realloc(ptr, size)`）
+内存池大小和history的深度相关
+
+### ReaderPool
 
 
+## data sharing
+Although Data-sharing delivery uses shared memory, it differs from Shared Memory Transport in that Shared Memory is a full-compliant transport. That means that with Shared Memory Transport the data being transmitted must be copied from the DataWriter history to the transport and from the transport to the DataReader. With Data-sharing these copies can be avoided.
 
+尽管数据共享传输使用共享内存，但它与共享内存传输不同 因为共享内存是完全兼容的传输。 这意味着，使用共享内存传输 必须将正在传输的数据从 DataWriter 历史记录复制到传输 以及从运输到 DataReader。 通过数据共享，可以避免这些副本。
 
-
-
-
-
+省略了writer的缓存和reader的缓存（？？？设计了巧妙的数据结构和同步机制）
+--> 环形缓冲区
+无锁编程？
 
 
 
@@ -1011,19 +1063,9 @@ void UDPChannelResource::perform_listen_operation(
 
 
 
-
-
-
-
-
-
-
-
-
-
 # 项目中碰到的问题
 1. SOME/IP TTL过短，导致重新订阅
-2. 多线程`Send()`，接收端数据错乱
+2. 多线程`Send()`，接收端数据错乱（表示udp someip-tp消息重组发生错乱）
     尽管注释里说，同一个类非线程安全，不同的类实例线程安全，但是不同的实例应该也不是线程安全的
     因为虽然`Send()`是这样调用的：
 `SkeletonEvent`::`SendInternal(Sample const& data)`
@@ -1046,17 +1088,13 @@ void UDPChannelResource::perform_listen_operation(
 ```
 不同实例的`SomeipEventManager`（R20-11中命名为`SkeletonEventXf`），可能是在`ApplicationConnection`那层使用到了临界资源：很可能就是存储message header的buffer
 
-
-
 3. 总是需要去看源码实现
 需要模拟ROS2端，所以要看ROS2的源码实现
-ROS2 as client，
+**ROS2 as client**
 ROS2发请求，网关程序收到，要立马调用AP的method方法，转发请求给提供method服务的app，得到并存储`future`，塞进队列，
 有个线程专门取队列元素，
 需要轮询每个future是否可取得值，取得值则发回给ROS2端
-
-
-ROS2 as server，
+**ROS2 as server**
 someip_to_dds本地需要维护一个`pending_requests_`的map
 当APP发送请求给网关程序时，转发请求给ROS2端，注意塞数据时ROS2端要有效（ROS2端是使用2个fastdds的topic来实现的），
 给每个请求编号，在method回调里执行如下逻辑：（注意配置someip_to_dds的线程池个数为多个）
@@ -1066,7 +1104,16 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
     然后再把response返回
 }
 
-1. TCP连接时间长的问题，method调用会失败
+4. 使用VLAN
+
+5. 扩展配置：someipd过载保护
+设置连续通知的最小时间间隔，在间隔前到来的event被缓冲，过了时间间隔再转发，在时间间隔内来的event只会被转发最后一个。
+
+6. 不可能只会配置、只看文档，为了研究配置参照AUTOSAR AP文档进行了开发
+
+
+
+
 
 # 看过比较精妙的代码
 `std::allocator`内存分配器针对小内存的内存池设计
