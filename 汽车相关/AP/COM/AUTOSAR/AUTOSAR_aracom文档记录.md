@@ -1,7 +1,9 @@
 # 2 Introduction
 Why did AUTOSAR invent yet another communication middleware API/technology, while there are dozens on the market — the more so as one of the guidelines of Adaptive Platform was to reuse existing and field proven technology?
+为什么 AUTOSAR 要发明另一种通信中间件 API/技术，而市场上已有几十种，更何况自适应平台的指导方针之一就是重复使用现有的、经过现场验证的技术？
 
 Before coming up with a new middleware design, we did evaluate existing technologies, which — at first glance — seemed to be valid candidates. Among those were:
+在提出新的中间件设计方案之前，我们对现有技术进行了评估，乍一看，这些技术似乎都是有效的候选技术。其中包括
 * ROS API
 * DDS API
 * CommonAPI (GENIVI)
@@ -11,14 +13,19 @@ The final decision to come up with a new and AUTOSAR-specific Communication Mana
 * **We need a `Communication Management`, which is NOT bound to a concrete network communication protocol.**
     It has to support `the SOME/IP protocol` but there has to be flexibility to exchange that.
 * The AUTOSAR service model, which defines services as a collection of provided methods, events and fields shall be supported naturally/straight forward.
-    也就是要支持AUTOSAR模型
+之所以最终决定开发新的 AUTOSAR 专用通信管理 API，是因为现有解决方案无法满足我们的所有关键要求：
+* 我们需要一个**不受具体网络通信协议约束**的 “通信管理”。
+    它必须支持 “SOME/IP 协议”，但必须具有改变协议的灵活性。
+* 应自然/直接支持 AUTOSAR 服务模型，该模型将服务定义为所提供方法、事件和字段的集合。
 * The API shall support an `event-driven` and a `polling` model to get access to communicated data equally well. The latter one is typically needed by real-time ap-
 plications to avoid unnecessary context switches, while the former one is much more convenient for applications without real-time requirements.
-**应用程序接口应支持 “事件驱动 ”和 “轮询 ”模式，以同样好地访问通信数据。`实时应用程序`通常需要后一种模式，以避免不必要的上下文切换，而前一种模式对于没有实时要求的应用程序来说要方便得多。**
+**应用程序接口应支持 “事件驱动 ”和 “轮询 ”模式，以同样好地访问通信数据。**
+**`实时应用程序`通常需要后一种模式，以避免不必要的上下文切换，而前一种模式对于没有实时要求的应用程序来说要方便得多。**
 
-* Possibility for seamless integration of end-to-end protection to fulfill ASIL requirements.
+* Possibility for seamless integration of `end-to-end` protection to fulfill ASIL requirements.
 可实现端到端保护的无缝集成，以满足`ASIL`要求。
 * Support for static (preconfigured) and dynamic (runtime) selection of service instances to communicate with.
+* 支持静态（预配置）和动态（运行时）选择服务实例进行通信。
 
 So in the final ara::com API specification, the reader will find concepts (which we will describe in-depth in the upcoming chapters), which might be familiar for him from technologies, we have evaluated or even from the existing Classic Platform:
 * Proxy (or Stub) / Skeleton approach (CORBA, Ice, CommonAPI, Java RMI, ...)
@@ -26,13 +33,21 @@ So in the final ara::com API specification, the reader will find concepts (which
 * Queued communication with `configurable receiver-side caches` (DDS, DADDY, Classic Platform)
 * Zero-copy capable API with possibility to shift `memory management` to the middleware (DADDY)
 * Data reception filtering (DDS, DADDY)
+因此，在最终的 ara::com API 规范中，读者会发现一些概念（我们将在接下来的章节中进行深入描述），这些概念可能是我们已经评估过的技术或现有经典平台中的技术：
+* 代理（或存根）/骨架方法（CORBA、Ice、CommonAPI、Java RMI...）
+* 独立于协议的 API（CommonAPI、Java RMI）
+* 具有 “可配置接收端缓存 ”的队列通信（DDS、DADDY、经典平台）
+* 零拷贝 API，可将 “内存管理 ”转移给中间件（DADDY）
+* 数据接收过滤（DDS、DADDY）
 
 Now that we have established the introduction of a new middleware API, we go into the details of the API in the following chapters.
 The following statement is the basis for basically all `AUTOSAR AP specifications`, but should be explicitly pointed out here again:
 **ara::com only defines `the API signatures` and `its behavior visible to the application developer`. Providing an implementation of those APIs and the underlying middleware transport layer is the responsibility of the AUTOSAR AP vendor.**
 **ara::com仅定义了 “API签名 ”和 “应用程序开发人员可见的行为”。提供这些 API 和底层中间件传输层的实现是 AUTOSAR AP 供应商的责任。**
 For a rough parallel with the AUTOSAR Classic Platform, ara::com can be seen as fulfilling functional requirements in the Adaptive Platform similar to those covered in the Classic Platform by the RTE APIs [1] such as Rte_Write, Rte_Read, Rte_Send, Rte_Receive, Rte_Call, Rte_Result.
-
+既然我们已经确定了新的中间件应用程序接口（API）的引入，我们将在接下来的章节中详细介绍该应用程序接口。
+以下声明基本上是所有 “AUTOSAR AP 规范 ”的基础，但应在此再次明确指出：
+与 AUTOSAR 经典平台大致相同，ara::com 在自适应平台中满足的功能要求与经典平台中 RTE API [1] 所涵盖的功能要求类似，如 Rte_Write、Rte_Read、Rte_Send、Rte_Receive、Rte_Call、Rte_Result。
 
 # 4 API Design Visions and Guidelines
 One goal of the API design was to have it `as lean as possible`(尽可能精简). Meaning, that it should only provide `the minimal set` of functionality needed to support the service based com-munication paradigm consisting of the basic mechanisms: methods, events and fields.
@@ -48,11 +63,20 @@ All this could be easily built on top of the basic ara::com API and needs not be
 During the design phase of the API we constantly challenged each part of our drafts, whether it would allow for efficient IPC implementations from AP vendors, since we were aware, that you could easily break it already on the API abstraction level, making it hard or almost impossible to implement a well performing binding.
 **One of the central design points was — as already stated in the introduction — to support polling and event-driven programming paradigms equally well.**
 So you will see in the later chapters, that the application developer, when using ara::com is free to chose the approach, which fits best to his application design, independent whether he implements the service consumer or service provider side of a communication relation.
+所有这些都可以很容易地构建在基本的 ara::com 应用程序接口之上，不需要标准化就能支持典型的协作模型。
+在应用程序接口的设计阶段，我们不断对草案的每一部分提出质疑，因为我们意识到，在应用程序接口的抽象层次上，你可以很容易地破坏它，从而很难或几乎不可能实现性能良好的绑定。
+正如前言所述，核心设计要点之一是同样**支持轮询和事件驱动编程范例。**
+因此，在后面的章节中，您将看到应用程序开发人员在使用 ara::com 时，可以自由选择最适合其应用程序设计的方法，而不管他是实现通信关系中的服务消费者还是服务提供者一方。
 
 This allows for support of `strictly real-time scheduled applications`, where the application requires total control of what (amount) is done when and where unnecessary context switches are most critical.
 **On the other hand the more relaxed event based applications, which simply want to get notified whenever the communication layer has data available for them is also fully supported.**
 The decision within AUTOSAR to genuinely support C++11/C++14 for AP was a very good fit for the ara::com API design.
 For enhanced usability, comfort and a breeze of elegance ara::com API exploits C++ features like smart pointers, template functions and classes, proven concepts for asynchronous operations and reasonable operator overloading.
+这样就可以支持 “严格的实时计划应用程序”，在这种情况下，应用程序需要完全控制何时完成哪些工作（数量），而且不必要的上下文切换是最关键的。
+**另一方面，AUTOSAR 也完全支持较为宽松的基于事件的应用程序，这些应用程序只希望在通信层有数据可用时获得通知。
+AUTOSAR 决定真正支持 C++11/C++14 AP，这与 ara::com API 的设计非常契合。
+为了提高可用性、舒适性和优雅性，ara::com API 利用了 C++ 的各种特性，如智能指针、模板函数和类、异步操作的成熟概念以及合理的操作符重载。
+
 
 
 # 5 High Level API Structure
@@ -60,6 +84,9 @@ For enhanced usability, comfort and a breeze of elegance ara::com API exploits C
 If you’ve ever had contact with middleware technology from a programmer’s perspective, then the approach of a Proxy/Skeleton architecture might be well known to you.
 Looking at the number of middleware technologies using the Proxy/Skeleton (sometimes even called Stub/Skeleton) paradigm, it is reasonable to call it the "classic approach".
 So with ara::com we also decided to use this classical Proxy/Skeleton architectural pattern and also name it accordingly.
+如果你曾经从程序员的角度接触过中间件技术，那么代理/骨架（Proxy/Skeleton）体系结构的方法你可能已经耳熟能详了。
+从使用代理/骨架（有时甚至称为存根/骨架）范例的中间件技术的数量来看，称其为 “经典方法 ”是有道理的。
+因此，在 ara::com 中，我们也决定使用这种经典的**代理/骨架架构模式**，并将其命名为 ara::com。
 
 The basic idea of this pattern is, that from a formal `service definition` two code artifacts are generated:
 * Service Proxy: This code is - from the perspective of the service consumer, which wants to use a possibly remote service - the facade that represents this service

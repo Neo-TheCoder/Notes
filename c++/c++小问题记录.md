@@ -3178,4 +3178,16 @@ JNIEXPORT void JNICALL Java_HelloJNICpp_sayHello(JNIEnv *env, jobject thisObj) {
 }
 ```
 
+# `boost::asio::io_context`
+```cpp
+    boost::asio::io_context io_;
+```
+`io_context`是一个事件处理器 / 调度器，负责管理异步操作的启动、取消、完成。
+```cpp
+io_.run();  // 阻塞，处理已发布的异步任务
+
+```
+
+
+
 
