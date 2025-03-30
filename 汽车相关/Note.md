@@ -208,7 +208,9 @@ enum class MethodCallProcessingMode
 整体来说，就是AUTOSAR AP规定了基于service通信的接口，其中提供不同的绑定（甚至可以多重绑定），让用户无感知地调用接口，想要换绑定，只要改配置文件就行了，达到一种这样的效果
 
 内存管理？？？
-
+`Subscribe(size)`时预分配内存（或者说构造相应数量的对象）
+当`GetNewSamples`时，从`invisible_cache_`取一个，反序列化后塞到`visible_cache_`，调用用户注册的回调
+所使用的SamplePtr在析构时，会归还给`cache_`
 
 ### 架构设计
 `DDSSkeletonServiceMananger`，`DDSProxyServiceMananger`（存在多个实例）
@@ -577,87 +579,6 @@ shm的实现：
     }
 ```
 
-## 文档介绍
-# Intra-process delivery
-包含若干要求，每个要求都占有一个章节。
-
-## 识别本地端点
-相同进程中端点的`GUID`前缀的前8个八位字节内容相同。
-
-### GUID_t重构
-* 提供方法`is_builtin()`、`is_on_same_process_as(other_guid)`和`is_on_same_host_as(other_guid)`
-* 考虑其他改进
-    * 将`Guid.h`拆分为三个头文件（guid、prefix和entity_id）
-    * 将EntityId_t转换为uint32_t
-    * 在GuidPrefix_t上使用联合以高效比较其部分
-
-### 获取指向本地端点的指针
-* 在RTPSDomain上添加方法，根据其guid返回`reader/writer`的指针
-* 应意识到内置端点的存在
-
-## 进程内接收
-订阅者上的新数据处理由写入数据的线程执行。
-此线程负责将`CacheChange_t`复制到`ReaderHistory`并调用`NotifyChanges()`。
-这一决定是为了与传输层来的当前运行的接收线程操作方式保持一致。
-
-用户文档应明确指出，注册`listener`以获取`新更改信息`意味着同时阻塞了传输接收线程和写入数据的线程。
-还应解释另一种读取样本的方法是使用用户线程中的`wait_for_unread_samples()`函数，然后进行读取。
-
-当前的Reader API将被本地写入者用于数据传递。本地写入者将直接调用`processDataMsg`。
-
-## Reader：本地写入者的管理
-在匹配写入者时，Reader应检查是否在同一进程中。
-
-**销毁时的考虑**
-直到现在，Reader可以安全地被销毁，因为我们确信不会有线程访问它。这可能是因为：
-* 使用Reader的所有事件首先被销毁。因此，事件线程永远不会访问Reader。
-* Reader从`ReceiverResource`对象中注销。因此任何接收线程都不会再访问Reader。
-
-现在，Reader可能会被本地进程中的写入者访问。但是只有当通过发现机制与写入者匹配时才会发生这种情况。因此，在Reader被销毁之前，我们应该确保使用发现机制与写入者取消匹配。由于EDP内置端点将使用进程内机制，这种取消匹配将是即时的。
-
-### 有状态读取器（StatefulReader）
-对本地写入者的输出流量不应执行。
-在WriterProxy上的更改：
-remote_locators_shrinked 应对本地写入者返回一个空向量。
-定时事件“心跳响应”对于本地写入者不应启动。
-定时事件“初始acknack”应直接调用本地写入者的process_acknack方法。
-
-## 写入者：本地读取器的管理
-在匹配到读取器时，写入者应该检查它是否位于同一进程中。
-
-不应对本地读取者执行输出流量。
-样本通过processDataMsg发送给本地读取者。
-当使用transient_local持久性时，一旦本地读取器被匹配，它应当自动通过processDataMsg接收数据。
-
-### 无状态写入者（StatelessWriter）
-在ReaderLocator::start时，如果读者是本地的，则不添加定位符。
-
-### 有状态写入者（StatefulWriter）
-发送给本地读取者的样本会自动确认。
-发送给本地读取者的Gaps应直接调用processGapMsg。
-发送给本地读取者的心跳信息应直接调用processHeartbeatMsg。
-对于本地读取者，定时事件不应启动，除了“初始心跳”。
-
-## 发现过程
-### 参与者发现(PDP)
-为了在同一进程中保持域的分离，我们将继续使用标准机制进行参与者发现。内置PDP读取者和写入者的内部进程交付将不会被使用。
-
-### 端点发现(EDP)
-端点发现也将依赖标准机制，但是内置端点将会使用新的机制来发送/接收WriterProxyData和ReaderProxyData到/从本地进程中。
-
-## 其他考虑事项
-### 安全性
-如果我们依靠比较GUID来识别同一进程中的端点，那么那些属于安全参与者的将不会被考虑在内，因为在这种情况下，GUID将使用整个参与者GUID的哈希重新计算。
-
-### 活跃度（Liveliness）
-活跃度声明机制不需要任何更改，只是manual_by_topic声明应该直接调用本地读取者的processHeartbeatMsg方法。
-
-### 副作用
-此设计隔离了所有来自网络的消息流量，这意味着像Wireshark这样的工具将变得无用。考虑到我们的大多数客户实际上运行的是进程内代码，并且使用Wireshark™跟踪报告他们的问题，这些变化会造成支持噩梦。可能的解决办法是提供一个标志以抑制调试目的的过程内行为，并明确指出，在性能测试期间应关闭该标志。
-一旦为进程间通信开发了共享内存传输，进程内的机制将变得无关紧要。因为速度增益和源复杂性的权衡将非常昂贵。从内存消耗的角度来看，使用进程间发现数据库比拥有每个进程的发现数据库会有更多优势。
-
-
-
 ## `write()`如何调用到`serialize()`
 可以还原类型
 **`DataWriterImpl`可以拿到`TypeSupport`（继承自`shared_ptr`），由`Participant`持有**
@@ -669,6 +590,16 @@ remote_locators_shrinked 应对本地写入者返回一个空向量。
 
 ## 接收端如何被通知？
 底层transport层进行通知，每个通道一个线程
+
+# vsomeip
+## boost::asio（已经封装了`epoll`）
+`routing_manager_impl`把所持有的`io_context`到处往外传，构造`service_discovery_impl`时直接把this指针传出去了，也就顺理成章地把`io_context`给出去了
+
+
+
+
+
+
 
 
 
