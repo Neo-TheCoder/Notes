@@ -63,8 +63,9 @@ KVS，或者FS，Open的时候都是查找``<instance_specifier, 单例的实例
 
 # AUTOSAR AP
 ## com
+提供了标准化的API
 本身就是对底层所使用的通信中间件的封装，就比如ROS2中通过环境变量来配置使用哪个中间件
-AUTOSAR把通信抽象成服务，对于每一个服务提供OfferService & StopOfferService，StartFindService和StopFindService接口
+AUTOSAR把通信抽象成服务，对于每一个服务提供`OfferService` & `StopOfferService`，`StartFindService`和`StopFindService`接口
 对于服务中的event提供`Send`接口或者是`SetReceiveHandler`接口（在回调中可以调用`GetNewSamples`来取数据）
 对于method则是提供method回调，或者是`operator()`接口
 
@@ -1019,21 +1020,51 @@ std::vector<PayloadNode*> free_payloads_;
 ## data sharing
 Although Data-sharing delivery uses shared memory, it differs from Shared Memory Transport in that Shared Memory is a full-compliant transport. That means that with Shared Memory Transport the data being transmitted must be copied from the DataWriter history to the transport and from the transport to the DataReader. With Data-sharing these copies can be avoided.
 
-尽管数据共享传输使用共享内存，但它与共享内存传输不同 因为共享内存是完全兼容的传输。 这意味着，使用共享内存传输 必须将正在传输的数据从 DataWriter 历史记录复制到传输 以及从运输到 DataReader。 通过数据共享，可以避免这些副本。
+尽管数据共享传输使用共享内存，但它与共享内存传输不同 因为共享内存是完全兼容的传输。这意味着，使用共享内存传输 必须将正在传输的数据从 DataWriter 历史记录复制到传输 以及从运输到 DataReader。通过数据共享，可以避免这些副本。
 
 省略了writer的缓存和reader的缓存（设计了巧妙的数据结构和同步机制）
 --> 环形缓冲区
-无锁编程 / 轻量级锁
+无锁编程 / 轻量级锁 ？
+
+
 
 
 
 # ROS2
 ## 架构
-1. 操作系统层
-2. 中间层（Middleware Layer）
-3. 应用层
+从上往下：
+用户层（ROS2节点）
+rclcpp（ROS Client Library for C++）
+rcl（ROS2 client Library）（C语言实现的）通信库（和rclcpp合称为ROS2 client层，提供了对ROS话题、服务、参数、Action等接口）
+RMW层（DDS抽象层）为了使得封装DDS实现层，保持统一性
+DDS实现层（封装DDS，封装大量的设置、配置操作）
+操作系统
 
+## 基本概念
+### Node（节点）：
+在 rclcpp 中，节点是最基本的通信单元。节点可以理解为一个执行特定任务的进程中的实例，它通过 ROS 2 中间件进行通信和交互。
+节点通过 rclcpp::Node 类来表示和管理。每个节点都有一个全局唯一的名称，以便在 ROS 2 系统中唯一标识它。
 
+### Publisher（发布者）和 Subscriber（订阅者）：
+节点通过发布者（Publisher）和订阅者（Subscriber）来实现与其它节点的通信。发布者用于向特定的主题发布消息，而订阅者用于接收来自特定主题的消息。
+`rclcpp::Publisher<T>`和`rclcpp::Subscription<T>`类分别用于创建发布者和订阅者，其中 T 是消息类型。
+
+### Service（服务）和 Client（客户端）：
+除了通过主题发布和订阅消息外，节点还可以通过服务（Service）和客户端（Client）进行请求和响应式通信。
+`rclcpp::Service<T>`和`rclcpp::Client<T>`类分别用于创建服务和客户端，其中 T 是服务请求和响应的类型。
+
+### Actions（动作）：
+在 ROS 2 中，动作提供了一种更复杂的通信模式，它允许节点执行长时间运行的目标，并提供反馈和取消功能。
+`rclcpp::ActionServer<T>`和`rclcpp::ActionClient<T>`类用于创建动作服务器和动作客户端，其中 T 是动作消息的类型。
+
+## 实现
+### topic
+`create_publisher`
+`create_subscription`
+
+### service
+`create_service`
+`create_client`
 
 
 
@@ -1094,7 +1125,7 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
 
 6. 只看文档来配置是不够的，为了研究配置参照AUTOSAR AP文档进行了开发
 
-
+7. 通过perf工具生成火焰图发现，正则表达式效率太差，函数调用栈太深
 
 
 
