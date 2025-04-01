@@ -604,11 +604,10 @@ shm的实现：
 
 # vsomeip
 ## boost::asio（已经封装了`epoll`）
+整个是一个异步编程的框架
 `routing_manager_impl`把所持有的`io_context`到处往外传，构造`service_discovery_impl`时直接把this指针传出去了，也就顺理成章地把`io_context`给出去了
-
-
-
-
+于是可以接收各种someip消息，再根据类型转发给相应的app了
+someipd还是和其他app使用unix domain socket来通信，其他的app是使用routing_manager_client来和someipd通信的，其中触发`application_impl：：on_message()`回调，和sd相关的逻辑都集中在`sd::service_discovery`，一个app里根据配置，持有`routing_manager_impl` / `routing_manager_client`中的一个
 
 
 
@@ -1035,10 +1034,12 @@ Although Data-sharing delivery uses shared memory, it differs from Shared Memory
 从上往下：
 用户层（ROS2节点）
 rclcpp（ROS Client Library for C++）
-rcl（ROS2 client Library）（C语言实现的）通信库（和rclcpp合称为ROS2 client层，提供了对ROS话题、服务、参数、Action等接口）
-RMW层（DDS抽象层）为了使得封装DDS实现层，保持统一性
+rcl（ROS2 client Library）（C语言实现的，可能是为了提供）通信库（和rclcpp合称为ROS2 client层，提供了对ROS话题、服务、参数、Action等接口）
+RMW层（DDS抽象层）为了使得封装DDS实现层，保持统一性（其下有rmw_fastrtps, rmw_connextdds）
 DDS实现层（封装DDS，封装大量的设置、配置操作）
 操作系统
+
+
 
 ## 基本概念
 ### Node（节点）：
