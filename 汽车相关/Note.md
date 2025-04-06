@@ -1,3 +1,8 @@
+# STAR法则
+
+
+
+
 # 介绍一下vector ap的使用
 AUTOSAR定义了超过300个AR-ELEMENT，VECTOR由自定义了一些，对AP模型进行了扩展
 
@@ -1035,9 +1040,12 @@ Although Data-sharing delivery uses shared memory, it differs from Shared Memory
 用户层（ROS2节点）
 rclcpp（ROS Client Library for C++）
 rcl（ROS2 client Library）（C语言实现的，可能是为了提供）通信库（和rclcpp合称为ROS2 client层，提供了对ROS话题、服务、参数、Action等接口）
-RMW层（DDS抽象层）为了使得封装DDS实现层，保持统一性（其下有rmw_fastrtps, rmw_connextdds）
+RMW层（ros2 middleware，DDS抽象层）为了使得封装DDS实现层，保持统一性（其下有rmw_fastrtps, rmw_connextdds）
 DDS实现层（封装DDS，封装大量的设置、配置操作）
 操作系统
+
+如何实现对fastdds、cyclonedds的绑定？
+猜测是通过加载相应的动态库来绑定的，在`rclcpp::init()`
 
 
 
@@ -1066,6 +1074,27 @@ DDS实现层（封装DDS，封装大量的设置、配置操作）
 ### service
 `create_service`
 `create_client`
+
+
+
+
+# asio库
+Proactor架构
+epoll的实现是基于回调的，如果fd有期望的事件发生就通过回调函数将其加入epoll就绪队列中，用户针对该队列中的文件句柄发起相应操作，如read等，此时数据真正才会开始从内核buffer写入应用buffer中，整个过程是一种`非阻塞 同步IO`。
+而Boost.Asio的说明文档中明确其采用Proactor模式实现了`异步IO`，也就是说用户在发起`async_read`后，可以去进行其它操作，数据将会从`内核buffer`写入`应用buffer`，
+数据拷贝完毕会调用用户提供的`回调函数`（Proactor相比reactor特别的点在于使用回调）。
+
+而boost.asio封装了epoll，模拟出了proactor：
+    Boost.Asio在应用层上对epoll返回的就绪队列做了一层封装，实现数据拷贝，从而完成了异步IO操作
+
+Boost.Asio中最重要的一个类是io_service，io_service抽象系统I/O接口，提供异步数据传输的能力，它是应用程序和系统I/O接口的桥梁。
+Boost.Asio主要采用它实现了Proactor模式。
+io_service有一个重要的成员，io_service_impl，它在不同的系统下有不同的实现。
+在Windows下是基于IOCP的，在Linux下是基于task_io_service，这主要是通过预处理进行区分的
+
+
+
+
 
 
 
@@ -1115,7 +1144,7 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
 给每个请求编号，在method回调里执行如下逻辑：（注意配置someip_to_dds的线程池个数为多个）
 {
     去向ROS2发请求
-    从`pending_requests_`根据id来取值，没有就阻塞住（相当于阻塞map）
+    从`pending_requests_`根据id来取值，没有就阻塞住（类似于阻塞队列）
     然后再把response返回
 }
 
@@ -1126,11 +1155,17 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
 
 6. 只看文档来配置是不够的，为了研究配置参照AUTOSAR AP文档进行了开发
 
-7. 通过perf工具生成火焰图发现，正则表达式效率太差，函数调用栈太深
+7. 通过perf工具生成火焰图发现，c++标准库中的正则表达式效率太差，函数调用栈太深
+
+8. 为了提高效率，必须减少不必要的拷贝，把数据进行`std::move`，从而触发移动构造函数（函数传参时不要加`const`）
 
 
 
 # 看过比较精妙的代码
+`asio`库
+
+
+
 `std::allocator`内存分配器针对小内存的内存池设计
 按照长度大小分类的自由链表，这个是申请小内存块的时候所使用的，因为直接申请小内存块容易产生内存碎片
 配置和回收
