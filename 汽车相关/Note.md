@@ -1,3 +1,8 @@
+# STAR法则
+
+
+
+
 # 介绍一下vector ap的使用
 AUTOSAR定义了超过300个AR-ELEMENT，VECTOR由自定义了一些，对AP模型进行了扩展
 
@@ -63,8 +68,9 @@ KVS，或者FS，Open的时候都是查找``<instance_specifier, 单例的实例
 
 # AUTOSAR AP
 ## com
+提供了标准化的API
 本身就是对底层所使用的通信中间件的封装，就比如ROS2中通过环境变量来配置使用哪个中间件
-AUTOSAR把通信抽象成服务，对于每一个服务提供OfferService & StopOfferService，StartFindService和StopFindService接口
+AUTOSAR把通信抽象成服务，对于每一个服务提供`OfferService` & `StopOfferService`，`StartFindService`和`StopFindService`接口
 对于服务中的event提供`Send`接口或者是`SetReceiveHandler`接口（在回调中可以调用`GetNewSamples`来取数据）
 对于method则是提供method回调，或者是`operator()`接口
 
@@ -97,6 +103,15 @@ AUTOSAR把通信抽象成服务，对于每一个服务提供OfferService & Stop
 * 服务代理： 从想要使用可能是远程服务的服务消费者的角度来看，该代码是在代码级别上代表该服务的门面。
 在代码层面上。在面向对象的语言绑定中，这通常是一个生成类的实例，为服务提供的所有功能提供方法。因此，服务消费方的应用程序代码会与本地门面进行交互，而本地门面则知道如何将这些调用传播到远程服务实现并返回。
 * 服务骨架： 从服务实现（根据服务定义提供功能）的角度来看，这段代码就是服务骨架、它允许将服务实现 “连接到通信管理传输层”，这样分布式服务消费者就能联系到服务实现。
+
+#### 缓存设计
+只有接收端有缓存的设计
+数据经历了几层拷贝？
+接收到数据buffer时，存储到`invisible_cache_`（实际上存储的都是`shared_ptr`）
+老版本VECTOR实现中：
+    用户主动调`Update()`时，把`invisible_cache_`的buffer数据进行`反序列化`，移到visible_cache_里，用户注册的回调可以决定对指向数据的指针做什么操作（是否延长生命周期）
+
+
 
 
 
@@ -196,6 +211,7 @@ enum class MethodCallProcessingMode
 # powerap
 ## com
 ### 关键词
+继承接口类进行实现 / 设计新的类
 多态、继承、模板、胶水代码
 根据模型生成中间文件（`.cpp`，`.camke`）、链接不同的库
 
@@ -593,11 +609,10 @@ shm的实现：
 
 # vsomeip
 ## boost::asio（已经封装了`epoll`）
+整个是一个异步编程的框架
 `routing_manager_impl`把所持有的`io_context`到处往外传，构造`service_discovery_impl`时直接把this指针传出去了，也就顺理成章地把`io_context`给出去了
-
-
-
-
+于是可以接收各种someip消息，再根据类型转发给相应的app了
+someipd还是和其他app使用unix domain socket来通信，其他的app是使用routing_manager_client来和someipd通信的，其中触发`application_impl：：on_message()`回调，和sd相关的逻辑都集中在`sd::service_discovery`，一个app里根据配置，持有`routing_manager_impl` / `routing_manager_client`中的一个
 
 
 
@@ -654,6 +669,7 @@ ROS2 as client
 
 
 ### 性能
+在合适的地方，针对不包含动态数据类型的数据类型，进行`memcpy`
 camera Image数据（几十M），20几Hz
 其他数据上百Hz，也能保证收发频率一致
 
@@ -1008,19 +1024,75 @@ std::vector<PayloadNode*> free_payloads_;
 ## data sharing
 Although Data-sharing delivery uses shared memory, it differs from Shared Memory Transport in that Shared Memory is a full-compliant transport. That means that with Shared Memory Transport the data being transmitted must be copied from the DataWriter history to the transport and from the transport to the DataReader. With Data-sharing these copies can be avoided.
 
-尽管数据共享传输使用共享内存，但它与共享内存传输不同 因为共享内存是完全兼容的传输。 这意味着，使用共享内存传输 必须将正在传输的数据从 DataWriter 历史记录复制到传输 以及从运输到 DataReader。 通过数据共享，可以避免这些副本。
+尽管数据共享传输使用共享内存，但它与共享内存传输不同 因为共享内存是完全兼容的传输。这意味着，使用共享内存传输 必须将正在传输的数据从 DataWriter 历史记录复制到传输 以及从运输到 DataReader。通过数据共享，可以避免这些副本。
 
 省略了writer的缓存和reader的缓存（设计了巧妙的数据结构和同步机制）
 --> 环形缓冲区
-无锁编程 / 轻量级锁
+无锁编程 / 轻量级锁 ？
+
+
 
 
 
 # ROS2
 ## 架构
-1. 操作系统层
-2. 中间层（Middleware Layer）
-3. 应用层
+从上往下：
+用户层（ROS2节点）
+rclcpp（ROS Client Library for C++）
+rcl（ROS2 client Library）（C语言实现的，可能是为了提供）通信库（和rclcpp合称为ROS2 client层，提供了对ROS话题、服务、参数、Action等接口）
+RMW层（ros2 middleware，DDS抽象层）为了使得封装DDS实现层，保持统一性（其下有rmw_fastrtps, rmw_connextdds）
+DDS实现层（封装DDS，封装大量的设置、配置操作）
+操作系统
+
+如何实现对fastdds、cyclonedds的绑定？
+猜测是通过加载相应的动态库来绑定的，在`rclcpp::init()`
+
+
+
+## 基本概念
+### Node（节点）：
+在 rclcpp 中，节点是最基本的通信单元。节点可以理解为一个执行特定任务的进程中的实例，它通过 ROS 2 中间件进行通信和交互。
+节点通过 rclcpp::Node 类来表示和管理。每个节点都有一个全局唯一的名称，以便在 ROS 2 系统中唯一标识它。
+
+### Publisher（发布者）和 Subscriber（订阅者）：
+节点通过发布者（Publisher）和订阅者（Subscriber）来实现与其它节点的通信。发布者用于向特定的主题发布消息，而订阅者用于接收来自特定主题的消息。
+`rclcpp::Publisher<T>`和`rclcpp::Subscription<T>`类分别用于创建发布者和订阅者，其中 T 是消息类型。
+
+### Service（服务）和 Client（客户端）：
+除了通过主题发布和订阅消息外，节点还可以通过服务（Service）和客户端（Client）进行请求和响应式通信。
+`rclcpp::Service<T>`和`rclcpp::Client<T>`类分别用于创建服务和客户端，其中 T 是服务请求和响应的类型。
+
+### Actions（动作）：
+在 ROS 2 中，动作提供了一种更复杂的通信模式，它允许节点执行长时间运行的目标，并提供反馈和取消功能。
+`rclcpp::ActionServer<T>`和`rclcpp::ActionClient<T>`类用于创建动作服务器和动作客户端，其中 T 是动作消息的类型。
+
+## 实现
+### topic
+`create_publisher`
+`create_subscription`
+
+### service
+`create_service`
+`create_client`
+
+
+
+
+# asio库
+Proactor架构
+epoll的实现是基于回调的，如果fd有期望的事件发生就通过回调函数将其加入epoll就绪队列中，用户针对该队列中的文件句柄发起相应操作，如read等，此时数据真正才会开始从内核buffer写入应用buffer中，整个过程是一种`非阻塞 同步IO`。
+而Boost.Asio的说明文档中明确其采用Proactor模式实现了`异步IO`，也就是说用户在发起`async_read`后，可以去进行其它操作，数据将会从`内核buffer`写入`应用buffer`，
+数据拷贝完毕会调用用户提供的`回调函数`（Proactor相比reactor特别的点在于使用回调）。
+
+而boost.asio封装了epoll，模拟出了proactor：
+    Boost.Asio在应用层上对epoll返回的就绪队列做了一层封装，实现数据拷贝，从而完成了异步IO操作
+
+Boost.Asio中最重要的一个类是io_service，io_service抽象系统I/O接口，提供异步数据传输的能力，它是应用程序和系统I/O接口的桥梁。
+Boost.Asio主要采用它实现了Proactor模式。
+io_service有一个重要的成员，io_service_impl，它在不同的系统下有不同的实现。
+在Windows下是基于IOCP的，在Linux下是基于task_io_service，这主要是通过预处理进行区分的
+
+
 
 
 
@@ -1072,7 +1144,7 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
 给每个请求编号，在method回调里执行如下逻辑：（注意配置someip_to_dds的线程池个数为多个）
 {
     去向ROS2发请求
-    从`pending_requests_`根据id来取值，没有就阻塞住（相当于阻塞map）
+    从`pending_requests_`根据id来取值，没有就阻塞住（类似于阻塞队列）
     然后再把response返回
 }
 
@@ -1083,11 +1155,17 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
 
 6. 只看文档来配置是不够的，为了研究配置参照AUTOSAR AP文档进行了开发
 
+7. 通过perf工具生成火焰图发现，c++标准库中的正则表达式效率太差，函数调用栈太深
 
+8. 为了提高效率，必须减少不必要的拷贝，把数据进行`std::move`，从而触发移动构造函数（函数传参时不要加`const`）
 
 
 
 # 看过比较精妙的代码
+`asio`库
+
+
+
 `std::allocator`内存分配器针对小内存的内存池设计
 按照长度大小分类的自由链表，这个是申请小内存块的时候所使用的，因为直接申请小内存块容易产生内存碎片
 配置和回收

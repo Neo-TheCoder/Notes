@@ -4610,7 +4610,7 @@ PS:
 而`Subscribe`时设置的`visible_cache`大小为1，则只保留1个
 然后设置一个skip值，便于for循环，跳过不需要管的、老的几个数据
 因为`invisible_sample_cache_`存储时，是新的在最后面
-`invisible_sample_cache_`中很可能是未经反序列化的数据，因此调用更底层的`GetSample`得到反序列化后的数据
+`invisible_sample_cache_`中是未经反序列化的数据，因此调用更底层的`GetSample`得到反序列化后的数据
 然后经过`filter`筛选，得到实际数据，经过筛选条件后塞入`visible_cache`(实际上是把`shared_ptr`塞进去了，塞进去可以延长生命周期)
 该函数的目的是得到一个序号
 ```cpp
@@ -5384,7 +5384,7 @@ PS: 核心是for循环遍历 `min(max_samples, invisible_sample_container.size()
   }
 ```
 
-PS: 此处的`GetNextFreeSample()`，返回一个自定义的指针出去（返回拷贝）
+PS: 此处的`GetNextFreeSample()`，返回一个自定义的指针出去（返回拷贝），用于反序列化数据的存储，后续包装在share_ptr中，由用户自行决定数据的生命周期
 ```cpp
 
   /*!
