@@ -23,6 +23,9 @@ AUTOSAR定义了超过300个AR-ELEMENT，VECTOR由自定义了一些，对AP模�
 3. 第2点是核心思想是：依赖抽象/接口，而不是细节/具体实现
     用户层直接只管调用`socal`层的接口就完事了，底层binding实现要考虑的事情就多了
 
+### 注意到的实现细节
+内存预分配（`Subscribe(n)`），用户可以拿到指针，自由处理
+
 ### vector实现层
 其实也是代理模式，谁代理谁？
 --> 用户层的Skeleton对象，被`用户层的SkeletonBinding类`所代理
@@ -61,7 +64,7 @@ src-gen中包含关键binding类，如果是Skeleton端，就是`SkeletonBinding
 
 
 ## per
-KVS，或者FS，Open的时候都是查找``<instance_specifier, 单例的实例>`
+KVS，或者FS，Open的时候都是查找`<instance_specifier, 单例的实例>`
 
 
 
@@ -1044,9 +1047,10 @@ RMW层（ros2 middleware，DDS抽象层）为了使得封装DDS实现层，保�
 DDS实现层（封装DDS，封装大量的设置、配置操作）
 操作系统
 
-如何实现对fastdds、cyclonedds的绑定？
+**如何实现对fastdds、cyclonedds的绑定？**
 猜测是通过加载相应的动态库来绑定的，在`rclcpp::init()`
-
+加载的动态库是整个`RMW_IMPLEMENTATION`（细节一些的话，是通过宏定义来生成函数接口的）
+因此相比AUTOSAR AP，是直接的封装，而不是代理模式，因为可以直接通过动态库选择具体的绑定
 
 
 ## 基本概念
