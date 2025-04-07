@@ -23,9 +23,6 @@ AUTOSAR定义了超过300个AR-ELEMENT，VECTOR由自定义了一些，对AP模�
 3. 第2点是核心思想是：依赖抽象/接口，而不是细节/具体实现
     用户层直接只管调用`socal`层的接口就完事了，底层binding实现要考虑的事情就多了
 
-### 注意到的实现细节
-内存预分配（`Subscribe(n)`），用户可以拿到指针，自由处理
-
 ### vector实现层
 其实也是代理模式，谁代理谁？
 --> 用户层的Skeleton对象，被`用户层的SkeletonBinding类`所代理
@@ -64,7 +61,7 @@ src-gen中包含关键binding类，如果是Skeleton端，就是`SkeletonBinding
 
 
 ## per
-KVS，或者FS，Open的时候都是查找`<instance_specifier, 单例的实例>`
+KVS，或者FS，Open的时候都是查找``<instance_specifier, 单例的实例>`
 
 
 
@@ -613,9 +610,10 @@ shm的实现：
 # vsomeip
 ## boost::asio（已经封装了`epoll`）
 整个是一个异步编程的框架
+每个app必有一个`application_impl`，根据是否负责route，基类指针指向不同的对象，并且会创建专门的dispatch线程来处理任务
 `routing_manager_impl`把所持有的`io_context`到处往外传，构造`service_discovery_impl`时直接把this指针传出去了，也就顺理成章地把`io_context`给出去了
 于是可以接收各种someip消息，再根据类型转发给相应的app了
-someipd还是和其他app使用unix domain socket来通信，其他的app是使用routing_manager_client来和someipd通信的，其中触发`application_impl：：on_message()`回调，和sd相关的逻辑都集中在`sd::service_discovery`，一个app里根据配置，持有`routing_manager_impl` / `routing_manager_client`中的一个
+someipd还是和其他app使用`unix domain socket`来通信，其他的app是使用`routing_manager_client`的接口来和someipd通信的，其中触发`application_impl：：on_message()`回调，和sd相关的逻辑都集中在`sd::service_discovery`，一个app里根据配置，持有`routing_manager_impl` / `routing_manager_client`中的一个
 
 
 
@@ -672,7 +670,8 @@ ROS2 as client
 
 
 ### 性能
-在合适的地方，针对不包含动态数据类型的数据类型，进行`memcpy`
+在合适的地方，针对不包含动态数据类型的数据类型，进行`memcpy`，避免不必要的赋值
+尽量触发移动构造，而不是拷贝构造
 camera Image数据（几十M），20几Hz
 其他数据上百Hz，也能保证收发频率一致
 
@@ -1047,10 +1046,10 @@ RMW层（ros2 middleware，DDS抽象层）为了使得封装DDS实现层，保�
 DDS实现层（封装DDS，封装大量的设置、配置操作）
 操作系统
 
-**如何实现对fastdds、cyclonedds的绑定？**
+如何实现对fastdds、cyclonedds的绑定？
 猜测是通过加载相应的动态库来绑定的，在`rclcpp::init()`
-加载的动态库是整个`RMW_IMPLEMENTATION`（细节一些的话，是通过宏定义来生成函数接口的）
-因此相比AUTOSAR AP，是直接的封装，而不是代理模式，因为可以直接通过动态库选择具体的绑定
+
+是否是执行器设计模式？
 
 
 ## 基本概念
@@ -1079,22 +1078,6 @@ DDS实现层（封装DDS，封装大量的设置、配置操作）
 `create_service`
 `create_client`
 
-
-
-
-# asio库
-Proactor架构
-epoll的实现是基于回调的，如果fd有期望的事件发生就通过回调函数将其加入epoll就绪队列中，用户针对该队列中的文件句柄发起相应操作，如read等，此时数据真正才会开始从内核buffer写入应用buffer中，整个过程是一种`非阻塞 同步IO`。
-而Boost.Asio的说明文档中明确其采用Proactor模式实现了`异步IO`，也就是说用户在发起`async_read`后，可以去进行其它操作，数据将会从`内核buffer`写入`应用buffer`，
-数据拷贝完毕会调用用户提供的`回调函数`（Proactor相比reactor特别的点在于使用回调）。
-
-而boost.asio封装了epoll，模拟出了proactor：
-    Boost.Asio在应用层上对epoll返回的就绪队列做了一层封装，实现数据拷贝，从而完成了异步IO操作
-
-Boost.Asio中最重要的一个类是io_service，io_service抽象系统I/O接口，提供异步数据传输的能力，它是应用程序和系统I/O接口的桥梁。
-Boost.Asio主要采用它实现了Proactor模式。
-io_service有一个重要的成员，io_service_impl，它在不同的系统下有不同的实现。
-在Windows下是基于IOCP的，在Linux下是基于task_io_service，这主要是通过预处理进行区分的
 
 
 
@@ -1166,7 +1149,27 @@ someip_to_dds本地需要维护一个`pending_requests_`的map
 
 
 # 看过比较精妙的代码
-`asio`库
+
+
+
+## asio库
+Proactor架构
+epoll的实现是基于回调的，如果fd有期望的事件发生就通过回调函数将其加入epoll就绪队列中，用户针对该队列中的文件句柄发起相应操作，如read等，此时数据真正才会开始从内核buffer写入应用buffer中，整个过程是一种`非阻塞 同步IO`。
+而Boost.Asio的说明文档中明确其采用Proactor模式实现了`异步IO`，也就是说用户在发起`async_read`后，可以去进行其它操作，数据将会从`内核buffer`写入`应用buffer`，
+数据拷贝完毕会调用用户提供的`回调函数`（Proactor相比reactor特别的点在于使用回调）。
+
+而boost.asio封装了epoll，模拟出了proactor：
+    Boost.Asio在应用层上对epoll返回的就绪队列做了一层封装，实现数据拷贝，从而完成了异步IO操作
+
+Boost.Asio中最重要的一个类是io_service，io_service抽象系统I/O接口，提供异步数据传输的能力，它是应用程序和系统I/O接口的桥梁。
+Boost.Asio主要采用它实现了Proactor模式。
+io_service有一个重要的成员，io_service_impl，它在不同的系统下有不同的实现。
+在Windows下是基于IOCP的，在Linux下是基于task_io_service，这主要是通过预处理进行区分的
+
+`boost::asio::io_service::work`是干什么用的？
+work 对象阻止 io_service 认为“工作已完成”，从而避免 io_service::run() 方法返回。这对于需要让 io_service 一直运行等待未来可能到来的任务的情况非常有用，例如，在服务器应用中等待客户端连接或消息到达时。当work对象析构后，io_service的run()返回。
+1.66版本之后，被弃用。
+
 
 
 
@@ -1178,10 +1181,6 @@ vector代码
 大量的封装、针对不同平台的封装，从而实现兼容
 大量的类设计，单一职责
 实现了整体的重构，包括`ara::core`
-
-
-
-
 
 
 

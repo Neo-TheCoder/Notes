@@ -2660,9 +2660,10 @@ void Widget::process()
     processedWidgets.emplace_back(this);    //然后将它加到已处理过的Widget的列表中，这是错的！
 }
 ```
-注释已经说了这是错的——或者至少大部分是错的。
-（错误的部分是`传递this`，而不是使用了emplace_back。如果你不熟悉emplace_back，参见Item42）。上面的代码可以通过编译，但是向std::shared_ptr的容器传递一个`原始指针（this）`，std::shared_ptr会由此为指向的Widget（*this）创建一个`控制块`。
-！！！那看起来没什么问题，直到你意识到如果成员函数外面早已存在指向那个Widget对象的指针，它是未定义行为的Game, Set, and Match（译注：一部关于网球的电影，但是译者没看过。句子本意“压倒性胜利；比赛结束”）。
+注释已经说了这是错的————或者至少大部分是错的。
+（错误的部分是`传递this`，而不是使用了emplace_back。如果你不熟悉emplace_back，参见Item42）。
+上面的代码可以通过编译，但是向std::shared_ptr的容器传递一个`原始指针（this）`（导致引用计数块的重复创建），`std::shared_ptr`会由此为指向的Widget（*this）创建一个`控制块`。
+！！！那看起来没什么问题，直到你意识到如果成员函数外面早已存在指向那个Widget对象的指针，它是未定义行为。
 
 `std::shared_ptr` API已有处理这种情况的设施。
 它的名字可能是C++标准库中最奇怪的一个：`std::enable_shared_from_this`，是一个模板类。

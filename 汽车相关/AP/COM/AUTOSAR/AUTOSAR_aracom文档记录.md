@@ -37,7 +37,7 @@ So in the final ara::com API specification, the reader will find concepts (which
 * 代理（或存根）/骨架方法（CORBA、Ice、CommonAPI、Java RMI...）
 * 独立于协议的 API（CommonAPI、Java RMI）
 * 具有 “可配置接收端缓存 ”的队列通信（DDS、DADDY、经典平台）
-* 零拷贝 API，可将 “内存管理 ”转移给中间件（DADDY）
+* 零拷贝 API，可将 “内存管理” 转移给中间件（DADDY）
 * 数据接收过滤（DDS、DADDY）
 
 Now that we have established the introduction of a new middleware API, we go into the details of the API in the following chapters.
@@ -73,7 +73,7 @@ This allows for support of `strictly real-time scheduled applications`, where th
 The decision within AUTOSAR to genuinely support C++11/C++14 for AP was a very good fit for the ara::com API design.
 For enhanced usability, comfort and a breeze of elegance ara::com API exploits C++ features like smart pointers, template functions and classes, proven concepts for asynchronous operations and reasonable operator overloading.
 这样就可以支持 “严格的实时计划应用程序”，在这种情况下，应用程序需要完全控制何时完成哪些工作（数量），而且不必要的上下文切换是最关键的。
-**另一方面，AUTOSAR 也完全支持较为宽松的基于事件的应用程序，这些应用程序只希望在通信层有数据可用时获得通知。
+另一方面，AUTOSAR 也完全支持较为宽松的基于事件的应用程序，这些应用程序只希望在通信层有数据可用时获得通知。
 AUTOSAR 决定真正支持 C++11/C++14 AP，这与 ara::com API 的设计非常契合。
 为了提高可用性、舒适性和优雅性，ara::com API 利用了 C++ 的各种特性，如智能指针、模板函数和类、异步操作的成熟概念以及合理的操作符重载。
 
@@ -1645,7 +1645,7 @@ If the connection is still open, it will be shut down before destroying the RawD
 
 序列化（见 [7]）是将`某些数据结构`转换为`标准格式`，以便在发送方与接收方（可能是不同的接收方）之间交换的过程。
 从一个网络节点向另一个网络节点传输数据时，通常会有这种概念。
-当把数据放在网线上并读取回来时，你必须遵循准确的、约定俗成的规则，才能在接收方正确解释数据。对于网络
+当把数据放在网线上并读取回来时，你必须遵循准确的、约定俗成的规则，才能在接收方正确解释数据。
 对于网络通信用例来说，显然需要一种确定的方法来将进程中的数据表示转换成线格式，然后再转换回来。
 通信的盒子可能基于不同的微控制器，具有不同的内码和不同的数据字大小（16 位、32 位、64 位），因此采用完全不同的排列方式。
 在 AUTOSAR CP 中，序列化通常不用于`平台内部/节点内部`通信！
@@ -1659,7 +1659,7 @@ If the connection is still open, it will be shut down before destroying the RawD
 ## 9.2 Service Discovery Implementation Strategies
 如前几章所述，ara::com 希望由产品供应商实现服务发现的功能。
 由于服务发现功能基本上是在 API 层面上定义的（参见第 6.4 节），其方法包括`FindService, OfferService and StopOfferService`（见第 6.4 节），因此协议和实施细节部分是开放的。
-当 AP 节点（更具体地说是`AP SWC`）通过网络`offer`一个service 或`require`另一个网络节点提供服务时， `service discovery/service registry`显然是通过线路进行的。
+当 AP 节点（更具体地说是`AP SWC`）通过网络`offer`一个service 或`require`另一个网络节点提供服务时，`service discovery/service registry`显然是通过线路进行的。
 所使用的通信协议必须完全规定通过网络发现服务的协议。
 对于 SOME/IP，SOME/IP 服务发现协议规范[9]对此进行了规定。
 但是，如果一个 ara::com 应用程序想与同一厂商 AP 中同一节点上的另一个 ara::com 应用程序通信，就必须有一个可用的本地服务发现变体。
