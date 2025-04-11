@@ -80,17 +80,30 @@ KVS，或者FS，Open的时候都是查找``<instance_specifier, 单例的实例
 ## com
 提供了标准化的API
 本身就是对底层所使用的通信中间件的封装，就比如ROS2中通过环境变量来配置使用哪个中间件
-AUTOSAR把通信抽象成服务，对于每一个服务提供`OfferService` & `StopOfferService`，`StartFindService`和`StopFindService`接口
+AUTOSAR把通信抽象成服务，对于每一个服务，
+对于服务提供端：提供`OfferService` & `StopOfferService`，
+对于服务获取端：`StartFindService`和`StopFindService`
 对于服务中的event提供`Send`接口或者是`SetReceiveHandler`接口（在回调中可以调用`GetNewSamples`来取数据）
 对于method则是提供method回调，或者是`operator()`接口
+AUTOSAR AP考虑到不同的平台的需求，设计了三种模式：
+轮询模式（适用于手动控制何时处理下一个请求的情况，适用于实时性要求高的场景）、事件触发模式（并发处理）、单线程模式（按顺序处理，潜台词是允许method回调不可并发执行，尽管proxy method并发地调用，避免了skeleton端method回调对于同步机制的要求）
+`kPoll`, `kEvent`, `kEventSingleThread`
+
+供应商所要做的就是：
+实现以上的接口，并且实现底层中间件
+实现接口时要注意：
+1. 多重绑定，以及相关的instance specifier --> identifier
+2. 代理模式
+
+
 
 ### 关键字
 #### 为什么有这么多中间件，还要重新开发一套AUTOSAR专用通信管理？
 需要一个`不受具体网络通信协议约束`的“通信管理”。
-它必须支持`OME/IP 协议`，但必须具有改变协议的灵活性。
+它必须支持`SOME/IP 协议`，但必须具有改变协议的灵活性。
 **应用程序接口应支持`事件驱动`和`轮询`模式，以同样好地访问通信数据。**
 **`实时应用程序`通常需要后一种模式，以避免不必要的上下文切换，而前一种模式对于没有实时要求的应用程序来说要方便得多。**
-可实现端到端保护的无缝集成，以满足`ASIL`要求。
+可实现`端到端保护`的无缝集成，以满足`ASIL`要求。
 支持静态（预配置）和动态（运行时）选择服务实例进行通信。
 
 #### 所需的机制，集各家所长
@@ -230,6 +243,7 @@ SM是接收可能对内部状态管理产生影响的任何操作事件的中心
 环境变量、执行依赖、绑核、进入时间、退出时间、**用户id、组id**（可以设置成进程的权限为可执行文件的权限）
 
 ## platform health managment
+PHM
 把故障报给fault manager，FM再报给SM让SM来重启功能组
 
 
@@ -242,7 +256,7 @@ SM是接收可能对内部状态管理产生影响的任何操作事件的中心
 根据模型生成中间文件（`.cpp`，`.camke`）、链接不同的库
 
 主要使用到的设计模式：
-**代理模式**，**单例模式**，
+**代理模式**，**单例模式**，**观察者模式**，**工厂模式**
 
 对于dds binding而言
     arxml提取数据类型信息生成idl文件，调用fastddsgen
@@ -1151,6 +1165,8 @@ DDS实现层（封装DDS，封装大量的设置、配置操作）
 ROS2发请求，网关程序收到，要立马调用AP的method方法，转发请求给提供method服务的app，得到并存储`future`，塞进队列，
 有个线程专门取队列元素，
 需要轮询每个future是否可取得值，取得值则发回给ROS2端
+需要注意填写`WriteParams`，以及数据`sequence_number`
+
 **ROS2 as server**
 someip_to_dds本地需要维护一个`pending_requests_`的map
 当APP发送请求给网关程序时，转发请求给ROS2端，注意塞数据时ROS2端要有效（ROS2端是使用2个fastdds的topic来实现的），
@@ -1193,7 +1209,7 @@ io_service有一个重要的成员，io_service_impl，它在不同的系统下�
 在Windows下是基于IOCP的，在Linux下是基于task_io_service，这主要是通过预处理进行区分的
 
 `boost::asio::io_service::work`是干什么用的？
-work 对象阻止 io_service 认为“工作已完成”，从而避免 io_service::run() 方法返回。这对于需要让 io_service 一直运行等待未来可能到来的任务的情况非常有用，例如，在服务器应用中等待客户端连接或消息到达时。当work对象析构后，io_service的run()返回。
+work 对象阻止 io_service 认为“工作已完成”，从而避免`io_service::run()`方法返回。这对于需要让 io_service 一直运行等待未来可能到来的任务的情况非常有用，例如，在服务器应用中等待客户端连接或消息到达时。当work对象析构后，io_service的run()返回。
 1.66版本之后，被弃用。
 
 
