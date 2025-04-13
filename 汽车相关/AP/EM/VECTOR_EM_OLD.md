@@ -95,7 +95,7 @@ int Startup(int argc, char const* const argv[]) {
                 PS：`SIGCHLD信号`是在一个`子进程终止或停止时`发送给其`父进程`的信号。
                 `父进程`可以通过`捕获SIGCHLD信号`来等待`子进程的终止状态`，以便进行适当的处理，比如`回收子进程的资源`、`获取子进程的退出状态`等。
         `sigprocmask(SIG_BLOCK, &mask, nullptr)`
-            把信号集中的信号 放到信号队列中等待处理
+            把信号集中的信号进行阻塞
 
     解析命令行参数
 

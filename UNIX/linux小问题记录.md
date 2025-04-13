@@ -1384,10 +1384,55 @@ make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- <your_device_tree>.dtb
 将上述所有组件部署到开发板上，可以通过SD卡启动，或者使用fastboot刷入设备。
 
 
+# 处理信号是否要创建线程？
+1. `signal()`
+不需要
+```cpp
+signal(SIGCHLD, sigchld_handler); // 注册信号处理器
+```
 
+2. `sigwait()`
+需要
+允许线程进行等待
+```cpp
+    if (0 != sigwait(&signal_set, &sig)) {
+    // ...
+    }
+```
 
+# SIGCHLD
+当子进程的运行时状态发生改变时，内核会向父进程发送 `SIGCHLD` 信号，通知父进程：
+* 子进程终止（正常退出或被信号杀死）。
+* 子进程被停止（如收到 SIGSTOP、SIGTSTP）。
+* 子进程恢复执行（如收到 SIGCONT）。
+父进程可以通过处理该信号来`回收子进程资源`（如避免僵尸进程），或`跟踪子进程状态`。或者父进程可以通过`signal`设置内核立即回收子进程。
 
+典型场景
+1. 避免僵尸进程
+子进程终止后，会保留**退出状态（Exit Status）**直到父进程读取。
+如果父进程不处理`SIGCHLD`，子进程会变成僵尸进程（占用系统资源）。
+解决方案：父进程捕获`SIGCHLD`并`调用wait()`或`waitpid()`回收子进程。
 
+```cpp
+void sigchld_handler(int sig) {
+    int status;
+    pid_t pid;
+    // 回收所有终止的子进程
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {   // 循环回收每一个子进程
+        printf("Child %d exited with status %d\n", pid, WEXITSTATUS(status));
+    }
+}
 
+int main() {
+    signal(SIGCHLD, sigchld_handler); // 注册信号处理器
+    // ...
+    // fork();
+}
+```
+
+2. 父进程可以通过 SIGCHLD 跟踪子进程的停止/恢复状态（如 shell 管理后台作业）。
+
+Shell进程管理，Shell就是通过SIGCHLD信号得知子进程（ls, grep）何时结束。
+守护进程，肯定要捕获SIGCHLD，记录子进程的退出状态。
 
 
