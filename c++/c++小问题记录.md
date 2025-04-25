@@ -2543,6 +2543,7 @@ int main() {
 # `PendingRequestMap`
 为什么要继承`enable_shared_from_this`？
   因为需要把this指针传递出去，如果传递裸的this指针，会导致`引用计数块的重复创建`
+  因为继承了基类，所以使用时调用继承来的函数：`shared_from_this()`，这个函数是基类实现，通过this指针访问到派生类。
 
 为什么这里在`Store`、构造lambda时，也要使用`基类指针`：`std::weak_ptr<PendingRequestMapInterface<Output>>`？
   可能为了不影响所指向对象的生命周期？？？

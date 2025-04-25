@@ -4003,7 +4003,7 @@ void operator()() override { event_.NotifySubscriptionStateUpdateSync(); }
     // 计算 head_size, payload size
     // 分配相应长度的内存
     // 实例化一个序列化Writer
-    // 转发{ instance_id, 序列化后的paclet } 给AraComSomeIpBindingServerManager对象
+    // 转发{ instance_id, 序列化后的packet } 给AraComSomeIpBindingServerManager对象
   }
 ```
 注意，其中的调用涉及到非局部变量资源了！（所以同一个实例的Send()必然无法被多线程正常调用）
