@@ -1435,4 +1435,40 @@ int main() {
 Shell进程管理，Shell就是通过SIGCHLD信号得知子进程（ls, grep）何时结束。
 守护进程，肯定要捕获SIGCHLD，记录子进程的退出状态。
 
+# Linux内核整体架构
+## Linux内核
+对`底层`，管理系统的所有硬件设备
+对`上层`，通过系统调用，向Library Routine或者其他应用程序提供接口。
+内核上面就是C库之类的库，
+内核下面就是BSP
+
+Linux内核有几个子系统：
+1. 进程调度
+2. 内存管理
+3. 文件系统
+4. 网络系统（网络协议栈）
+5. 设备驱动
+6. 系统调用
+
+
+
+# what is GNU？
+`GNU's Not Unix! `
+是一个操作系统项目/计划，旨在做一个和闭源的UNIX很像的操作系统，相关人员开发了gcc，glibc，但是缺少操作系统内核，后来linus开发出了linux内核，合在一起打包发布叫 `GNU / Linux`。
+
+## glibc
+`glibc`是`GNU`发布的libc库，即c运行库。
+`glibc`是linux系统中最底层的api，几乎其它任何运行库都会依赖于glibc。（位于依赖树的最底层）
+`glibc`除了封装linux操作系统所提供的系统服务外，它本身也提供了许多其它一些必要功能服务的实现。
+
+## libc
+libc 是 Linux 下的 ANSI C（C语言标准，侧重标准性）函数库；glibc 是 Linux 下的 GUN C（非标，并且扩展了）函数库。 
+
+
+# `shutdown`
+```sh
+shutdown [选项] [时间] [警告]
+```
+相比 `halt` 和 `poweroff`，shutdown 更加安全，因为它会优雅地终止进程，同步磁盘数据，确保系统安全关闭。
+
 
