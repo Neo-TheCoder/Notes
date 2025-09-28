@@ -3189,6 +3189,33 @@ io_.run();  // 阻塞，处理已发布的异步任务
 
 ```
 
+# std::vector的reserve, resize
+## reserve
+预分配内存（确保capacity至少为n）
+比如可以先分配一大块，避免内存扩容、数据复制
+针对`capacity`，绝对不影响`size`
+
+## resize
+针对`size`，但也可能影响到`capacity`
+当n > capacity，则会导致扩容
+
+
+
+# future的`then()`如何实现？
+它注册一个回调
+效果是当结果可用时，触发回调
+实现其实很简单，因为当结果可用，必然意味着对关联的promise进行了`set_value`，set完了就执行回调
+执行`set_value`的线程恐怕一般在线程池的线程里
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1472,3 +1472,36 @@ shutdown [选项] [时间] [警告]
 相比 `halt` 和 `poweroff`，shutdown 更加安全，因为它会优雅地终止进程，同步磁盘数据，确保系统安全关闭。
 
 
+
+# `mmap`
+```c
+void* mmap(void* start, size_t length, int prot, int flags, int fd, off_t offset);
+```
+将`文件或其他对象`映射到`进程的内存地址空间`，使得进程能像访问内存那样直接操作文件，避免频繁地`read()`，`write()`
+映射需要以内存页为单位进行对齐，若文件大小不足页大小的整数倍，最后一个页未被使用的部分将被自动清零
+映射区域可被`多个进程共享`或设置为私有副本
+
+```c
+ipc_os_priv.id[instance].local_shm_map = mmap(
+    NULL,                                    // addr                        让OS选择虚拟地址空间的映射位置
+    ipc_os_priv.id[instance].local_shm_offset + cfg->shm_size, // length    // local_shm_offset + shm_size
+    PROT_READ | PROT_WRITE,                  // prot
+    MAP_SHARED,                              // flags
+    ipc_os_priv.dev_mem_fd,                  // fd
+    page_phys_addr                           // offset
+);
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
