@@ -739,47 +739,956 @@ brk ->
 如果进程在`内核态`执行时，需要等待系统的某个资源，该进程会调用`sleep_on()`/`interruptible_sleep_on()`自愿放弃CPU使用权，让调度程序去执行其他的进程，进程进入上述睡眠状态（两种都有）
 只有当进程从`内核运行态`转换到`睡眠状态`，内核才进行`进程切换操作`
 在内核态下进程的进程不能被其他进程抢占，而且一个进程无法改变另一个进程的状态
-内核在`执行临界区代码`时，会`禁止一切中断`，为了避免进程切换时，造成内核数据错误
+内核在`执行临界区代码`时，会`禁止一切中断`，为了避免进程切换时，造成内核数据错误（如果操作到一半，就被切换走了，那这个操作的结果显然是未完成的，而不是完成/未完成两种状态中的一种）
 
 ### 5.7.3 进程初始化
+boot/目录中，引导程序把内核从磁盘上加载到内存，让系统进入`保护模式`运行后，开始执行系统初始化程序`init/main.c`：
+该程序的任务：
+1. 确定如何分配使用系统物理内存
+2. 调用内核各部分的初始化函数 分别对：内存管理、中断处理、块设备、字符设备、进程管理、硬盘和软盘硬件进行初始化处理
 
+然后该程序把自己“手工”（此时系统里还没有进程的概念）移动到进程0中运行（`move_to_user_mode, include/asm/system.h`，把程序执行流从内核态移动到用户态的任务0中继续运行，核心思想是`中断返回指令来实现特权级的改变，基于CPU保护机制`），调`fork()`，首次创建出进程1
+在`进程1`，程序继续进行`应用环境的初始化`并执行`shell登录程序`
+进程0，会在系统空闲时被调度，只执行`pause()`系统调用（休眠当前进程，成为空闲进程），其中又会去执行调度函数（放弃CPU，让调度器选择其他进程执行）
+
+move_to_user_mode对中断返回指令的利用：在栈上伪造一个“中断发生时保存的现场”，然后执行 iret，让 CPU “以为”自己是从一个系统调用或中断中返回到用户态。
+
+### 5.7.4 创建新进程
+`fork()`，所有进程都是0进程的子进程
+创建流程：
+1. 从任务数组（64个元素）中找一个空slot
+2. 在主内存区，申请一页内存，存放任务数据结构信息，并复制当前进程任务数据结构到新任务数据结构，新进程是`TASK_UN INTERRUPTIBLE`（因为还没准备好）
+3. 对复制来的任务数据结构进行修改，把当前进程设置为新进程的`父进程`，清楚信号位图，设置初始时间片为15个系统滴答（150ms），设置TSS寄存器
+    各种设置：设置新任务的代码段和数据段基址，**新进程没有实际的物理页面，共享父进程的内存页面，当父进程或者新进程任意一个，有写操作时，才为执行写操作的进程分配相关的独自使用的内存页面（包含代码段、数据段、堆栈区、内存映射区域等），即Copy-On-Write技术**
+当`execve()`调用前，子进程完全复制父进程的代码和数据区，调用后，子进程原来的代码和数据区被清理，开始运行后，由于缺页中断，从块设备上加载相应的代码页面，CPU重新执行引起异常的指令。
+
+### 5.7.5 进程调度
+主要逻辑：为所有运行态的进程分配CPU运行时间
+LINUX进程是可抢占的，被抢占的进程仍然处于`TASK_RUNNING`，也就是就绪态，抢占是在进程处于用户态，进程处于内核态是不可抢占的
+为了让进程高效地使用系统资源，又让进程有较快的响应时间，需要合理的进程切换调度策略（linux 0.11采用了基于优先级排队的调度策略）
+
+#### 调度程序
+1. 先扫描任务数组，比较就绪态任务的`运行事件递减滴答计数值`，其值大的，说明运行不长，就使用`任务切换宏`，切换该进程执行
+2. 如果所有`TASK_RUNNING`（就绪态，等待调度）状态进程的时间片都用完，系统根据每个进程的优先权值prority，对系统中所有进程（包括睡眠中的进程），重新计算每个任务需要运行的时间片值counter。
+`counter = counter/2 + priority`
+对于正在睡眠（因为等待I/O，信号量而进入睡眠，还保留一些时间片）的进程，被唤醒时就有较高的时间片counter值。
+（假如有个CPU密集型任务，就不会占着CPU不撒手）
+`schedule()`继续扫描`TASK_RUNNING`状态的进程，并重复上述过程，直到选择出一个进程
+如果实在没有进程可运行，系统选择进程0运行：调`pause()`把自己设置为`可中断睡眠状态`，再次调`schedule()`
+进程0即便是睡眠状态，只要没有其他进程，`schedule()`依然会选择它
+（CPU必须执行一些代码？？？保证CPU必然是正在执行某进程，这样可以执行中断并从中断返回，并且维持内核的CPU控制权，进程0的业务是让CPU进入等待，这段时间内核可以唤醒其他进程，并且还可以保证调度器总有进程可以选择）
+
+#### 进程切换
+每当`schedule()`选择出一个进程可运行时，调`switch_to()`宏执行实际切换操作
+（上下文切换）该宏把CPU的当前进程状态替换成新进程的状态：
+* 设置`内核全局变量current（指向当前CPU运行的进程的task_struct，内核的其他部分如中断处理、系统调用必须知道当前是谁在运行）`为新任务的指针
+* 长跳转到新任务的任务状态段TSS（Task State Segment）组成的地址，造成CPU 执行 任务切换操作（可能是X86的硬件任务切换机制，通过这条机器指令，TR寄存器就会更新，CPU自动到新任务的代码开始执行（当然是在保存旧进程的上下文之后））
+* CPU把当前任务所有寄存器的状态保存到当前任务寄存器TR中TSS段选择符所指向的`当前进程任务数据结构tss结构中`（把旧进程的状态保存在tss结构中
+），然后把段选择符所指向的新任务数据结构中的tss结构中的寄存器信息恢复到CPU中（把新进程的数据恢复到CPU寄存器中），系统就正式开始运行新切换的任务了
+（CPU的TR(task register)寄存器指向当前正在运行的任务的TSS）
+
+### 5.7.6 终止进程
+进程终止时，内核必须释放该进程占用的系统资源（如：打开的文件、申请的内存）
+用户程序`exit()`系统调用：
+执行内核函数`do_exit()`：
+1. 释放代码段和数据段的页面
+2. 关闭所有打开文件
+3. 对进程使用的当前工作目录，根目录，运行程序的i节点进行同步操作。
+    如果进程有子进程，则让init进程作为其所有子进程的父进程。
+
+如果进程是一个`会话头进程`（会话，对应一次用户登录，是一个或多个进程组的集合，会话头进程就是创建会话的进程，每个会话最多一个控制终端）并且有`控制终端`，则释放控制终端（比如用户退出登录shell），并向属于该会话的所有进程（从该shell派生出来的）发送挂断信号`SIGHUP`,这通常会终止该会话中的所有进程。
+然后把进程状态置为`僵死状态TASK_ZOMBIE`（因为这个状态正表示退出了但没完全退出，因为还保留了task_struct的信息）。并向其原父进程发送`SIGCHILD`信号，通知其某个子进程已经终止。（涉及到作业控制）
+最后`do_exit()`调用`调度函数`去执行其他进程。
+
+由此可见在进程终止时，它的`task_struct`任务数据结构仍然保留着。因为其父进程还需要使用其中的信息。
+在子进程在执行期间，父进程通常使用`wait()`或`waitpid()`函数（等待子进程的`SIGCHILD信号`）等待其某个子进程终止（子进程才真正退出）。
+当子进程被终止并处于僵死状态时，父进程就会把子进程运行所使用的时间累加到自己进程中(因为父进程是子进程的创建者和资源申请者)。最终释放已终止子进程任务数据结构所占用的内存页面，并置空子进程在任务数组中占用的指针项。
+
+（一个 make 编译大型项目（启动数百个 gcc 子进程），其中，make 自身只花 0.1s，但系统实际消耗了 10 分钟 CPU 时间）
 
 
 ## 5.8 Linux系统中堆栈的使用方法
-
+四种堆栈
 
 ## 5.9 Linux 0.11采用的文件系统
-
+内核代码的正常运行必须依赖文件系统
+`根文件系统`负责向内核提供最基本信息和支持
+Linux系统引导启动时，默认使用的文件系统是根文件系统，包括：操作系统`最基本的配置文件`和`命令执行程序`
+`UNIX类文件系统`主要包括：规定的目录、配置文件、设备驱动程序、开发程序以及用户数据、文本文件
+一般有如下子目录和文件：
+```sh
+etc/        # 系统配置文件
+dev/        # 设备文件，以供通过文件操作语句操作设备
+bin/        # 系统执行程序：sh, mkfs, fdisk
+usr/        # 库函数、手册等
+usr/bin     # 用户常用的普通命令
+var/        # 系统运行时可变的数据或者日志
+```
+`存放文件系统的 设备`就是`文件系统设备`
+比如WIN的C盘就是文件系统设备，硬盘上`按照一定规则存放的文件`组成`文件系统`
+WIN2000有`NTFS` / `FAT32`文件系统
+linux 0.11内核支持的文件系统是`MINX 1.0文件系统`，当前的linux系统使用最广泛的是`ex2/ex3`
 
 ## 5.10 Linux内核源代码的目录结构
+`linux内核`是`单内核`的（宏内核，区别于微内核。所有核心组件都在 内核地址空间 运行，组件之间通过函数调用而非消息传递）
+内核中的程序都有紧密联系，依赖和调用关系密切
+```sh
+├─boot          # 系统引导程序  汇编
+├─fs            # 文件系统
+├─include       # 头文件
+│  ├─asm        # 与CPU体系结构相关的部分
+│  ├─linux      # Linux内核专用部分
+│  └─sys        # 系统数据结构部分
+├─init          # 内核初始化程序
+├─kernel        # 内核进程调度、信号处理、系统调用等程序
+│  ├─blk_drv    # 块设备 驱动程序
+│  ├─chr_drv    # 字符设备 驱动程序
+│  └─math       # 数学仿真处理程序
+├─lib           # 内核库函数
+├─mm            # 内存管理程序
+└─tools         # 生成内核Image文件的工具程序
+```
 
+### 5.10.1 内核主目录linux
+目录下有个makefile。
 
+### 5.10.2 引导启动程序目录boot
+* bootsect.s, setup.s（as86编译，as86汇编语言）
+* head.s（使用GNU as编译，AT&T汇编语言）
+功能：当计算机加电时，引导内核启动，将内核代码加载到内存，以及进入32位保护运行方式前的系统初始化工作
+
+### 5.10.3 文件系统目录fs
+1.0版本的MINUX文件系统
+Linux是在MINUX系统上开发的，采用MINIX文件系统便于交叉编译，可以从MUNIX中加载Linux分区
+Linux文件系统是`多线程`的，复杂，为了避免竞态条件，linux系统严格检查资源分配，并且内核模式中（进程运行在内核态），如果任务没有主动睡眠，就不让内核切换任务
+
+分为四个部分：
+1. 高速缓冲区管理
+2. 低层文件操作
+3. 文件数据访问
+4. 文件高层函数
+
+文件系统可以看作：`内存高速缓冲区的扩展部分`，读写操作都现在高速缓冲区
+
+### 5.10.4 头文件主目录include
+简单分类：体系结构相关、Linux内核专用、系统专用数据结构
+
+### 5.10.5 内核初始化程序目录 init
+`main.c`：执行内核所有初始化，然后移到`用户模式`创建新进程，并在控制台设备上运行shell程序
+程序业务逻辑：
+1. 根据机器的内存，分配缓冲区内存容量
+2. 硬件初始化
+3. 人工创建第一个任务：task 0，并设置中断允许标志
+4. 执行核心态 -> 用户态，调`fork()`创建进程：执行`init()`：控制台环境设置，生成一个子进程用来运行`shell`
+
+### 5.10.6 内核程序主目录kernel
+fork、exit、调度程序、系统调用程序
+
+### 5.10.7 内核库函数目录lib
+内核代码不能直接使用标准C函数库，因为完整的C函数库很庞大
+lib/是专门存放内核需要的一些函数的，给`内核初始化程序init/main.c运行在用户态的进程（0, 1）`提供支持
+
+### 5.10.8 内存管理程序目录mm
+管理地址映射、页面机制
 
 ## 5.11 内核系统与应用程序的关系
+内核为用户程序提供2类支持：
+1. 系统调用接口，即中断调用`int 0x80`
+2. `开发环境库函数` `内核库函数`（仅供内核创建的任务0，任务1使用，它们最终还是调系统调用） 用于与内核进行信息交流
+所以本质上，内核对所有用户只提供`系统调用`这种统一的接口
+当然，一般用户调libc等库函数（API，比系统调用功能多，性能没这么好，但是更具检错能力），库函数再调系统调用
+类UNIX系统，普遍使用基于`POSIX`标准的API接口（具有可移植性）
 
+一般应用不允许直接调系统调用，因为可移植性不好
+Linux标准库LSB（Linux Standard Base），不允许应用直接访问系统调用宏
 
+## 5.12 linux/Makefile文件
+这节开始，提供内核源码注释
+
+最外部的makefile的功能：
+让make程序，使用tools/中的build程序（不是内核的一部分，只是用来编译程序用的），将所有内核代码（分别使用8086汇编器、GNU编译器gcc/gas） 编译成 一个可运行的`内核映像文件image`
 
 
 
 # 第6章 引导启动程序
+`boot/`
+使用两种汇编编译器：
+`bootsect.s`, `setup.s`     实模式      Intel汇编语法   Intel8086汇编器、链接器
+`head.s`                    保护模式    GNU汇编语法     GNU as(gas)
+原因是：当时的GNU编译器只能支持i386及以后的CPU代码指令，难以生成运行在实模式下的16位代码程序
+
+## 6.1 总体功能
+**Linux操作系统启动 主要执行流程**
+PC电源打开，80x86 CPU自动进入`实模式`
+从地址`0xFFFF0`自动执行程序代码（`ROM-BIOS`中的地址）
+PC机的BIOS：执行某些系统的检测，在`物理地址0`处，开始`初始化中断向量`
+将`可启动设备（硬盘）`的第一个扇区（磁盘引导扇区，512字节）读入`内存绝对地址0x7C00（即31KB）`处，并跳转到`0x7C00`
+Linux的最最前面部分 是 用8086汇编语言编写的(`boot/bootsect.s`)
+它被BIOS读入到`内存绝对地址0x7C00(31KB)`处,当它被执行时就会把自己移动到`内存绝对地址0x90000(576KB)处`,并把启动设备中后`2KB字节代码(boot/setup.s)`读入到`内存0x90200`处，而内核的其他部分(system模块，其中包含head.s程序)则被读入到从`内存地址0x10000(64KB)`开始处
+由于当时的`system模块`长度不会超过512KB，所以`bootsect`把system模块读入`物理地址0x10000开始处`，不会覆盖到`0x90000（576KB）`处开始的`bootsect`和`setup模块`。
+**后续，`setup`会把`system模块`移动到`物理内存起始位置`**。
+
+因此从机器加电开始顺序执行的程序：
+`ROM BIOS -> bootsect.s -> setup.s -> [ head.s -> main.c ]`
+
+bootsect代码为什么不直接把system模块加载到`物理内存0x0000`，而是在setup中再移动？
+--> 因为`setup`还需要利用`ROM BIOS`中的中断，来获取机器参数，当`BIOS`初始化时，在物理内存开始处放置一个大小为`1KB`的`中断向量表`，因此在（确保setup使用完BIOS的中断向量表）使用完BIOS的中断调用后才能覆盖该区域。
+
+为什么`boot/bootsect.s`先被加载到`内存绝对地址0x7C00(31KB)`，它运行时再把自己移动到`内存绝对地址0x90000(576KB)处`？
+--> 因为后续system模块会占据物理内存0的位置
+
+另外，光是加载上述内核模块，还不足以让Linux系统运行起来。还需要：**根文件系统**。它一般位于一个硬盘分区中。`bootsect.s`中会有根文件系统所在的默认块设备号，用于通知内核，所需要的根文件系统在什么地方。
+
+
+
+## 6.2 bootsect.s程序
+### 6.2.1 功能描述
+`磁盘引导块程序`，必然存储于磁盘的第一个扇区（引导扇区，0磁道，0磁头，第一个扇区）
+
+## 6.3 setup.s程序
+### 6.3.1 功能描述
+
+## 6.4 head.s程序
+
+
+# 第7章 初始化程序
+系统执行完`boot/`中的`head.s`，执行权就到了`main.c`
+包括了内核初始化的所有工作
+
+## 7.1 main.c程序
+### 7.1.1 功能描述
+`main.c`利用`setup.s`拿到的`系统参数`，设置`系统的根文件设备号`、一些`内存全局变量`。
+内存映像示意：
+`[内核程序 / 高速缓冲 / 虚拟盘 / 主内存区]`
+
+`高速缓冲区`
+还要扣除被`显存`、`ROM BIOS`占用的部分。它用于`磁盘等块设备`临时存放数据，以`1KB`为一个`数据块`。
+
+`主内存区域`
+由`内存管理模块mm`通过`分页机制`进行管理分配，以`4KB`为一个内存页单位。
+
+内核程序自由访问高速缓冲，但通过`mm`才能使用分配到的内存页面。
+
+然后内核进行所有硬件初始化工作：trap, 块设备，字符设备，tty（终端设备）。以及人工设置第一个任务`task 0`。
+
+整个内核完成初始化后，内核将执行权切换到用户模式（任务0）。CPU从`0特权级`切换到`第3特权级`，此时，main.c的主程序就工作在`任务0`中。然后系统第一次调用`fork()`，创建出一个用于运行`init()`的子进程（即`init进程`）。
+
+流程细节：
+1. main.c程序首先确定如何分配使用系统物理内存，然后调用内核各部分的初始化函数分别对`内存管理、中断处理、块设备和字符设备、进程管理以及硬盘和软盘硬件`进行初始化处理。
+在完成了这些操作之后，系统各部分已经处于可运行状态。
+此后程序把自己“手工”移动到`任务0(进程0)`中运行，并使用`fork()调用`首次创建出`进程1(init进程)`，并在其中调用`init()函数`。在该函数中程序将继续进行`应用环境的初始化`并`执行shell登录程序`。
+而原`进程0`则会在系统空闲时被调度执行，因此`进程0`通常也被称为`idle进程`。
+此时`进程0`仅执行`pause()系统调用`，并又会调用`调度函数`。
+
+2. `init函数`的功能可分为4个部分：
+* 安装根文件系统
+* 显示系统信息
+* 运行系统初始资源配置文件re中的命令
+* 执行用户登录shell程序
+
+具体来说：
+* 代码首先调用`系统调用setup()`，用来收集`硬盘设备分区表信息`并`安装根文件系统`。
+在安装根文件系统之前，系统会先判断是否需要先建立`（内存）虚拟盘`。
+若编译内核时设置了虚拟盘的大小，并在前面内核初始化过程中已经开辟了一块内存用作虚拟盘，则内核就会首先尝试把根文件系统加载到内存的虚拟盘区中。
+
+* 然后init打开一个`终端设备tty0`,并复制其`文件描述符`以产生`标准输入stdin`.`标准输出stdout`和`错误输出water`设备。内核随后利用这些描述符在终端上显示一些系统信息，例如：高速缓冲区中缓冲块总数、主内存区空闲内存总字节数等。
+
+* 接着init又新建了一个`进程2`，并在其中为建立用户交互使用环境而执行一些初始配置操作，即在用户可以使用shell命令行环境之前，内核调用`/bin/sh`程序运行了配置文件`etc/rc`中设置的命令。
+文件的作用与DOS系统根目录上的AUTOEXEC.BAT文件类似。这段代码首先通过`关闭文件描述符0`，并立刻打开文件`/etc/rc`，从而把标准输入stdin定向到`etc/rc`文件上。
+这样，所有的标准输入数据都将从该文件中读取。
+然后内核以非交互形式执行`/bin/sh`，从而实现执行`/etc/rc`文件中的命令。
+当该文件中的命令执行完毕后，`/bin/sh`就会立刻退出。因此进程2也就随之结束。
+
+* `init`函数的最后一部分：用于在新建进程中为用户建立一个新的会话，并运行用户登录shell程序，`/bin/sh`。
+在系统执行`进程2`中的程序时，父进程(init进程)一直等待着它的结束。
+随着进程2的退出，父进程就进入到一个无限循环中。
+在该循环中，父进程会再次生成一个`新进程`，然后在该进程中创建一个新的会话，并以登录shell方式再次执行程序`/bin/sh`，以创建用户交互shell环境。
+然后父进程继续等待该子进程。
+登录shell虽然与前面的非交互式shell是同一个程序`/bin/sh`，但是所使用的`命令行参数(argv[])`不同。
+登录shell第0个命令行参数的第1个字符一定是一个减号`-`。
+这个特定的标志会在`/bin/sh`执行时通知它这不是一次普通的运行，而是作为登录shell运行`/bin/sh`的。
+从这时开始，用户就可以正常使用Linux命令行环境了，而父进程随之又进入等待状态。此后若用户在命令行上执行了`exit`或`logout`命令，那么在显示一条当前登录shell退出的信息后，`系统就会在这个无限循环中，再次重复以上创建登录shell进程的过程`。
+
+任务1中运行的`init()函数`的后两部分（创建子进程，执行shell），实际上应该是`独立的 环境初始化程序 init`等的功能。
+
+**首次调`fork()`创建新进程`init`时，为了确保 新进程的用户态栈中 没有进程0的多余信息，要求进程0在创建进程1之前，不要使用`用户态栈`（要求任务0不要调用函数）**
+
+因此，在`main.c`移动到`任务0`执行后，任务0的`fork()`不能以函数形式进行调用。
+程序中通过`inline`方式执行这个系统调用。
+`_syscall0`宏代码，用于嵌入汇编（0表示无参数的系统调用）
+```c
+static inline _syscall0(int, fork);
+
+#define _syscall0(type,name) \
+type name(void) \
+{ \
+long __res; \
+__asm__ volatile ("int $0x80" \
+	: "=a" (__res) \
+	: "0" (__NR_##name)); \
+if (__res >= 0) \
+	return (type) __res; \
+errno = -__res; \
+return -1; \
+}
+```
+`fork`系统调用的具体业务逻辑（把宏定义展开了）
+```c
+int fork(void)
+{
+    long __res; // 局部变量，存储系统调用的返回值
+    /*
+        触发 软中断，CPU从用户态切到内核态，跳转到内核预先定义的中断处理程序
+        "0" (__NR_fork)  表示：使用与第0个输出操作数相同的寄存器eax，也就是说，__NR_fork会放到eax
+        "=a"             表示：eax在系统调用后会存放返回值，把eax的值写入到变量_res
+    */
+    __asm__ volatile ("int $0x80": "=a" (__res) : "0" (__NR_fork)); 
+    if (__res >= 0)
+        return (type) __res;
+    errno = -__res;
+    return -1;
+}
+```
+这个fork在调用处，是必然被`内联展开`的
+执行`中断指令INT`也还是使用了堆栈，但是使用的是`内核态栈`，每个task都有
+
+创建init进程（进程1）时，系统进行了特殊处理！！！：
+**`copy-on-write`技术**
+`进程0`和 `进程init` 实际上 （调`fork()`后）同时使用`内核代码区内（小于1MB）`相同的代码 和 `数据物理内存页面（640KB）`，只是执行的业务函数不一样
+在为进程1复制进程0的`页目录和页表项`时，进程0的640KB仍然可读写，但是进程1的640KB对应的页表项是`只读`的（使得触发`page fault异常`）。
+进程0和进程1，同时使用相同的用户堆栈区，直到发生缺页中断：当进程1开始执行，执行过`出入栈操作`后，触发页面写保护异常，使得内核的内存管理程序为进程1在主内存区中分配一内存页面，并把任务0栈中的相应页面复制到该新页面上，进程0和进程1的用户栈才变成相互独立。
+为了防止冲突，进程0在进程1执行栈操作之前禁止使用用户堆栈区，而让进程1能单独使用堆栈。
+因为在内核调度进程运行时，进程0创建进程1后，仍然有可能先运行任务0，因此进程0调`fork()`后，随后的`pause()`也必须内联，避免进程0在进程1之前使用用户栈。
+
+当进程2调`execve()`，它的代码和数据区会位于系统的主内存区，因此系统此后可以随时利用`copy-on-write`来处理其他新进程的创建和执行。
+（进程1会复制进程0的页表， 但是页表项指向的物理内存页面和进程0是相同的）
+对于linux来说，所有任务都是在用户模式下运行：系统应用如：shell，网络子系统程序。
+内核源码lib/目录下的库文件就是为它们这些新建的进程提供函数支持的，内核代码本身不会使用这些库函数。
+
+
+
+### 7.1.2 代码注释
+```c
+/*
+ *  linux/init/main.c
+ *
+ *  (C) 1991  Linus Torvalds
+ */
+
+#define __LIBRARY__		// 把unistd.h中的内嵌汇编代码引入
+/* 这些头文件都在include/下面，属于UNIX标准头文件 */
+#include <unistd.h>	// 标准 符号常数 与 类型
+#include <time.h>
+
+/*
+ * we need this inline - forking from kernel space will result
+ * in NO COPY ON WRITE (!!!), until an execve is executed. This
+ * is no problem, but for the stack. This is handled by not letting
+ * main() use the stack at all after fork(). Thus, no function
+ * calls - which means inline code for fork too, as otherwise we
+ * would use the stack upon exit from 'fork()'.
+ *
+ * Actually only pause and fork are needed inline, so that there
+ * won't be any messing with the stack from main(), but we define
+ * some others too.
+ 注意inline
+ 因为内核空间 fork 是没有COW机制的（除非调execve()）， fork() 之后，父子进程 完全地 共享栈（内核刚启动的时候，尚无内存管理机制）
+ fork() 之后，main() 函数不能再调函数、或者函数返回，只能内联执行系统调用，如pause()
+ */
+static inline _syscall0(int,fork)
+static inline _syscall0(int,pause)				// 暂停进程，直到收到一个信号
+static inline _syscall1(int,setup,void *,BIOS)	// 仅用于linux初始化
+static inline _syscall0(int,sync)				// 更新文件系统
+
+#include <linux/tty.h>							// 关于 tty_io，串行通信
+#include <linux/sched.h>						// 调度、task_struct、task1
+#include <linux/head.h>							// 段描述符
+#include <asm/system.h>							// 系统头文件
+#include <asm/io.h>								// io头文件
+
+#include <stddef.h>								// 标准定义：NULL, offsetof(...)
+#include <stdarg.h>								// va_list, vsprintf
+#include <unistd.h>
+#include <fcntl.h>								// 文件、fd 控制
+#include <sys/types.h>							// 基本 系统数据类型
+
+#include <linux/fs.h>							// 文件系统 头文件
+
+static char printbuf[1024];						// 用于缓存内核显示信息
+
+extern int vsprintf();							// 格式化输出字符串
+extern void init(void);
+extern void blk_dev_init(void);					// 块设备
+extern void chr_dev_init(void);					// 字符设备
+extern void hd_init(void);						// 硬盘
+extern void floppy_init(void);					// 软驱
+extern void mem_init(long start, long end);		// 内存管理
+extern long rd_init(long mem_start, int length);// 虚拟盘
+extern long kernel_mktime(struct tm * tm);		// 计算开机启动时间
+extern long startup_time;						// 内核启动时间
+
+/*
+ * This is set up by the setup-routine at boot-time
+ 以下三个值，在内核引导期间，由setup.s设置
+ */
+#define EXT_MEM_K (*(unsigned short *)0x90002)			// 扩展内存大小 KB
+#define DRIVE_INFO (*(struct drive_info *)0x90080)		// 硬盘参数表 32字节内容
+#define ORIG_ROOT_DEV (*(unsigned short *)0x901FC)		// 根文件系统 所在的 设备号
+
+/*
+ * Yeah, yeah, it's ugly, but I cannot find how to do this correctly
+ * and this seems to work. I anybody has more info on the real-time
+ * clock I'd be interested. Most of this was trial and error, and some
+ * bios-listing reading. Urghh.
+
+ 读取CMOS实时时钟信息
+ */
+
+#define CMOS_READ(addr) ({ \
+outb_p(0x80|addr,0x70); \
+inb_p(0x71); \
+})
+
+// BCD码 -> 二进制
+#define BCD_TO_BIN(val) ((val)=((val)&15) + ((val)>>4)*10)
+
+// 取CMOS实时钟 为 开机时间，并保存到全局变量
+static void time_init(void)
+{
+	struct tm time;
+
+	do {
+		time.tm_sec = CMOS_READ(0);
+		time.tm_min = CMOS_READ(2);
+		time.tm_hour = CMOS_READ(4);
+		time.tm_mday = CMOS_READ(7);
+		time.tm_mon = CMOS_READ(8);
+		time.tm_year = CMOS_READ(9);
+	} while (time.tm_sec != CMOS_READ(0));
+	BCD_TO_BIN(time.tm_sec);
+	BCD_TO_BIN(time.tm_min);
+	BCD_TO_BIN(time.tm_hour);
+	BCD_TO_BIN(time.tm_mday);
+	BCD_TO_BIN(time.tm_mon);
+	BCD_TO_BIN(time.tm_year);
+	time.tm_mon--;
+	startup_time = kernel_mktime(&time);	// 从1970.1.1 0 到 开机时刻 的 秒数
+}
+
+static long memory_end = 0;					// 物理内存 字节
+static long buffer_memory_end = 0;			// 高速缓冲区 end 地址
+static long main_memory_start = 0;			// 主内存（用于分页）开始的位置
+
+struct drive_info { char dummy[32]; } drive_info;	// 硬盘 参数表
+
+// 内核初始化主程序，完成后以 task0 / idle task的身份运行
+void main(void)		/* This really IS void, no error here. */
+{			/* The startup routine assumes (well, ...) this */
+/*
+ * Interrupts are still disabled. Do necessary setups, then
+ * enable them
+ 	先禁止中断，后续开启
+ */
+ 	ROOT_DEV = ORIG_ROOT_DEV;					// 根设备号
+ 	drive_info = DRIVE_INFO;					// 硬盘参数表
+	memory_end = (1<<20) + (EXT_MEM_K<<10);		// 高速缓存（for 文件系统/swap/设备访问） 末端地址 = 1 MB + 扩展内存(k) * 1024 B
+	memory_end &= 0xfffff000;					// 忽略不到 4KB（一页）的内存数
+	if (memory_end > 16*1024*1024)
+		memory_end = 16*1024*1024;				// 只要16 MB
+	if (memory_end > 12*1024*1024) 				// 若内存 > 12 MB, 缓冲区末端 = 4MB
+		buffer_memory_end = 4*1024*1024;
+	else if (memory_end > 6*1024*1024)			// 6 ~ 12 MB，缓冲区设置得小一点 2MB
+		buffer_memory_end = 2*1024*1024;
+	else
+		buffer_memory_end = 1*1024*1024;		// 0 ~ 6 MB，1MB
+	main_memory_start = buffer_memory_end;
+#ifdef RAMDISK
+	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);	// 主存中的一部分 用作 虚拟盘
+#endif
+	// 内核 各方面的初始化
+	mem_init(main_memory_start,memory_end);		// 主存
+	trap_init();								// 硬件中断向量 初始化
+	blk_dev_init();								// 块设备
+	chr_dev_init();								// 字符设备
+	tty_init();									// tty
+	time_init();								// 设置开机启动时间
+	sched_init();								// 调度程序初始化（加载任务0的tr, ldtr）
+	buffer_init(buffer_memory_end);				// 缓冲管理 初始化：建内存链表...
+	hd_init();									// 硬件初始化
+	floppy_init();								// 软驱初始化
+	sti();										// （所有初始化完毕）开启中断
+	move_to_user_mode();						// 移到用户模式下执行
+	if (!fork()) {		/* we count on this going ok */
+		init();									// 在子进程（任务1）中执行init()
+	}
+/*
+ *   NOTE!!   For any other task 'pause()' would mean we have to get a
+ * signal to awaken, but task0 is the sole exception (see 'schedule()')
+ * as task 0 gets activated at every idle moment (when no other tasks
+ * can run). For task0 'pause()' just means we go check if some other
+ * task can run, and if not we return here.
+ 	对于常规的task，执行pause()后必须收到一个信号才会返回就绪态（因为进入了不可中断睡眠）
+	但是task0是例外，task0在没有其他任务在运行时会被激活，因此task0的pause()会先检查有没有别的进程运行，如果没有的话，还会回来执行pause()
+ */
+	for(;;) pause();	// pause 在kernel/sched.c	task0会设置可中断等待状态，再执行schedule()函数
+}
+
+// 产生格式化信息到标准输出设备：stdout(1)，基于vsprintf()将格式化字符串放入printbuf缓冲区，然后通过write()将缓冲区数据输出到标准设备
+static int printf(const char *fmt, ...)
+{
+	va_list args;
+	int i;
+
+	va_start(args, fmt);
+	write(1,printbuf,i=vsprintf(printbuf, fmt, args));
+	va_end(args);
+	return i;
+}
+
+// 执行etc/rc文件时，所使用的命令行参数、环境参数
+static char * argv_rc[] = { "/bin/sh", NULL };
+static char * envp_rc[] = { "HOME=/", NULL };
+
+// 登录shell时，使用的命令行参数、环境参数	注意：-，sh程序会作为登录shell执行
+static char * argv[] = { "-/bin/sh",NULL };
+static char * envp[] = { "HOME=/usr/root", NULL };
+
+/*
+	main函数里已经进行了系统初始化，以下是task1的业务：
+	1. 初始化shell环境
+	2. 以登录shell方式加载该程序执行
+*/
+void init(void)
+{
+	int pid,i;
+
+	setup((void *) &drive_info);								// 读取硬盘参数：分区表信息、加载虚拟盘、安装根文件系统设备
+	(void) open("/dev/tty0",O_RDWR,0);							// 以 读写方式 打开设备“/dev/tty0”，对应终端控制台，PS：这里的fd肯定是0
+	(void) dup(0);												// 复制句柄，产生1号：stdout标准输出设备	和fd 0指向同一个设备，同一个读写位置
+	(void) dup(0);												// 复制句柄，产生2号：stderr标准出错设备	每次open会产生一套读写指针
+	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS,
+		NR_BUFFERS*BLOCK_SIZE);									// 打印 缓冲区块数、总字节数
+	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
+	if (!(pid=fork())) {										//	fork返回0，创建 并 执行task2：打开文件、以 上述命令行参数 加载可执行文件
+		close(0);
+		if (open("/etc/rc",O_RDONLY,0))
+			_exit(1);		//	错误码1：操作未许可
+		execve("/bin/sh",argv_rc,envp_rc);
+		_exit(2);			//	错误码2：文件/目录不存在
+	}
+	if (pid>0)													// 父进程task1 （pid返回>0，表示子进程的PID） 继续完成下列业务：
+		while (pid != wait(&i))									// 父进程 等待 子进程结束
+			/* nothing */;
+	while (1) {													// 此时，子进程task2 执行完毕
+		if ((pid=fork())<0) {									// fork 返回-1表示失败
+			printf("Fork failed in init\r\n");
+			continue;
+		}
+		if (!pid) {												// 父进程task1又创建新进程
+			close(0);close(1);close(2);
+			setsid();											// 创建新的会话期（？？？）
+			(void) open("/dev/tty0",O_RDWR,0);
+			(void) dup(0);
+			(void) dup(0);
+			_exit(execve("/bin/sh",argv,envp));					// 子进程，使用 另一套 命令行参数
+		}
+		while (1)
+			if (pid == wait(&i))
+				break;
+		printf("\n\rchild %d died with code %04x\n\r",pid,i);
+		sync();													// 刷新缓冲区
+	}
+	_exit(0);	/* NOTE! _exit, not exit() */					// exit()是普通函数库里的，先会执行清楚操作，才调用系统调用。而_exit()直接对应sys_exit系统调用
+}
+```
+
+### 7.1.3 其他信息
+#### 7.1.3.1 CMOS信息
+CMOS内存（64B，时间信息只占14B，剩余空间按可存放系统配置数据），是系统实时钟芯片的一部分，保存`时钟和日期`信息
+
+#### 7.1.3.2 调用`fork()`创建新进程
+fork()的返回值：
+1. （在父进程中）正整数	子进程的PID
+2. （在子进程中）0
+3. 调用失败		< 0
+
+#### 7.1.3.3 关于会话期(session)的概念
+进程通过`fork`创建子进程，形成进程组
+```sh
+# 管道命令（前一个命令的 标准输出，作为后一个命令的 标准输入）
+cat main.c | grep for | more	# 三个 兄弟 进程，属于一个进程组
+```
+每个进程组，有一个唯一的 进程组`gid`(Group ID)
+每个进程组 有一个 `组长` 进程，其`pid` = `gid`（一般是第一个创建的进程）
+
+进程可以调`setpgid()`，来参加现有的进程组 / 创建新的进程组
+
+进程组的用途：
+在终端上 向 前台执行程序（这里应该是指整个前台进程组） 发出终止信号（Ctrl + C），直接终止整个进程组的所有进程
+（不需要是组长进程？？？）
+
+`会话（Session）`是`一个 或 多个 进程组 的集合`
+用户登录后执行的所有程序，都属于同一个`Session`
+登录shell是`会话期 首进程`/`控制进程`，它使用的终端是 会话期的 `控制终端`
+退出时，所有属于这个会话的进程都被终止
+`setsid`，可用于建立一个新的`session`，由环境初始化程序调用
+
+`一个session`，包含 `一个前台进程组`（拥有`控制终端`的一个进程组），`一个或几个后台进程组`
+`一个终端`，只能作为 `一个session`的 `控制终端`（对应`/dev/tty`设备文件）
+
+## 7.2 环境初始化工作
+内核 初始化 完毕，还需要：环境 初始化
+流程：
+`init(task 1)` -fork()-> `agetty` -exec()-> `login` -exec()-> `shell`
+
+init根据`/etc/rc`中的信息，执行其命令，然后 根据`/etc/inittab`，为每一个 允许登录的 终端设备，使用`fork()`创建一个`子进程`，其中执行`agetty`，init会`wait()`这些子进程结束，每当一个子进程结束，通过返回的pid得知是哪个对应终端的子进程结束了，为它再创建一个`agetty`程序（为了保证每个终端 都有一个进程为其等待处理）
+
+在正常的操作下，`init`确定`agetty`正在工作着以允许用户登录，并且收取`孤立进程`。
+`孤立进程`是指那些其父辈进程已结束的进程；
+在Linux中所有的进程必须属于单棵进程树，所以孤立进程必须被收取。
+当系统关闭时，`init`负责`杀死所有其它的进程`，卸载所有的文件系统以及停止CPU的工作，以及任何它被配置成要做的工作。
+
+**`getty`程序**
+主要任务是：`设置终端类型、属性、速度和线路规程`。
+它打开并初始化一个tty端口，显示提示信息，并等待用户键入用户名。
+该程序只能由超级用户执行。
+通常，若`/etc/issue`文本文件存在，则getty会首先显示其中的文本信息，然后显示登录提示信息（例如：plinux login: ），读取用户键入的登录名，并执行`login程序`。
+
+**`login`程序**
+主要用于要求登录用户输入密码
+把用户键入密码和passwd文件中的对应字段比较
+
+* 错误次数多了，则login以1错误码退出，父进程init进程的wait()返回，重新创建子进程
+* 密码正确，则login把`CWD`修改成passwd中指定的 用户起始工作目录
+	并把对该终端设备的访问权限修改成`用户读/写 和 组写`，设置进程的`组ID`。
+	然后利用所得到的信息初始化环境变量信息，例如起始目录（`HOME=`）、使用的shell程序（`SHELL=`）、用户名（`USER=`和`LOGNAME=`）和系统执行程序的默认路径序列（`PATH=`）。
+	接着显示/etc/motd文件（message-of-the-day）中的文本信息，并检查并显示该用户是否有邮件的信息。
+	最后login程序改变成登录用户的用户ID并执行口令文件中该用户项中指定的shell程序，如bash或csh等。
+
+**`shell`程序**
+是 复杂的 `命令行解释程序`
+
+是当用户登录系统进行交互操作时执行的程序。它是用户与计算机进行交互操作的地方。
+它获取用户输入的信息，然后执行命令。用户可以在终端上向shell直接进行交互输入，也可以使用shell脚本文件向shell解释程序输入。
+在Linux系统中，目前常用的shell有：
+```
+Bourne Again Shell,/bin/bash
+C shell,/bin/csh（或tcsh）
+BSD shell/bin/ash（或bsh）
+```
+
+在登录过程中login开始执行shell时，所带参数`argv[0]`的第一个字符是`-`，表示该shell是作为一个`登录shell`被执行。
+此时该shell程序会根据该字符，执行某些与登录过程相应的操作。
+`登录shell`会首先从`/etc/profile`文件以及`.profile文件`（若存在的话）读取命令并执行。
+如果在进入shell时设置了`ENV环境变量`，或者在登录shell的`.profile`文件中设置了该变量，则shell下一步会从该变量命名的文件中读去命令并执行。
+因此用户应该把`每次登录时都要执行的命令`放在`.profile`文件中，而把`每次运行shell都要执行的命令`放在`ENV变量指定的文件中`。
+设置ENV环境变量的方法是把下列语句放在你起始目录的.profile文件中。
+```sh
+ENV=$HOME/.anyfilename; export ENV
+```
+在执行shell时，除了一些指定的可选项以外，如果还指定了命令行参数，则shell会把第一个参数看作是一个脚本文件名并执行其中的命令，而其余的参数则被看作是shell的位置参数（$1、$2等）。
+否则shell程序将从其标准输入中读取命令。
+
+
+
+# 第8章 内核代码
+`linux/kernel/`
+
+## 8.1 总体功能
+以上目录的代码，总体分为三类：
+1. 硬件（异常）中断处理程序 文件
+2. 系统调用服务处理程序 文件
+3. 进程调度等 通用功能 文件
+
+### 8.1.1 中断处理程序
+主要包括：`asm.s`，`traps.c`
+
+进程将`控制权`交给中断处理程序 前，CPU首先将至少`12字节（EFLAGS, CS, EIP）`的信息，压入 `中断处理程序的堆栈（进程的内核态栈）`中
+
+### 8.1.2 系统调用处理相关程序
+Linux 进程调 `内核` 的功能是通过中断调用`init 0x80`进行的，eax放调用号，ebx, ecx, edx存`调用参数`
+
+注意函数名前缀：
+举例：`do_signal`，基本上是所有系统调用都要执行的函数，`sys_execve()`是 某个系统调用专用的C处理函数
+
+### 8.1.3 其他通用程序
+`schedule.c()`,`sleep_on()`,`wakeup()`
+
+### 8.3 asm.s程序
+
+### 8.4 traps.C
+
+### 8.5 system_call.s
+
+### mktime.c
+
+
+## 8.7 sched.c程序
+### `schedule()`	选择系统中下一个要运行的进程
+```c
+#define FIRST_TASK task[0]
+#define LAST_TASK task[NR_TASKS-1]
+// ...
+
+/*
+ *  'schedule()' is the scheduler function. This is GOOD CODE! There
+ * probably won't be any reason to change this, as it should work well
+ * in all circumstances (ie gives IO-bound processes good response etc).
+ * The one thing you might take a look at is the signal-handler code here.
+ *
+ *   NOTE!!  Task 0 is the 'idle' task, which gets called when no other
+ * tasks can run. It can not be killed, and it cannot sleep. The 'state'
+ * information in task[0] is never used.
+
+ 	选择系统下一个要运行的进程
+ */
+void schedule(void)
+{
+	int i,next,c;
+	struct task_struct ** p;
+
+/* check alarm, wake up any interruptible tasks that have got a signal
+	遍历所有任务
+	判断是否已经收到信号（没有选择屏蔽的）
+	（jiffies是“系统启动以来的时钟滴答数”，是当前时刻，alarm也是时刻）
+*/
+
+	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
+		if (*p) {
+			if ((*p)->alarm && (*p)->alarm < jiffies) {
+					(*p)->signal |= (1<<(SIGALRM-1));				//	时间片到了，设置SIGALRM信号
+					(*p)->alarm = 0;
+				}
+			if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&	//	信号位图的判断：SIGALRM && 其他信号
+			(*p)->state==TASK_INTERRUPTIBLE)	//	是可唤醒的睡眠
+				(*p)->state=TASK_RUNNING;		//	TASK_RUNNING，调度器下次就可以选它运行了
+		}
+
+/* 
+	this is the scheduler proper: 
+	调度程序的主要部分：
+		基于 进程的 时间片 & 优先权调度机制，选择 后续任务
+
+
+*/
+	while (1) {
+		c = -1;			// 暂存	counter(任务的剩余运行时间)
+		next = 0;
+		i = NR_TASKS;
+		p = &task[NR_TASKS];
+		while (--i) {	// 遍历任务
+			if (!*--p)
+				continue;
+			if ((*p)->state == TASK_RUNNING && (*p)->counter > c)	// c用于统计 剩余运行时间 最大 的 就绪态任务
+				c = (*p)->counter, next = i;
+		}
+		if (c) break;
+		// c == 0, 每个 就绪态任务 的 counter 都等于0，此刻所有任务的时间片都运行完，必须重新分配counter（睡眠状态的进程，也要参与重新分配counter）
+		for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
+		/*
+			重置 时间片，算法是：原先的 / 2 + priority
+			这种算法的好处是：
+				因为IO进程本身经常是 非就绪态的，这样变相增加 IO任务的 时间片（可以理解成：IO任务本身消耗CPU少，下次多分一点时间片给它）
+		*/
+			if (*p)
+				(*p)->counter = ((*p)->counter >> 1) +
+						(*p)->priority;
+	}
+	// 得到了最大的counter，对应的task
+	switch_to(next);	// 切换到选中的任务，如果c = -1. next = 0，就切换idle任务
+}
+```
+
+上下文切换的核心逻辑：`switch_to`：设置寄存器、栈指针
+```c
+/*
+ *	switch_to(n) should switch tasks to task nr n, first
+ * checking that n isn't the current task, in which case it does nothing.
+ * This also clears the TS-flag if the task we switched to has used
+ * tha math co-processor latest.
+
+	关键词：
+	基于 TSS(Task State Segment) 的硬件任务切换
+	全局唯一的 GDT(Global Descriptor Table, 保护模式中)表
+	每个task都有一个 运行时的段选择子(selector)
+
+	业务逻辑：
+	设置 _tmp = {a, b}，作为跳转目标的占位符
+	
+	赋值语句：
+		dx = _TSS(n), %1 = (*&__tmp.b)
+
+	1. 判断 task n 是否是当前任务
+		是，跳转到下面的"1"	（是当前任务的话，就无需切换）
+		否，dx --> %1	(也就是b，而a不需要赋值，因为offset会被忽略)
+		PS:	x86的长跳转格式是：ljmp selector:offset		这里的地址 等价于 _tmp.b:_tmp.a
+
+	2. 交换 ecx(task n) 和 current
+	3. 长跳转到%0, 即"m" (*&__tmp.a)代表的内存位置，触发 硬件任务切换（PS："*&"这种怪异的写法是让GCC认为这是可寻址的内存对象，避免优化成寄存器）
+	4. 切换后，比较ecx(task n) 和 _last_task_used_math
+		不等，跳过clts代码
+		相等，清楚CR0.TS标志，允许使用FPU(浮点协处理器)
+ */
+#define switch_to(n) {\
+struct {long a,b;} __tmp; \
+__asm__("cmpl %%ecx,_current\n\t" \
+	"je 1f\n\t" \
+	"movw %%dx,%1\n\t" \
+	"xchgl %%ecx,_current\n\t" \
+	"ljmp %0\n\t" \
+	"cmpl %%ecx,_last_task_used_math\n\t" \
+	"jne 1f\n\t" \
+	"clts\n" \
+	"1:" \
+	::"m" (*&__tmp.a),"m" (*&__tmp.b), \	// 这行的m意思是：__tmp.a是内存操作数，__tmp.b是内存操作数
+	"d" (_TSS(n)),"c" ((long) task[n])); \
+}
+```
+
+### `sys_pause()`	将当前任务转为：可中断等待状态，并重新调度
+使进程进入睡眠状态，直到收到一个信号
+（PS：该函数的业务逻辑直到0.95版才完全实现）
+```c
+int sys_pause(void)
+{
+	current->state = TASK_INTERRUPTIBLE;
+	schedule();
+	return 0;
+}
+```
+
+### `sleep_on()`	（很复杂）把task 设置为：不可中断等待 状态，让睡眠队列 头指针 指向该任务
+当一个进程等待资源时，把它放在等待队列（初始为空）中。只有wake_up能唤醒这里的进程。
+```c
+void sleep_on(struct task_struct **p)	// 入参是 等待队列头指针，因为可能修改它，所以是二级指针
+{
+	struct task_struct *tmp;
+
+	if (!p)
+		return;
+	if (current == &(init_task.task))	//	task0	sleep是无意义的，其运行不依赖运行状态
+		panic("task[0] trying to sleep");
+
+	// 函数调用时，会传进等待队列，所以tmp指向等待队列的首元素
+	tmp = *p;
+	*p = current;						// 插入 当前任务
+	current->state = TASK_UNINTERRUPTIBLE;
+	schedule();							// 触发CPU执行其他进程，当前进程挂起
+	/*
+		当本进程唤醒（就绪态）时，才调这里，既然唤醒，说明资源已经到达，那么就有必要唤醒所有等待（也是调sleep_on）该资源的进程
+		想象很多个进程加入这样的等待队列。等待相同资源的进程，确实会加入同一个逻辑等待队列（通过共享同一个指针变量）
+		只有当内核某处代码，以队列头指针作为参数wake_up该队列，然后，头指针进程A被调度过来执行，调下面的if(tmp)，设置队列下一个进程B为就绪态，同样地进程B也会置为进程C
+		！！！set state的进程就会被schedule选中执行
+		*p = tmp;	// 应该被添加
+	*/
+	if (tmp)
+		tmp->state=0;
+}
+```
+PS: 在函数调用的栈帧中，会把下一行执行代码的地址压入栈中，所以下一行代码地址也是栈帧的一部分
+* `sys_pause`就是专门等信号的
+* `sleep_on`等磁盘I/O等操作
+
+### `interruptible_sleep_on()`	设置可中断等待状态（信号 / wake_up都可能唤醒）
+注意！！！看起来这里是确保先唤醒最新加入的任务，然后链式唤醒，
+```c
+void interruptible_sleep_on(struct task_struct **p)
+{
+	struct task_struct *tmp;
+
+	if (!p)
+		return;
+	if (current == &(init_task.task))
+		panic("task[0] trying to sleep");
+	// 往等待队列插入当前任务
+	tmp=*p;
+	*p=current;
+repeat:	current->state = TASK_INTERRUPTIBLE;
+	schedule();
+	// 当任务被唤醒时，执行下列代码
+	if (*p && *p != current) {		//	如果等待队列还有任务，并且并非当前任务，说明在当前任务被放入队列后，又有新的任务加入了
+	// 则把该等待任务也置为 可运行就绪态，进行唤醒（这里是和sleep_on一样的嵌套调用，因为说明共同等待的条件满足了），让自己仍然等待，并重新执行调度程序。这些后来才进入队列的任务被唤醒时，会唤醒当前任务（最下面的tmp->state=0）
+		(**p).state=0;
+		goto repeat;
+	}
+	*p = tmp;	// 让队列头指针 指向其余等待任务，说明当前指针处理完了
+	// *p=NULL;	linus写错了
+	if (tmp)
+		tmp->state=0;
+}
+```
+
+！！！`interruptible_sleep_on`，`sleep_on`的差异在于wake_up必然是从头部开始触发的（因为肯定是单核系统），信号可能是从队列中间位置触发
+
+### `wake_up()`	唤醒 *p 指向的任务， *p 是任务等待队列头指针
+新的等待任务是插入在链表头部的，所以唤醒的其实是最后进入等待队列的任务
+```c
+void wake_up(struct task_struct **p)
+{
+	if (p && *p) {
+		(**p).state=0;
+		// *p=NULL;	linus写错了
+	}
+}
+```
+
+### `do_timer()`，时钟中断 C处理函数，`在 system_call.s 中_timer_interrupt 被调用`
+入参`cpl`是 `当前特权级0或3`，是时钟中断发生时，正在被执行的代码选择符 中的特权级
+cpl = 0:	中断发生时正在执行`内核代码`
+cpl = 3:	正在执行`用户代码`
+一个进程时间片用完时，进行`任务切换`，并执行一个`计时更新`
+```c
+void do_timer(long cpl)
+{
+	extern int beepcount;
+	extern void sysbeepstop(void);
+
+	if (beepcount)
+		if (!--beepcount)		//	beepcount 在每次时钟中断，递减一次
+			sysbeepstop();
+
+	if (cpl)	//	普通用户
+		current->utime++;
+	else		//	内核程序
+		current->stime++;
+
+	if (next_timer) {			//	如果存在定时器，next_timer 指向一个按 “到期时间” 排序 的定时器链表
+		next_timer->jiffies--;	//	第一个定时器（的剩余时间） - 1（这里只处理第一个定时器的原因是：第一个定时器的 jiffies 表示：距离它到期还有多少个时钟中断；第二个定时器的 jiffies 表示：在第一个定时器到期之后，还要等多少个中断才轮到它）
+		while (next_timer && next_timer->jiffies <= 0) {
+			void (*fn)(void);
+			
+			fn = next_timer->fn;
+			next_timer->fn = NULL;
+			next_timer = next_timer->next;		//	从定时器中 移除该定时器
+			(fn)();				//	调用 处理函数
+		}
+	}
+	if (current_DOR & 0xf0)		//	current_DOR：软件控制器的 数字输出寄存器，0xf0表示有软驱处于活动状态
+		do_floppy_timer();		//	软盘定时程序
+	if ((--current->counter)>0) return;	//	“当前进程” 运行时间还没完，则退出
+	current->counter=0;					//	若 其时间片耗尽，则把counter 清零
+	if (!cpl) return;					//	如果是 用户态，则 触发进程切换；而内核态 不依赖counter进行调度
+	schedule();
+}
+
+// 补充：
+static struct timer_list {
+	long jiffies;
+	void (*fn)();
+	struct timer_list * next;
+} timer_list[TIME_REQUESTS], * next_timer = NULL;
+```
+
+
+
+# 第13章 内存管理
 
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+# 第14章 头文件
 
 
 

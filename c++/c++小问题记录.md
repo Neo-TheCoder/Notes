@@ -3207,6 +3207,31 @@ io_.run();  // 阻塞，处理已发布的异步任务
 实现其实很简单，因为当结果可用，必然意味着对关联的promise进行了`set_value`，set完了就执行回调
 执行`set_value`的线程恐怕一般在线程池的线程里
 
+# 位域
+必须是整型类型（包括枚举类型）
+```cpp
+struct Date {   // 紧凑地 从低位到高 位进行排列，编译器通过计算得知，只需要2个short，nYear会位于第二个short
+   unsigned short nWeekDay  : 3;    // 0..7   (3 bits)
+   unsigned short nMonthDay : 6;    // 0..31  (6 bits)
+   unsigned short nMonth    : 5;    // 0..12  (5 bits)
+   unsigned short nYear     : 8;    // 0..100 (8 bits)
+};
+```
+
+```cpp
+struct Date {
+   unsigned nWeekDay  : 3;    // 0..7   (3 bits)
+   unsigned nMonthDay : 6;    // 0..31  (6 bits)
+   unsigned           : 0;    // Force alignment to next boundary.  强制让后面的元素从新的unsigned开始排列
+   unsigned nMonth    : 5;    // 0..12  (5 bits)
+   unsigned nYear     : 8;    // 0..100 (8 bits)
+};
+```
+
+
+
+
+
 
 
 

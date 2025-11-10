@@ -29,6 +29,7 @@ AP AUTOSAR的ARA由一系列的`Function Clusters`组成。
 ## Foundation包含的FC：
 1. Operating System Interface（OSI）：
     规范操作系统接口（POSIX PSE51 / C++ STL）
+    PS: PS351是为RTOS设计的POSIX兼容性最小接口集合，针对的是无多进程、无文件系统、无动态链接的轻量级RTOS
 2. ara::exec
     平台生命周期管理
     应用程序生命周期管理
