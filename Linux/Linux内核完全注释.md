@@ -1632,7 +1632,7 @@ void wake_up(struct task_struct **p)
 }
 ```
 
-### `do_timer()`，时钟中断 C处理函数，`在 system_call.s 中_timer_interrupt 被调用`
+### `do_timer()`，时钟中断 C处理函数，`在 system_call.s 中_timer_interrupt 被调用，当定时器芯片每产生一次时钟中断时，调用_timer_interrupt`
 入参`cpl`是 `当前特权级0或3`，是时钟中断发生时，正在被执行的代码选择符 中的特权级
 cpl = 0:	中断发生时正在执行`内核代码`
 cpl = 3:	正在执行`用户代码`
@@ -1666,7 +1666,7 @@ void do_timer(long cpl)
 	if (current_DOR & 0xf0)		//	current_DOR：软件控制器的 数字输出寄存器，0xf0表示有软驱处于活动状态
 		do_floppy_timer();		//	软盘定时程序
 	if ((--current->counter)>0) return;	//	“当前进程” 运行时间还没完，则退出
-	current->counter=0;					//	若 其时间片耗尽，则把counter 清零
+	current->counter=0;					//	若 “当前进程” 时间片耗尽，则把counter 清零
 	if (!cpl) return;					//	如果是 用户态，则 触发进程切换；而内核态 不依赖counter进行调度
 	schedule();
 }
@@ -1678,6 +1678,8 @@ static struct timer_list {
 	struct timer_list * next;
 } timer_list[TIME_REQUESTS], * next_timer = NULL;
 ```
+
+
 
 
 

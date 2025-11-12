@@ -1,19 +1,60 @@
+# 前言
 粗略分为 SD，Skeleton，Proxy
 
 # note
-紧扣`服务发现`的`状态机`
+1. 紧扣`服务发现`的`状态机`
+2. 观察服务发现的流程中，是如何和socket API结合起来的，比如TCP建立连接
+
+3. 异步编程
 offer service这种操作，不需要注册回调
 需要注册回调的是：
 server：订阅状态改变时回调，method回调
 client：服务可用时回调，收到event时回调
 以及过程中对socket监听的读/写事件
 
+
+
+# 问题
+## 抓包无someip包
+```sh
+sudo route add -nv 239.255.0.1 dev enp0s8   # 在系统中手动添加一条静态路由规则，目的是让发往多播地址 239.255.0.1 的流量强制通过指定的网络接口 enp0s8 发出
+```
+
+## app是否持有socket？似乎不持有。并且域内通信没走网卡，可能某处存在判断
+
+
+
 # routing manager daemon
 main函数逻辑：
 根据命令行参数，判断是否守护进程化（子进程从`fork`之后开始执行，根据返回值知道是父进程还是子进程，如果是子进程，调`setsid()`脱离terminal，如果是父进程就直接退出）
+```cpp
+  routing_ = std::make_shared<routing_manager_impl>(this);
+
+// routing_初始化时，涉及到 service_discovery_impl的初始化：
+discovery_->init();
+
+service_discovery_impl::init() {
+  // 读取配置，填充成员变量
+}
+
+// 类似地
+discovery_->start();
+
+service_discovery_impl::start() {
+  // ...
+}
+
+#if defined(__linux__) || defined(ANDROID)
+    std::shared_ptr<netlink_connector> local_link_connector_;
+```
+
+
+
 
 ## 主要业务逻辑
 主线程 `while循环`，用于判断`信号处理线程`
+
+
 
 # service provider app
 ## 主要线程
@@ -24,6 +65,7 @@ main函数逻辑：
 
 以notify_sample为例，最上层就两个函数，`init()`和`start()`
 
+## 类设计
 app必备抽象基类：`class vsomeip::application`，用于各种操作
 实际对象是由`vsomeip_v3::application_impl`实例化而来，该类又持有一个`impl指针`，其对象由runtime提供的`工厂函数create_application()`构造
 
@@ -32,6 +74,294 @@ app必备抽象基类：`class vsomeip::application`，用于各种操作
 读取配置
 注册回调
 OfferEvent
+
+`application_umpl::init()`
+```cpp
+bool application_impl::init() {
+    if(is_initialized_) {
+        VSOMEIP_WARNING << "Trying to initialize an already initialized application.";
+        return true;
+    }
+    // Application name
+    if (name_ == "") {
+        const char *its_name = getenv(VSOMEIP_ENV_APPLICATION_NAME);
+        if (nullptr != its_name) {
+            name_ = its_name;
+        }
+    }
+
+    std::string configuration_path;
+
+    // load configuration from module
+    std::string config_module = "";
+    const char *its_config_module = getenv(VSOMEIP_ENV_CONFIGURATION_MODULE);
+    if (nullptr != its_config_module) {
+        // TODO: Add loading of custom configuration module
+    } else { // load default module
+#ifndef VSOMEIP_ENABLE_MULTIPLE_ROUTING_MANAGERS
+        auto its_plugin = plugin_manager::get()->get_plugin(
+                plugin_type_e::CONFIGURATION_PLUGIN, VSOMEIP_CFG_LIBRARY);
+        if (its_plugin) {
+            auto its_configuration_plugin
+                = std::dynamic_pointer_cast<configuration_plugin>(its_plugin);
+            if (its_configuration_plugin) {
+                configuration_ = its_configuration_plugin->get_configuration(name_, path_);
+                VSOMEIP_INFO << "Configuration module loaded.";
+            } else {
+                std::cerr << "Invalid configuration module!" << std::endl;
+                std::exit(EXIT_FAILURE);
+            }
+        } else {
+            std::cerr << "1 Configuration module could not be loaded!" << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
+#else
+        configuration_ = std::dynamic_pointer_cast<configuration>(
+                std::make_shared<vsomeip_v3::cfg::configuration_impl>(configuration_path));
+        if (configuration_path.length()) {
+            configuration_->set_configuration_path(configuration_path);
+        }
+        configuration_->load(name_);
+#endif // VSOMEIP_ENABLE_MULTIPLE_ROUTING_MANAGERS
+    }
+
+    if (configuration_->is_local_routing()) {
+        sec_client_.client_type = VSOMEIP_CLIENT_UDS;
+#ifdef __unix__
+        sec_client_.client.uds_client.user = getuid();
+        sec_client_.client.uds_client.group = getgid();
+#else
+        sec_client_.client.uds_client.user = ANY_UID;
+        sec_client_.client.uds_client.group = ANY_GID;
+#endif
+    } else {
+        sec_client_.client_type = VSOMEIP_CLIENT_TCP;
+    }
+
+    // Set security mode
+    if (configuration_->is_security_enabled()) {
+        if (configuration_->is_security_audit()) {
+            security_mode_ = security_mode_e::SM_AUDIT;
+        } else {
+            security_mode_ = security_mode_e::SM_ON;
+        }
+
+        if (security::load()) {
+        	VSOMEIP_INFO << "Using external security implementation!";
+        	security::initialize();
+        }
+    } else {
+        security_mode_ = security_mode_e::SM_OFF;
+    }
+
+    const char *client_side_logging = getenv(VSOMEIP_ENV_CLIENTSIDELOGGING);
+    if (client_side_logging != nullptr) {
+        client_side_logging_ = true;
+        VSOMEIP_INFO << "Client side logging for application: " << name_
+                << " is enabled";
+
+        if ('\0' != *client_side_logging) {
+            std::stringstream its_converter(client_side_logging);
+            if ('"' == its_converter.peek()) {
+                its_converter.get(); // skip quote
+            }
+            uint16_t val(0xffffu);
+            bool stop_parsing(false);
+            do {
+                const uint16_t prev_val(val);
+                its_converter >> std::hex >> std::setw(4) >> val;
+                if (its_converter.good()) {
+                    const std::stringstream::int_type c = its_converter.eof()?'\0':its_converter.get();
+                    switch (c) {
+                    case '"':
+                    case '.':
+                    case ':':
+                    case ' ':
+                    case '\0': {
+                            if ('.' != c) {
+                                if (0xffffu == prev_val) {
+                                    VSOMEIP_INFO << "+filter "
+                                    << std::hex << std::setw(4) << std::setfill('0') << val;
+                                    client_side_logging_filter_.insert(std::make_tuple(val, ANY_INSTANCE));
+                                } else {
+                                    VSOMEIP_INFO << "+filter "
+                                    << std::hex << std::setw(4) << std::setfill('0') << prev_val << "."
+                                    << std::hex << std::setw(4) << std::setfill('0') << val;
+                                    client_side_logging_filter_.insert(std::make_tuple(prev_val, val));
+                                }
+                                val = 0xffffu;
+                            }
+                        }
+                        break;
+                    default:
+                        stop_parsing = true;
+                        break;
+                    }
+                }
+            }
+            while (!stop_parsing && its_converter.good());
+        }
+    }
+
+    std::shared_ptr<configuration> its_configuration = get_configuration();
+    if (its_configuration) {
+        VSOMEIP_INFO << "Initializing vsomeip application \"" << name_ << "\".";
+        client_ = its_configuration->get_id(name_);
+
+        // Max dispatchers is the configured maximum number of dispatchers and
+        // the main dispatcher
+        max_dispatchers_ = its_configuration->get_max_dispatchers(name_) + 1;
+        max_dispatch_time_ = its_configuration->get_max_dispatch_time(name_);
+
+        has_session_handling_ = its_configuration->has_session_handling(name_);
+        if (!has_session_handling_)
+            VSOMEIP_INFO << "application: " << name_
+                << " has session handling switched off!";
+
+        std::string its_routing_host = its_configuration->get_routing_host_name();
+        if (its_routing_host != "") {
+            is_routing_manager_host_ = (its_routing_host == name_);
+            if (is_routing_manager_host_ &&
+                    !utility::is_routing_manager(configuration_->get_network())) {
+#ifndef VSOMEIP_ENABLE_MULTIPLE_ROUTING_MANAGERS
+                VSOMEIP_ERROR << "application: " << name_ << " configured as "
+                        "routing but other routing manager present. Won't "
+                        "instantiate routing";
+                is_routing_manager_host_ = false;
+                return false;
+#else
+            is_routing_manager_host_ = true;
+#endif // VSOMEIP_ENABLE_MULTIPLE_ROUTING_MANAGERS
+            }
+        } else {
+            auto its_routing_address = its_configuration->get_routing_host_address();
+            auto its_routing_port = its_configuration->get_routing_host_port();
+            if (its_routing_address.is_unspecified()
+                    || is_local_endpoint(its_routing_address, its_routing_port))
+                is_routing_manager_host_ = utility::is_routing_manager(configuration_->get_network());
+        }
+
+        if (is_routing_manager_host_) {
+            VSOMEIP_INFO << "Instantiating routing manager [Host].";
+            if (client_ == VSOMEIP_CLIENT_UNSET) {
+                client_ = static_cast<client_t>(
+                          (configuration_->get_diagnosis_address() << 8)
+                        & configuration_->get_diagnosis_mask());
+                utility::request_client_id(configuration_, name_, client_);
+            }
+            routing_ = std::make_shared<routing_manager_impl>(this);
+        } else {
+            VSOMEIP_INFO << "Instantiating routing manager [Proxy].";
+            routing_ = std::make_shared<routing_manager_client>(this, client_side_logging_, client_side_logging_filter_);
+        }
+
+        routing_->init();
+
+#ifdef USE_DLT
+        // Tracing
+        std::shared_ptr<trace::connector_impl> its_connector
+            = trace::connector_impl::get();
+        std::shared_ptr<cfg::trace> its_trace_configuration
+            = its_configuration->get_trace();
+        its_connector->configure(its_trace_configuration);
+#endif
+
+        VSOMEIP_INFO << "Application(" << (name_ != "" ? name_ : "unnamed")
+                << ", " << std::hex << std::setw(4) << std::setfill('0') << client_
+                << ") is initialized ("
+                << std::dec << max_dispatchers_ << ", "
+                << std::dec << max_dispatch_time_ << ").";
+
+        is_initialized_ = true;
+    }
+
+#ifdef VSOMEIP_ENABLE_SIGNAL_HANDLING
+    if (is_initialized_) {
+        signals_.add(SIGINT);
+        signals_.add(SIGTERM);
+
+        // Register signal handler
+        auto its_signal_handler =
+                [this] (boost::system::error_code const &_error, int _signal) {
+                    if (!_error) {
+                        switch (_signal) {
+                            case SIGTERM:
+                            case SIGINT:
+                                catched_signal_ = true;
+                                stop();
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                };
+        signals_.async_wait(its_signal_handler);
+    }
+#endif
+
+    if (configuration_) {
+        auto its_plugins = configuration_->get_plugins(name_);
+        auto its_app_plugin_info = its_plugins.find(plugin_type_e::APPLICATION_PLUGIN);
+        if (its_app_plugin_info != its_plugins.end()) {
+            for (auto its_library : its_app_plugin_info->second) {
+                auto its_application_plugin = plugin_manager::get()->get_plugin(
+                        plugin_type_e::APPLICATION_PLUGIN, its_library);
+                if (its_application_plugin) {
+                    VSOMEIP_INFO << "Client 0x" << std::hex << get_client()
+                            << " Loading plug-in library: " << its_library << " succeeded!";
+                    std::dynamic_pointer_cast<application_plugin>(its_application_plugin)->
+                            on_application_state_change(name_, application_plugin_state_e::STATE_INITIALIZED);
+                }
+            }
+        }
+    } else {
+        std::cerr << "Configuration module could not be loaded!" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    return is_initialized_;
+}
+```
+
+关于网络socket（有两类，用于服务发现的，以及用于跨域通信的，其中用户服务发现的显然由someipd持有）是app持有，还是someipd持有，通过实例化什么类型的endpoint可以看出来
+
+在使用vsomeipd的情况下，app必然实例化`routing_manager_client`
+```cpp
+routing_ = std::make_shared<routing_manager_client>(this, client_side_logging_, client_side_logging_filter_);
+```
+
+```cpp
+// routing_manager_client::init()
+void routing_manager_client::init() {
+    routing_manager_base::init(std::make_shared<endpoint_manager_base>(this, io_, configuration_));
+    {
+        std::lock_guard<std::mutex> its_lock(sender_mutex_);
+        if (configuration_->is_local_routing()) {
+            sender_ = ep_mgr_->create_local(VSOMEIP_ROUTING_CLIENT);
+        } else {
+#if defined(__linux__) || defined(ANDROID)
+            auto its_guest_address = configuration_->get_routing_guest_address();
+            auto its_host_address = configuration_->get_routing_host_address();
+            local_link_connector_ = std::make_shared<netlink_connector>(
+                    io_, its_guest_address, boost::asio::ip::address(),
+                    (its_guest_address != its_host_address));
+            // if the guest is in the same node as the routing manager
+            // it should not require LINK to be UP to communicate
+
+            if (local_link_connector_) {
+                local_link_connector_->register_net_if_changes_handler(
+                    std::bind(&routing_manager_client::on_net_state_change,
+                        this, std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3));
+            }
+#else
+            receiver_ = ep_mgr_->create_local_server(shared_from_this());
+            sender_ = ep_mgr_->create_local(VSOMEIP_ROUTING_CLIENT);
+#endif
+        }
+    }
+}
+```
 
 `strand`（是`io_context`的`adapter`，功能是确保被投递的handler按顺序执行）
 ```cpp
@@ -472,6 +802,21 @@ std::size_t scheduler::do_run_one(mutex::scoped_lock& lock,
 ### 对应关系
 一个`io_context`对应一个`scheduler`
 多线程（线程数目是vsomeip中可配置的io_thread_count）都调用到`scheduler::run()`，在任务少的情况下，大多数线程被卡住
+
+
+
+
+
+
+
+
+# service consumer app
+查找服务成功时，势必和创建socket资源有关
+
+## 服务查找 具体如何实现？
+someipd肯定会维护local service table
+
+
 
 
 
