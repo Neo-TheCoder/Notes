@@ -1,7 +1,10 @@
 # 执行顺序
+## 初始化
 ```cpp
   exit_code = ara::exec::internal::Startup(argc, argv);
 ```
+
+## `Startup`实现
 ```cpp
 // VECTOR Next Construct AutosarC++17_10-A3.9.1: MD_EM_A3.9.1_main_parameters
 // VECTOR Next Construct AutosarC++17_10-A18.1.1: MD_EM_A18.1.1_main_parameters
@@ -84,8 +87,6 @@ int Startup(int argc, char const* const argv[]) {
 }
 ```
 
-
-
 `Startup()`
     `SetSignalMask`
         `sigemptyset(&mask)`
@@ -101,7 +102,7 @@ int Startup(int argc, char const* const argv[]) {
 
 
 
-`RunMachineInitApplication`
+### `RunMachineInitApplication`
 是真正`创建子进程`的函数，做了以下逻辑：
 得到`executable_path`
 然后 通过`stat` 检查可执行文件/程序镜像是否是 `普通文件`
@@ -110,7 +111,7 @@ int Startup(int argc, char const* const argv[]) {
 
 核心：`waitpid`
 
-
+### `RunMachineInitApplication`
 ```cpp
 /*!
  * \internal
@@ -186,7 +187,7 @@ Result RunMachineInitApplication(vac::container::CStringView const &path_to_appl
 // 2，3参数分别是：指向命令行参数列表的指针，指向环境变量字符串数组的指针
 ```
 
-
+`CreateProcess`实现
 ```cpp
 // VECTOR Next Construct Metric-HIS.PATH: MD_OSA_Metric-HIS.PATH_CreateProcess
 /*!
@@ -344,15 +345,335 @@ ara::core::Result<ProcessId> OsProcess::CreateProcess(PathToExecutable const& ex
 }
 ```
 
+### `RunExecutionmanager(path_to_machine_manifest, path_to_applications, reactor, logger, number_state_clients)`
+构造`FunctionGroupManager`类型的对象，它维护一个`FunctionGroupList`
+
+读配置，填充以下几个类型的变量
+`ProcessListBuilder`，持有`manifest_name_`，持有对`TimerManager`对象的引用、`FunctionGroupManager`对象的引用
+`ProcessList`，即`std::vector<std::unique_ptr<ProcessStartupConfig>>`
+
+核心类：
+```cpp
+// VECTOR Next Construct AutosarC++17_10-M3.4.1: MD_EM_M3.4.1_class
+/*!
+ * \brief                 Main class representing the Execution Management daemon.
+ */
+class Executionmanager final : public ExecutionManagerInterface {
+ public:
+  /*!
+   * \brief               Unique pointer to a function group object.
+   */
+  using FunctionGroupManagerPtr = std::unique_ptr<function_group_manager::FunctionGroupManager>;
+
+  /*!
+   * \brief               Constructs the Execution Management daemon.
+   *
+   * \param[in, out]      logger   Logger instance reference to be used by the Execution Management.
+   * \param[in, out]      reactor  Reactor to be used by the Execution Management.
+   *
+   * \context             ANY
+   *
+   * \pre                 -
+   *
+   * \reentrant           FALSE
+   * \synchronous         TRUE
+   * \threadsafe          TRUE
+   */
+  explicit Executionmanager(ara::log::Logger& logger, osabstraction::io::reactor1::Reactor1Interface& reactor);
+
+  /*!
+   * \brief               Destroys the object.
+   *
+   * \details             Terminates all adaptive applications before destroying the object.
+   */
+  // VECTOR Next Line AutosarC++17_10-A15.5.1: MD_EM_A15.5.1_explicit_noexcept_falsepositive
+  ~Executionmanager() noexcept final;
+
+  /*!
+   * \brief               Initializes the Execution Management.
+   *
+   * \details             Aborts and logs an error if initialization failed.
+   *
+   * \param[in]           function_group_manager   Unique pointer R-value to a function group manager.
+   * \param[in]           process_list             The R-value list of processes to be managed.
+   * \param[in]           number_state_clients     The max. number of state clients that can be connected at the same
+   *                      time.
+   *
+   * \context             InitPhase
+   *
+   * \pre                 -
+   *
+   * \reentrant           FALSE
+   * \synchronous         TRUE
+   * \threadsafe          FALSE
+   *
+   * \trace               DSGN-ExecutionManager-InitialStateStartup
+   */
+  void Initialize(FunctionGroupManagerPtr&& function_group_manager, ProcessList&& process_list,
+                  std::size_t number_state_clients);
+
+  /*!
+   * \brief               Starts the Execution Management state machine.
+   *
+   * \context             RunningPhase
+   *
+   * \pre                 -
+   *
+   * \reentrant           FALSE
+   * \synchronous         TRUE
+   * \threadsafe          FALSE
+   *
+   * \trace               DSGN-ExecutionManager-MainLoop
+   */
+  void Run();
+
+  /*!
+   * \copydoc             ExecutionManagerInterface::FindProcessStartupConfigByProcessHandle()
+   */
+  ProcessStartupConfig* FindProcessStartupConfigByProcessHandle(
+      osabstraction::process::ProcessHandle identifier) noexcept final;
+
+  /*!
+   * \copydoc             ExecutionManagerInterface::FindProcessStartupConfigByIdentifier()
+   */
+  ProcessStartupConfig* FindProcessStartupConfigByIdentifier(Identifier pid,
+                                                             StartupConfigIndex startup_config_index) noexcept final;
+
+  /*!
+   * \copydoc             ExecutionManagerInterface::GetProcessStartupConfigList()
+   */
+  ProcessList& GetProcessStartupConfigList() noexcept final { return process_all_; }
+
+  /*!
+   * \brief               Returns the timer manager object reference.
+   *
+   * \return              The timer manager object reference.
+   *
+   * \context             InitPhase
+   *
+   * \pre                 -
+   *
+   * \reentrant           FALSE
+   * \synchronous         TRUE
+   * \threadsafe          FALSE
+   */
+  vac::timer::TimerManager& GetTimerManager() { return event_manager_.GetTimerManager(); }
+
+  /*!
+   * \copydoc             ExecutionManagerInterface::OnEnterSafeState()
+   */
+  void OnEnterSafeState() noexcept final;
+
+  /*!
+   * \brief               Requests to shut down the Execution Management.
+   *
+   * \details             Sets an internal flag and unblocks the Event Management.
+   *
+   * \context             ShutdownPhase
+   *
+   * \pre                 -
+   *
+   * \reentrant           FALSE
+   * \synchronous         TRUE
+   * \threadsafe          FALSE
+   */
+  void RequestShutdown();
+
+ private:
+  /*!
+   * \brief               Enters the safe state.
+   *
+   * \context             RunningPhase
+   *
+   * \pre                 -
+   *
+   * \reentrant           FALSE
+   * \synchronous         TRUE
+   * \threadsafe          FALSE
+   *
+   * \trace               DSGN-ExecutionManager-DaemonStatemachine
+   */
+  void EnterSafeState();
+
+  /*!
+   * \brief               Kills all active adaptive applications.
+   *
+   * \context             ShutdownPhase
+   *
+   * \pre                 -
+   *
+   * \reentrant           FALSE
+   * \synchronous         TRUE
+   * \threadsafe          FALSE
+   */
+  void KillAllApps() noexcept;
+
+  /*!
+   * \brief               Reactor interface to handle asynchronous operations.
+   */
+  osabstraction::io::reactor1::Reactor1Interface& reactor_;
+
+  /*!
+   * \brief               The logger instance reference.
+   */
+  ara::log::Logger& log_;
+
+  /*!
+   * \brief               Event Manager instance.
+   */
+  event_manager::EventManager event_manager_;
+
+  /*!
+   * \brief Connector between function group manager and recovery action manager.
+   */
+  ara::exec::internal::state_change_manager::StateChangeManagerConnector scm_connector_{};
+
+  /*!
+   * \brief               Manages all recovery decisions issued by the PHM.
+   */
+  recovery_action_manager::RecoveryActionManager recovery_action_manager_;
+
+  /*!
+   * \brief               Manages Failure Handler notifications.
+   */
+  failure_handler_manager::FailureHandlerManager failure_handler_manager_;
+
+  /*!
+   * \brief               Manages function group state changes.
+   */
+  state_mgmt_srv::StateManager state_change_manager_{};
+
+  /*!
+   * \brief               The list of all adaptive applications in the system.
+   */
+  ProcessList process_all_;
+
+  /*!
+   * \brief               Marks if entering safe state has been requested.
+   */
+  bool safe_state_requested_{false};
+
+  /*!
+   * \brief               Marks if a shutdown has been requested.
+   *
+   * \details             This variable may be accessed from different threads.
+   */
+  std::atomic_bool shutdown_requested_;
+
+  /*!
+   * \brief               The Function Group Manager instance.
+   */
+  std::unique_ptr<ara::exec::internal::function_group_manager::FunctionGroupManager> function_group_manager_{};
+};
+```
+
+
+其中的`StateManager`类，是一个典型的状态机模式
+```cpp
+class
+
+```
+
+`ChangeTransitionState()`，会被回调触发
+```cpp
+/*!
+ * \internal
+ * - Assert that the state change is valid.
+ * - Update current state with next state and enter it.
+ * - If the current state is kFinishTransition:
+ *   - Change the current state to kIdle and enter it.
+ * \endinternal
+ */
+void StateChangeProcessor::ChangeTransitionState(State next_state) {
+  bool is_valid_state_change{false};
+  switch (state_) {
+    case State::kIdle:
+      is_valid_state_change = (next_state == State::kStartTransition) || (next_state == State::kIdle);
+      break;
+    case State::kStartTransition:
+      is_valid_state_change = (next_state == State::kTerminateProcesses) || (next_state == State::kIdle);
+      break;
+    case State::kTerminateProcesses:
+      is_valid_state_change = (next_state == State::kProcessTerminated) || (next_state == State::kStartTransition) ||
+                              (next_state == State::kIdle);
+      break;
+    case State::kProcessTerminated:
+      is_valid_state_change = (next_state == State::kStartProcesses) || (next_state == State::kFinishTransition) ||
+                              (next_state == State::kIdle) || (next_state == State::kStartTransition);
+      break;
+    case State::kStartProcesses:
+      is_valid_state_change = (next_state == State::kFinishTransition) || (next_state == State::kStartTransition) ||
+                              (next_state == State::kIdle);
+      break;
+    case State::kFinishTransition:
+      is_valid_state_change = next_state == State::kIdle;
+      break;
+    default:
+      // is_valid_state_change is already false.
+      break;
+  }
+  assert(is_valid_state_change);
+  static_cast<void>(is_valid_state_change);
+  state_ = next_state;
+  OnEnterState();
+
+  if (state_ == State::kFinishTransition) {
+    state_ = State::kIdle;
+    OnEnterState();
+  }
+}
+```
+
+`Run()`
+```cpp
+/*!
+ * \internal
+ * - If the State Change Processor is in state kIdle, kStartTransition, kProcessTerminated or kFinishTransition:
+ *   - Return false.
+ * - If the State Change Processor is in state kTerminateProcesses:
+ *   - Process termination actions.
+ *   - If performing the required actions modifies the state of any process return true, otherwise false.
+ * - If the State Change Processor is in state kStartProcesses:
+ *   - Process start actions.
+ *   - If performing the required actions modifies the state of any process return true, otherwise false.
+ * - Otherwise abort because of undefined state.
+ * \endinternal
+ */
+bool StateChangeProcessor::Run() {
+  bool modified_state{false};
+  switch (state_) {
+    case State::kIdle:
+      /* Nothing to do. */
+      break;
+    case State::kStartTransition:
+      break;
+    case State::kTerminateProcesses:
+      modified_state = ProcessTerminateActions();
+      break;
+    case State::kProcessTerminated:
+      break;
+    case State::kStartProcesses:
+      modified_state = ProcessStartActions();
+      break;
+    case State::kFinishTransition:
+      break;
+    default:
+      ara::core::Abort("StateChangeProcessor::Run(): state_ has an invalid value.");
+      break;
+  }
+
+  /* Run should be called again if the a state of a process changed because this may trigger further state changes. */
+  return modified_state;
+}
+```
+
+#### `Initialize()`
 
 
 
 
 
-
-
-
-
+#### `Run()`
 
 
 

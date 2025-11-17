@@ -81,8 +81,14 @@ void SimpleStartMode::Run()
 
 
 # `SM`和`EM`的通信
+pipe?
 
 
+
+
+# VECTOR R23-11
+基于`state_client_`，先`GetState`，再`SetState`，最后再`GetState`
+使用`FailureHandler`，它本质上是一个线程，监听事件，并且需要实现基类的纯虚函数（根据进程处于不同状态时触发的回调）（这个对象感觉更像是属于EM的）
 
 
 

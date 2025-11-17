@@ -20,9 +20,45 @@ client：服务可用时回调，收到event时回调
 sudo route add -nv 239.255.0.1 dev enp0s8   # 在系统中手动添加一条静态路由规则，目的是让发往多播地址 239.255.0.1 的流量强制通过指定的网络接口 enp0s8 发出
 ```
 
-## app是否持有socket？似乎不持有。并且域内通信没走网卡，可能某处存在判断
+## app是否持有socket？似乎不持有。并且域内通信没走网卡，可能某处存在判断以进行优化
+```sh
+# 使用两个虚拟机进行通信，可见app自己不持有网络socket，而是someipd持有
+schaeffler@schaeffler-ubuntu20:~$ sudo netstat -nap
+Active Internet connections (servers and established)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        0      0 127.0.0.1:36261         0.0.0.0:*               LISTEN      4348/code-e54c774e0
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      1017/sshd: /usr/sbi
+tcp        0      0 127.0.0.1:631           0.0.0.0:*               LISTEN      1249/cupsd
+tcp        0      0 0.0.0.0:1947            0.0.0.0:*               LISTEN      900/hasplmd_x86_64
+tcp        0      0 127.0.0.1:6010          0.0.0.0:*               LISTEN      4898/sshd: schaeffl
+tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      799/systemd-resolve
+tcp        0      0 192.168.56.103:22       192.168.56.1:53857      ESTABLISHED 4249/sshd: schaeffl
+tcp        0      0 192.168.56.103:22       192.168.56.1:54602      ESTABLISHED 4826/sshd: schaeffl
+tcp        0      0 127.0.0.1:47352         127.0.0.1:36261         ESTABLISHED 4329/sshd: schaeffl
+tcp        0     48 192.168.56.103:22       192.168.56.1:54601      ESTABLISHED 4824/sshd: schaeffl
+tcp        0      0 127.0.0.1:36261         127.0.0.1:47352         ESTABLISHED 4348/code-e54c774e0
+tcp6       0      0 ::1:6010                :::*                    LISTEN      4898/sshd: schaeffl
+tcp6       0      0 :::22                   :::*                    LISTEN      1017/sshd: /usr/sbi
+tcp6       0      0 ::1:631                 :::*                    LISTEN      1249/cupsd
+udp        0      0 0.0.0.0:35933           0.0.0.0:*                           836/avahi-daemon: r
+udp        0      0 0.0.0.0:5353            0.0.0.0:*                           836/avahi-daemon: r
+udp        0      0 0.0.0.0:30490           0.0.0.0:*                           18493/./routingmana
+udp        0      0 192.168.56.103:30490    0.0.0.0:*                           18493/./routingmana
+udp        0      0 192.168.56.103:30509    0.0.0.0:*                           18493/./routingmana
+udp        0      0 127.0.0.53:53           0.0.0.0:*                           799/systemd-resolve
+udp        0      0 192.168.56.103:68       192.168.56.100:67       ESTABLISHED 841/NetworkManager
+udp        0      0 10.0.4.15:68            10.0.4.2:67             ESTABLISHED 841/NetworkManager
+udp        0      0 0.0.0.0:1947            0.0.0.0:*                           900/hasplmd_x86_64
+udp6       0      0 :::5353                 :::*                                836/avahi-daemon: r
+udp6       0      0 :::42963                :::*                                836/avahi-daemon: r
+raw6       0      0 :::58                   :::*                    7           841/NetworkManager
+raw6       0      0 :::58                   :::*                    7           841/NetworkManager
 
-
+schaeffler@schaeffler-ubuntu20:~$ sudo netstat -nap | grep notify-samp
+unix  2      [ ACC ]     STREAM     LISTENING     95806    18539/./notify-samp  /tmp/vsomeip-1277
+unix  3      [ ]         STREAM     CONNECTED     92864    18539/./notify-samp  /tmp/vsomeip-1277
+unix  3      [ ]         STREAM     CONNECTED     92863    18539/./notify-samp
+```
 
 # routing manager daemon
 main函数逻辑：
@@ -56,6 +92,43 @@ service_discovery_impl::start() {
 
 
 
+# routing_manager_client(区别于someipd， someipd是routing_manager_impl)
+## `init()`
+可见 创建的都是`local endpoint`
+```cpp
+void routing_manager_client::init() {
+    routing_manager_base::init(std::make_shared<endpoint_manager_base>(this, io_, configuration_));
+    {
+        std::lock_guard<std::mutex> its_lock(sender_mutex_);
+        if (configuration_->is_local_routing()) {
+            sender_ = ep_mgr_->create_local(VSOMEIP_ROUTING_CLIENT);
+        } else {
+#if defined(__linux__) || defined(ANDROID)
+            auto its_guest_address = configuration_->get_routing_guest_address();
+            auto its_host_address = configuration_->get_routing_host_address();
+            local_link_connector_ = std::make_shared<netlink_connector>(
+                    io_, its_guest_address, boost::asio::ip::address(),
+                    (its_guest_address != its_host_address));
+            // if the guest is in the same node as the routing manager
+            // it should not require LINK to be UP to communicate
+
+            if (local_link_connector_) {
+                local_link_connector_->register_net_if_changes_handler(
+                    std::bind(&routing_manager_client::on_net_state_change,
+                        this, std::placeholders::_1, std::placeholders::_2,
+                        std::placeholders::_3));
+            }
+#else
+            receiver_ = ep_mgr_->create_local_server(shared_from_this());
+            sender_ = ep_mgr_->create_local(VSOMEIP_ROUTING_CLIENT);
+#endif
+        }
+    }
+}
+```
+
+
+
 # service provider app
 ## 主要线程
 1. `dispatch线程`
@@ -70,7 +143,7 @@ app必备抽象基类：`class vsomeip::application`，用于各种操作
 实际对象是由`vsomeip_v3::application_impl`实例化而来，该类又持有一个`impl指针`，其对象由runtime提供的`工厂函数create_application()`构造
 
 通过`锁`来进行线程间的同步：初始化线程 / run线程（`offer_service`）
-## init
+## `init()`
 读取配置
 注册回调
 OfferEvent
@@ -330,8 +403,8 @@ bool application_impl::init() {
 routing_ = std::make_shared<routing_manager_client>(this, client_side_logging_, client_side_logging_filter_);
 ```
 
+`routing_manager_client::init()`
 ```cpp
-// routing_manager_client::init()
 void routing_manager_client::init() {
     routing_manager_base::init(std::make_shared<endpoint_manager_base>(this, io_, configuration_));
     {
@@ -374,7 +447,7 @@ protected:
 };
 ```
 
-## start
+## `start()`
 ！！！注意，这里的`io_`由多线程共享，所以是多线程在执行`io_.run()`
 ```cpp
 void application_impl::start() {
